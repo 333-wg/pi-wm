@@ -163,6 +163,7 @@ describe("GatewayServer", () => {
 		const hello = await collector.waitFor((message): message is Extract<ServerMessage, { type: "hello" }> => message.type === "hello");
 		expect(hello.capabilities).toContain("session.fork");
 		expect(hello.capabilities).toContain("subagents");
+		expect(hello.capabilities).toContain("goals");
 		send(ws, { type: "request", requestId: "attach-config", idempotencyKey: "attach-config", command: { type: "session.attach", sessionId: created.snapshot.session.id } });
 		await collector.waitFor((message) => message.type === "response" && message.requestId === "attach-config" && message.ok);
 		send(ws, { type: "request", requestId: "set-model", idempotencyKey: "set-model", command: { type: "session.model.set", sessionId: created.snapshot.session.id, model: { provider: "openai", id: "gpt-test" } } });
@@ -184,6 +185,18 @@ describe("GatewayServer", () => {
 		const subagentList = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "subagent-list" && message.ok);
 		expect(subagentList.result).toMatchObject({ type: "subagent.list", subagents: [{ status: "completed" }] });
 		expect(store.loadSnapshot(created.snapshot.session.id)?.transcript.at(-1)).toMatchObject({ type: "tool", toolName: "subagent", status: "complete" });
+		send(ws, { type: "request", requestId: "goal-create", idempotencyKey: "goal-create", command: { type: "goal.create", sessionId: created.snapshot.session.id, title: "Gateway goal", objective: "Complete in the background" } });
+		const goalCreated = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "goal-create" && message.ok);
+		expect(goalCreated.result).toMatchObject({ type: "goal.created", goal: { status: "pending", title: "Gateway goal" } });
+		if (goalCreated.result.type !== "goal.created") throw new Error("Expected created goal");
+		send(ws, { type: "request", requestId: "goal-start", idempotencyKey: "goal-start", command: { type: "goal.start", sessionId: created.snapshot.session.id, goalId: goalCreated.result.goal.id } });
+		const goalStarted = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "goal-start" && message.ok);
+		expect(goalStarted.result).toMatchObject({ type: "goal.started", goal: { status: "queued", runSessionId: expect.any(String) } });
+		if (goalStarted.result.type !== "goal.started" || !goalStarted.result.goal.runSessionId) throw new Error("Expected started goal");
+		await collector.waitFor((message) => message.type === "event" && message.event.type === "session.item.upserted" && message.event.item.type === "tool" && message.event.item.toolCallId === goalStarted.result.goal.runSessionId);
+		send(ws, { type: "request", requestId: "goal-list", idempotencyKey: "goal-list", command: { type: "goal.list", sessionId: created.snapshot.session.id } });
+		const goalList = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "goal-list" && message.ok);
+		expect(goalList.result).toMatchObject({ type: "goal.list", goals: [{ status: "completed", result: "hello" }] });
 	});
 
 	it("returns the authenticated workspace tool catalog", async () => {

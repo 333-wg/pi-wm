@@ -42,6 +42,17 @@ export interface DurableOperation {
 	approvalToolCallId?: string;
 }
 
+export interface DurableGoal {
+	id: string;
+	parentSessionId: string;
+	title: string;
+	objective: string;
+	createdAt: number;
+	updatedAt: number;
+	runSessionId?: string;
+	cancelledAt?: number;
+}
+
 export type ApprovalExecutionMode = "preflight" | "failure_retry";
 export type ApprovalExecutionState = "waiting" | "approved" | "executing" | "completed" | "interrupted" | "cancelled";
 

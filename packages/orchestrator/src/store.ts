@@ -8,7 +8,7 @@ import {
 import { DatabaseSync } from "node:sqlite";
 import { Compile } from "typebox/compile";
 import { OrchestratorError } from "./errors.js";
-import type { ApprovalExecutionMode, ApprovalExecutionState, DurableApprovalExecution, DurableOperation, OperationPayload, OperationStatus, WriterLease } from "./types.js";
+import type { ApprovalExecutionMode, ApprovalExecutionState, DurableApprovalExecution, DurableGoal, DurableOperation, OperationPayload, OperationStatus, WriterLease } from "./types.js";
 
 const checkEvent = Compile(SessionEventSchema);
 const checkSnapshot = Compile(SessionSnapshotSchema);
@@ -29,6 +29,13 @@ export interface CommitMutationOptions {
 	snapshot: SessionSnapshot;
 	idempotency?: MutationIdempotency;
 	operation?: DurableOperation;
+	attachGoalRun?: {
+		goalId: string;
+		parentSessionId: string;
+		runSessionId: string;
+		expectedUpdatedAt: number;
+		updatedAt: number;
+	};
 	settleOperation?: { id: string; status: "completed" | "failed" | "interrupted"; error?: string; usage?: DurableOperation["usage"]; tools?: DurableOperation["tools"]; failureKind?: DurableOperation["failureKind"]; retryHistory?: DurableOperation["retryHistory"] };
 	retryOperation?: { id: string; error: string; retryAfter: number; retryHistory: NonNullable<DurableOperation["retryHistory"]>; usage?: DurableOperation["usage"]; tools?: DurableOperation["tools"]; failureKind?: DurableOperation["failureKind"] };
 	approvalExecution?: DurableApprovalExecution;
@@ -79,6 +86,23 @@ interface ApprovalExecutionRow {
 	state: ApprovalExecutionState;
 	created_at: number;
 	updated_at: number;
+}
+
+interface GoalRow {
+	goal_id: string;
+	parent_session_id: string;
+	title: string;
+	objective: string;
+	run_session_id: string | null;
+	created_at: number;
+	updated_at: number;
+	cancelled_at: number | null;
+}
+
+export interface CommitGoalMutationOptions {
+	goal: DurableGoal;
+	expectedUpdatedAt?: number;
+	idempotency: MutationIdempotency;
 }
 
 export interface RequestOperationAbortOptions {
@@ -159,6 +183,19 @@ function mapApprovalExecution(row: ApprovalExecutionRow): DurableApprovalExecuti
 	};
 }
 
+function mapGoal(row: GoalRow): DurableGoal {
+	return {
+		id: row.goal_id,
+		parentSessionId: row.parent_session_id,
+		title: row.title,
+		objective: row.objective,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		...(row.run_session_id === null ? {} : { runSessionId: row.run_session_id }),
+		...(row.cancelled_at === null ? {} : { cancelledAt: row.cancelled_at }),
+	};
+}
+
 export class SqliteOrchestratorStore implements Disposable {
 	readonly #db: DatabaseSync;
 	readonly #eventListeners = new Set<(event: StoredSessionEvent) => void>();
@@ -188,6 +225,19 @@ export class SqliteOrchestratorStore implements Disposable {
 				UNIQUE (session_id, revision),
 				FOREIGN KEY (session_id) REFERENCES session_snapshots(session_id) ON DELETE CASCADE
 			);
+			CREATE TABLE IF NOT EXISTS goals (
+				goal_id TEXT PRIMARY KEY,
+				parent_session_id TEXT NOT NULL,
+				title TEXT NOT NULL,
+				objective TEXT NOT NULL,
+				run_session_id TEXT UNIQUE,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				cancelled_at INTEGER,
+				FOREIGN KEY (parent_session_id) REFERENCES session_snapshots(session_id) ON DELETE CASCADE,
+				FOREIGN KEY (run_session_id) REFERENCES session_snapshots(session_id) ON DELETE SET NULL
+			);
+			CREATE INDEX IF NOT EXISTS goals_parent ON goals(parent_session_id, updated_at DESC);
 			CREATE TABLE IF NOT EXISTS idempotency_results (
 				principal_id TEXT NOT NULL,
 				idempotency_key TEXT NOT NULL,
@@ -361,6 +411,59 @@ export class SqliteOrchestratorStore implements Disposable {
 		return rows.map((row) => parseChecked<SessionSnapshot>(row.snapshot_json, checkSnapshot, `Snapshot ${row.session_id}`));
 	}
 
+	loadGoal(goalId: string): DurableGoal | undefined {
+		const row = this.#db
+			.prepare("SELECT goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at FROM goals WHERE goal_id = ?")
+			.get(goalId) as unknown as GoalRow | undefined;
+		return row ? mapGoal(row) : undefined;
+	}
+
+	listGoals(parentSessionId: string, limit = 100): DurableGoal[] {
+		const rows = this.#db
+			.prepare("SELECT goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at FROM goals WHERE parent_session_id = ? ORDER BY updated_at DESC, goal_id DESC LIMIT ?")
+			.all(parentSessionId, Math.max(1, Math.min(100, Math.trunc(limit)))) as unknown as GoalRow[];
+		return rows.map(mapGoal);
+	}
+
+	commitGoalMutation(options: CommitGoalMutationOptions): { deduplicated: boolean; result: CommandResult } {
+		this.#db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.#db
+				.prepare("SELECT command_hash, result_json, expires_at FROM idempotency_results WHERE principal_id = ? AND idempotency_key = ?")
+				.get(options.idempotency.principalId, options.idempotency.key) as unknown as IdempotencyRow | undefined;
+			if (existing && existing.expires_at <= options.goal.updatedAt) {
+				this.#db.prepare("DELETE FROM idempotency_results WHERE principal_id = ? AND idempotency_key = ?")
+					.run(options.idempotency.principalId, options.idempotency.key);
+			} else if (existing) {
+				if (existing.command_hash !== options.idempotency.commandHash) {
+					throw new OrchestratorError("idempotency_conflict", `Idempotency key ${options.idempotency.key} was used for another command`);
+				}
+				const result = parseChecked<CommandResult>(existing.result_json, checkCommandResult, `Idempotency result ${options.idempotency.key}`);
+				this.#db.exec("COMMIT");
+				return { deduplicated: true, result };
+			}
+
+			if (!checkCommandResult.Check(options.idempotency.result)) {
+				throw new OrchestratorError("conflict", "Goal mutation contains an invalid command result");
+			}
+			if (options.expectedUpdatedAt === undefined) {
+				this.#db.prepare("INSERT INTO goals(goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+					.run(options.goal.id, options.goal.parentSessionId, options.goal.title, options.goal.objective, options.goal.runSessionId ?? null, options.goal.createdAt, options.goal.updatedAt, options.goal.cancelledAt ?? null);
+			} else {
+				const updated = this.#db.prepare("UPDATE goals SET title = ?, objective = ?, run_session_id = ?, updated_at = ?, cancelled_at = ? WHERE goal_id = ? AND parent_session_id = ? AND updated_at = ?")
+					.run(options.goal.title, options.goal.objective, options.goal.runSessionId ?? null, options.goal.updatedAt, options.goal.cancelledAt ?? null, options.goal.id, options.goal.parentSessionId, options.expectedUpdatedAt);
+				if (Number(updated.changes) !== 1) throw new OrchestratorError("conflict", `Goal ${options.goal.id} changed concurrently`);
+			}
+			this.#db.prepare("INSERT INTO idempotency_results(principal_id, idempotency_key, command_hash, result_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
+				.run(options.idempotency.principalId, options.idempotency.key, options.idempotency.commandHash, JSON.stringify(options.idempotency.result), options.goal.updatedAt, options.idempotency.expiresAt);
+			this.#db.exec("COMMIT");
+			return { deduplicated: false, result: options.idempotency.result };
+		} catch (error) {
+			this.#db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
 	getIdempotencyResult(
 		principalId: string,
 		key: string,
@@ -523,6 +626,20 @@ export class SqliteOrchestratorStore implements Disposable {
 						operation.approvalId ?? null,
 						operation.approvalToolCallId ?? null,
 					);
+			}
+			if (options.attachGoalRun) {
+				const attached = this.#db
+					.prepare("UPDATE goals SET run_session_id = ?, updated_at = ? WHERE goal_id = ? AND parent_session_id = ? AND run_session_id IS NULL AND cancelled_at IS NULL AND updated_at = ?")
+					.run(
+						options.attachGoalRun.runSessionId,
+						options.attachGoalRun.updatedAt,
+						options.attachGoalRun.goalId,
+						options.attachGoalRun.parentSessionId,
+						options.attachGoalRun.expectedUpdatedAt,
+					);
+				if (Number(attached.changes) !== 1) {
+					throw new OrchestratorError("conflict", `Goal ${options.attachGoalRun.goalId} cannot attach run ${options.attachGoalRun.runSessionId}`);
+				}
 			}
 
 			if (options.approvalExecution) {

@@ -47,6 +47,11 @@ operation, approvals, and optional cost/token limits; it continues in the
 background, can be cancelled, and publishes its terminal result and usage back
 to the parent session exactly once. Nested subagents are not enabled in this
 increment.
+The Goals tab creates durable objectives without starting model work
+immediately. Starting a goal runs one independent child session in the
+background; its status, approvals, usage, result, and cancellation state remain
+available after navigation or restart. Multi-step plans and scheduled triggers
+are deferred beyond this increment.
 Provider failures marked retryable use bounded retries (`WUMING_MAX_RETRIES` and
 `WUMING_RETRY_BASE_DELAY_MS`). Set `WUMING_COST_BUDGET_USD` for a default
 per-session budget, or send `costBudgetUsd` when creating a session; all model

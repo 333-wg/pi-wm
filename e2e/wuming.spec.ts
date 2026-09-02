@@ -160,8 +160,59 @@ test("completes and cancels durable subagents", async ({ page }) => {
 	await page.getByRole("button", { name: "创建智能体" }).click();
 	await expect(page.getByText("等待批准", { exact: true }).last()).toBeVisible();
 	await page.getByRole("button", { name: "取消", exact: true }).click();
-	await expect(page.getByText("cancelled", { exact: true }).last()).toBeVisible();
+	await expect(page.getByText("已取消", { exact: true }).last()).toBeVisible();
 	await expect(page.getByText("Turn aborted by user", { exact: true })).toBeVisible();
+});
+
+test("creates, runs, and restores a durable background goal", async ({ page }) => {
+	await createSession(page);
+	await page.getByRole("tab", { name: "目标" }).click();
+	await page.getByRole("textbox", { name: "目标" }).fill("Return a durable E2E goal result");
+	await page.getByRole("textbox", { name: "名称" }).fill("E2E goal");
+	await page.getByRole("button", { name: "创建目标" }).click();
+	await expect(page.getByText("等待中", { exact: true }).last()).toBeVisible();
+	await page.getByRole("button", { name: "启动", exact: true }).click();
+	await expect(page.getByText(/Demo runtime received: Return a durable E2E goal result/)).toBeVisible();
+	await expect(page.getByText("已完成", { exact: true }).last()).toBeVisible();
+
+	await page.reload();
+	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
+	await page.getByRole("tab", { name: "目标" }).click();
+	await expect(page.getByText(/Demo runtime received: Return a durable E2E goal result/)).toBeVisible();
+	await page.setViewportSize({ width: 390, height: 844 });
+	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test("cancels a pending goal that was never started", async ({ page }) => {
+	await createSession(page);
+	await page.getByRole("tab", { name: "目标" }).click();
+	await page.getByRole("textbox", { name: "目标" }).fill("Cancel this pending E2E goal");
+	await page.getByRole("textbox", { name: "名称" }).fill("E2E goal cancellation");
+	await page.getByRole("button", { name: "创建目标" }).click();
+	await expect(page.getByText("等待中", { exact: true }).last()).toBeVisible();
+	await expect(page.getByText("目标已创建但尚未启动，点击“启动”开始后台执行。")).toBeVisible();
+	await page.getByRole("button", { name: "取消", exact: true }).click();
+	await expect(page.getByText("已取消", { exact: true }).last()).toBeVisible();
+	await expect(page.getByRole("button", { name: "启动", exact: true })).toBeHidden();
+	await expect(page.getByRole("button", { name: "取消", exact: true })).toBeHidden();
+});
+
+test("keeps the Goals workbench within a mobile viewport", async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.reload();
+	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "打开导航" }).click();
+	await createSession(page);
+	await page.getByRole("button", { name: "关闭导航" }).first().click();
+	await page.getByRole("tab", { name: "目标" }).click();
+	const workbench = page.getByRole("region", { name: "目标" });
+	await expect(workbench).toBeVisible();
+	await page.getByRole("textbox", { name: "目标" }).fill("Fit the goals workbench into a small viewport");
+	await page.getByRole("button", { name: "创建目标" }).click();
+	await expect(page.getByText("等待中", { exact: true }).last()).toBeVisible();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+	expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(844);
+	expect(await workbench.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
 test("keeps the Agents workbench within a mobile viewport", async ({ page }) => {

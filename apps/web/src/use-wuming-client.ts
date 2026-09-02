@@ -6,6 +6,7 @@ import type {
 	CustomModelConfig,
 	CustomModelConnection,
 	CustomModelService,
+	GoalSummary,
 	ArtifactRef,
 	ModelMetadata,
 	ModelRef,
@@ -59,6 +60,7 @@ interface ClientState {
 	tools: ToolStatus[];
 	toolRuntime: "pi" | "demo" | undefined;
 	subagents: SubagentSummary[];
+	goals: GoalSummary[];
 	error: string | undefined;
 }
 
@@ -86,6 +88,7 @@ const initialState: ClientState = {
 	tools: [],
 	toolRuntime: undefined,
 	subagents: [],
+	goals: [],
 	error: undefined,
 };
 
@@ -274,6 +277,14 @@ export function useWumingClient() {
 		return result?.type === "subagent.list" ? result.subagents : [];
 	}, []);
 
+	const refreshGoals = useCallback(async (sessionId: string) => {
+		const result = await requestRef.current?.({ type: "goal.list", sessionId, limit: 100 });
+		if (result?.type === "goal.list" && snapshotRef.current?.session.id === sessionId) {
+			setState((current) => ({ ...current, goals: result.goals }));
+		}
+		return result?.type === "goal.list" ? result.goals : [];
+	}, []);
+
 	const attachSession = useCallback(async (sessionId: string) => {
 		const result = await requestRef.current?.({ type: "session.attach", sessionId });
 		if (result?.type === "session.attached") {
@@ -288,14 +299,16 @@ export function useWumingClient() {
 				liveAssistants: {},
 				liveTools: {},
 				subagents: [],
+				goals: [],
 				error: undefined,
 			}));
 			await Promise.all([
 				refreshRuns(sessionId),
 				...(capabilitiesRef.current.includes("subagents") ? [refreshSubagents(sessionId)] : []),
+				...(capabilitiesRef.current.includes("goals") ? [refreshGoals(sessionId)] : []),
 			]);
 		}
-	}, [refreshRuns, refreshSubagents]);
+	}, [refreshGoals, refreshRuns, refreshSubagents]);
 
 	useEffect(() => {
 		let disposed = false;
@@ -521,7 +534,7 @@ export function useWumingClient() {
 					type: "hello",
 					protocolVersion: 1,
 					clientId: clientId(),
-					capabilities: ["session.resume", "session.fork", "turn.steer", "turn.follow_up", "approval", "artifact", "image_input", "git", "terminal", "skills", "mcp", "subagents", "model.custom"],
+						capabilities: ["session.resume", "session.fork", "turn.steer", "turn.follow_up", "approval", "artifact", "image_input", "git", "terminal", "skills", "mcp", "subagents", "goals", "model.custom"],
 					...(cursorRef.current ? { resumeCursor: cursorRef.current } : {}),
 				}),
 			);
@@ -560,6 +573,17 @@ export function useWumingClient() {
 		return () => clearInterval(timer);
 	}, [refreshSubagents, state.capabilities, state.connection, state.snapshot?.session.id]);
 
+	const hasActiveGoals = state.goals.some((goal) => ["queued", "running", "awaiting_approval", "cancelling"].includes(goal.status));
+	useEffect(() => {
+		const sessionId = state.snapshot?.session.id;
+		if (state.connection !== "connected" || !sessionId || !state.capabilities.includes("goals")) return;
+		const refresh = () => void refreshGoals(sessionId).catch(() => undefined);
+		refresh();
+		if (!hasActiveGoals) return;
+		const timer = setInterval(refresh, 1500);
+		return () => clearInterval(timer);
+	}, [hasActiveGoals, refreshGoals, state.capabilities, state.connection, state.snapshot?.session.id]);
+
 	const selectWorkspace = useCallback(async (workspaceId: string) => {
 		if (!state.workspaces.some((workspace) => workspace.id === workspaceId)) throw new Error("工作区不可用");
 		const previousSession = snapshotRef.current;
@@ -584,6 +608,7 @@ export function useWumingClient() {
 			tools: [],
 			toolRuntime: undefined,
 			subagents: [],
+			goals: [],
 		}));
 		await refreshSkills(workspaceId);
 		if (state.capabilities.includes("tools")) await refreshTools(workspaceId);
@@ -616,7 +641,7 @@ export function useWumingClient() {
 		if (current) await requestRef.current?.({ type: "session.detach", sessionId: current.session.id }).catch(() => undefined);
 		snapshotRef.current = undefined;
 		localStorage.removeItem(sessionSelectionKey(workspaceId));
-		setState((value) => ({ ...value, snapshot: undefined, runs: [], subagents: [], liveAssistants: {}, liveTools: {} }));
+		setState((value) => ({ ...value, snapshot: undefined, runs: [], subagents: [], goals: [], liveAssistants: {}, liveTools: {} }));
 		if (sessions[0]) await attachSession(sessions[0].id);
 		return sessions;
 	}, [attachSession, refreshSessions]);
@@ -652,6 +677,7 @@ export function useWumingClient() {
 				snapshot: result.snapshot,
 				runs: [],
 				subagents: [],
+				goals: [],
 				liveAssistants: {},
 				liveTools: {},
 			}));
@@ -678,6 +704,7 @@ export function useWumingClient() {
 			snapshot: result.snapshot,
 			runs: [],
 			subagents: [],
+			goals: [],
 			liveAssistants: {},
 			liveTools: {},
 		}));
@@ -810,15 +837,15 @@ export function useWumingClient() {
 		await requestRef.current?.({ type: "session.detach", sessionId }).catch(() => undefined);
 		snapshotRef.current = undefined;
 		localStorage.removeItem(sessionSelectionKey(workspaceId));
-		setState((current) => ({ ...current, snapshot: undefined, runs: [], subagents: [], liveAssistants: {}, liveTools: {} }));
+		setState((current) => ({ ...current, snapshot: undefined, runs: [], subagents: [], goals: [], liveAssistants: {}, liveTools: {} }));
 		if (sessions[0]) await attachSession(sessions[0].id);
 	}, [attachSession, refreshSessions]);
 
 	const respondApproval = useCallback(async (sessionId: string, approvalId: string, decision: "approve" | "deny") => {
 		await requestRef.current?.({ type: "approval.respond", sessionId, approvalId, decision });
 		const parentId = snapshotRef.current?.session.id;
-		if (parentId && parentId !== sessionId) await refreshSubagents(parentId);
-	}, [refreshSubagents]);
+		if (parentId && parentId !== sessionId) await Promise.all([refreshSubagents(parentId), refreshGoals(parentId)]);
+	}, [refreshGoals, refreshSubagents]);
 
 	const createSubagent = useCallback(async (input: { task: string; name?: string; costBudgetUsd?: number; tokenBudget?: number }) => {
 		const snapshot = snapshotRef.current;
@@ -852,6 +879,39 @@ export function useWumingClient() {
 		return result.subagent;
 	}, []);
 
+	const createGoal = useCallback(async (input: { objective: string; title?: string }) => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
+		const result = await requestRef.current?.({
+			type: "goal.create",
+			sessionId: snapshot.session.id,
+			objective: input.objective,
+			...(input.title ? { title: input.title } : {}),
+		});
+		if (result?.type !== "goal.created") throw new Error("目标创建失败");
+		setState((current) => ({ ...current, goals: [result.goal, ...current.goals.filter((goal) => goal.id !== result.goal.id)] }));
+		return result.goal;
+	}, []);
+
+	const startGoal = useCallback(async (goalId: string) => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		const result = await requestRef.current?.({ type: "goal.start", sessionId: snapshot.session.id, goalId });
+		if (result?.type !== "goal.started") throw new Error("目标启动失败");
+		setState((current) => ({ ...current, goals: current.goals.map((goal) => goal.id === goalId ? result.goal : goal) }));
+		return result.goal;
+	}, []);
+
+	const cancelGoal = useCallback(async (goalId: string) => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		const result = await requestRef.current?.({ type: "goal.cancel", sessionId: snapshot.session.id, goalId });
+		if (result?.type !== "goal.cancel_requested") throw new Error("目标取消失败");
+		setState((current) => ({ ...current, goals: current.goals.map((goal) => goal.id === goalId ? result.goal : goal) }));
+		return result.goal;
+	}, []);
+
 	const abortTurn = useCallback(async () => {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
@@ -869,6 +929,7 @@ export function useWumingClient() {
 		refreshSessions,
 		refreshRuns,
 		refreshSubagents,
+		refreshGoals,
 		refreshSkills,
 		refreshTools,
 		getSkill,
@@ -897,6 +958,9 @@ export function useWumingClient() {
 		respondApproval,
 		createSubagent,
 		cancelSubagent,
+		createGoal,
+		startGoal,
+		cancelGoal,
 		abortTurn,
 		uploadArtifact,
 		downloadArtifact,

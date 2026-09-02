@@ -3,6 +3,7 @@ import { EMPTY_USAGE, reduceSessionEvent, type SessionEvent } from "@wuming/doma
 import type {
 	ApprovalPolicy,
 	CommandResult,
+	GoalSummary,
 	ModelRef,
 	ProgressEvent,
 	SandboxMode,
@@ -17,7 +18,7 @@ import type {
 } from "@wuming/protocol";
 import { OrchestratorError } from "./errors.js";
 import { SqliteOrchestratorStore } from "./store.js";
-import type { AgentRuntime, DurableOperation, RuntimeTurnResult, StructuredLogger, TurnMode, WriterLease } from "./types.js";
+import type { AgentRuntime, DurableGoal, DurableOperation, RuntimeTurnResult, StructuredLogger, TurnMode, WriterLease } from "./types.js";
 
 export interface CreateSessionInput {
 	principalId: string;
@@ -114,6 +115,21 @@ export interface CancelSubagentInput {
 	idempotencyKey: string;
 	sessionId: string;
 	subagentId: string;
+}
+
+export interface CreateGoalInput {
+	principalId: string;
+	idempotencyKey: string;
+	sessionId: string;
+	objective: string;
+	title?: string;
+}
+
+export interface GoalCommandInput {
+	principalId: string;
+	idempotencyKey: string;
+	sessionId: string;
+	goalId: string;
 }
 
 export interface SessionOrchestratorOptions {
@@ -255,6 +271,41 @@ function summarizeSubagent(snapshot: SessionSnapshot, operation: DurableOperatio
 		pendingApprovals: snapshot.pendingApprovals,
 		...(result === undefined ? {} : { result }),
 		...(operation.error === undefined ? {} : { error: operation.error.slice(0, 4000) }),
+	};
+}
+
+function summarizeGoal(goal: DurableGoal, subagent?: SubagentSummary): GoalSummary {
+	if (!subagent) {
+		return {
+			id: goal.id,
+			parentSessionId: goal.parentSessionId,
+			title: goal.title,
+			objective: goal.objective,
+			status: goal.cancelledAt === undefined ? "pending" : "cancelled",
+			createdAt: goal.createdAt,
+			updatedAt: goal.updatedAt,
+			usage: EMPTY_USAGE,
+			pendingApprovals: [],
+			...(goal.runSessionId === undefined ? {} : { runSessionId: goal.runSessionId }),
+			...(goal.cancelledAt === undefined ? {} : { finishedAt: goal.cancelledAt }),
+		};
+	}
+	return {
+		id: goal.id,
+		parentSessionId: goal.parentSessionId,
+		title: goal.title,
+		objective: goal.objective,
+		status: subagent.status,
+		createdAt: goal.createdAt,
+		updatedAt: Math.max(goal.updatedAt, subagent.updatedAt),
+		runSessionId: subagent.sessionId,
+		operationId: subagent.operationId,
+		...(subagent.startedAt === undefined ? {} : { startedAt: subagent.startedAt }),
+		...(subagent.finishedAt === undefined ? {} : { finishedAt: subagent.finishedAt }),
+		usage: subagent.usage,
+		pendingApprovals: subagent.pendingApprovals,
+		...(subagent.result === undefined ? {} : { result: subagent.result }),
+		...(subagent.error === undefined ? {} : { error: subagent.error }),
 	};
 }
 
@@ -501,68 +552,82 @@ export class SessionOrchestrator {
 			if (!parent) throw new OrchestratorError("not_found", `Session ${input.sessionId} does not exist`);
 			if (parent.session.parentSessionId !== undefined) throw new OrchestratorError("conflict", "Nested subagents are not supported in this increment");
 			if (parent.session.archivedAt !== undefined) throw new OrchestratorError("conflict", "Archived sessions cannot create subagents");
-			const remainingCost = parent.costBudgetUsd === undefined ? undefined : Math.max(0, parent.costBudgetUsd - parent.usage.costUsd);
-			const remainingTokens = parent.tokenBudget === undefined ? undefined : Math.max(0, parent.tokenBudget - parent.usage.totalTokens);
-			if (remainingCost !== undefined && remainingCost <= 0) throw new OrchestratorError("budget_exceeded", "Parent session cost budget is exhausted");
-			if (remainingTokens !== undefined && remainingTokens <= 0) throw new OrchestratorError("budget_exceeded", "Parent session token budget is exhausted");
-			if (input.costBudgetUsd !== undefined && remainingCost !== undefined && input.costBudgetUsd > remainingCost) throw new OrchestratorError("budget_exceeded", "Subagent cost budget exceeds the parent session remaining budget");
-			if (input.tokenBudget !== undefined && remainingTokens !== undefined && input.tokenBudget > remainingTokens) throw new OrchestratorError("budget_exceeded", "Subagent token budget exceeds the parent session remaining budget");
-			const costBudgetUsd = input.costBudgetUsd ?? remainingCost;
-			const tokenBudget = input.tokenBudget ?? remainingTokens;
-			const sessionId = this.#idFactory();
-			const operationId = this.#idFactory();
-			const name = (input.name?.trim() || `Subagent: ${task.replace(/\s+/g, " ").slice(0, 80)}`).slice(0, 500);
-			const created: SessionEvent = {
-				type: "session.created",
-				eventId: this.#idFactory(),
-				sessionId,
-				revision: 1,
-				timestamp: now,
-				session: { id: sessionId, workspaceId: parent.session.workspaceId, name, phase: "idle", createdAt: now, updatedAt: now, parentSessionId: parent.session.id },
-				model: parent.model,
-				thinkingLevel: parent.thinkingLevel,
-				sandboxMode: parent.sandboxMode,
-				approvalPolicy: parent.approvalPolicy,
-				usage: EMPTY_USAGE,
-				...(costBudgetUsd === undefined ? {} : { costBudgetUsd }),
-				...(tokenBudget === undefined ? {} : { tokenBudget }),
-				...(parent.budgetWarningThreshold === undefined ? {} : { budgetWarningThreshold: parent.budgetWarningThreshold }),
-			};
-			let snapshot = reduceSessionEvent(undefined, created);
-			const userItemId = this.#idFactory();
-			const item: SessionEvent = {
-				type: "session.item.upserted",
-				eventId: this.#idFactory(),
-				sessionId,
-				revision: 2,
-				timestamp: now,
-				item: { id: userItemId, type: "user", createdAt: now, content: [{ type: "text", text: task }] },
-			};
-			snapshot = reduceSessionEvent(snapshot, item);
-			const phase: SessionEvent = { type: "session.phase.changed", eventId: this.#idFactory(), sessionId, revision: 3, timestamp: now, phase: "turn" };
-			snapshot = reduceSessionEvent(snapshot, phase);
-			const operation: DurableOperation = {
-				id: operationId,
-				sessionId,
-				type: "turn",
-				status: "queued",
-				payload: { type: "turn", mode: "prompt", userItemId, content: [{ type: "text", text: task }] },
-				attempt: 0,
-				createdAt: now,
-				updatedAt: now,
-				abortRequested: false,
-			};
-			const result = { type: "subagent.created", subagent: summarizeSubagent(snapshot, operation) } as const;
+			const prepared = this.#prepareSubagent(parent, {
+				task,
+				...(input.name === undefined ? {} : { name: input.name }),
+				...(input.costBudgetUsd === undefined ? {} : { costBudgetUsd: input.costBudgetUsd }),
+				...(input.tokenBudget === undefined ? {} : { tokenBudget: input.tokenBudget }),
+			}, now);
+			const result = { type: "subagent.created", subagent: prepared.summary } as const;
 			const committed = this.store.commitMutation({
-				sessionId,
+				sessionId: prepared.snapshot.session.id,
 				expectedRevision: 0,
-				events: [created, item, phase],
-				snapshot,
-				operation,
+				events: prepared.events,
+				snapshot: prepared.snapshot,
+				operation: prepared.operation,
 				idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs },
 			});
 			return committed.result as Extract<CommandResult, { type: "subagent.created" }>;
 		});
+	}
+
+	#prepareSubagent(
+		parent: SessionSnapshot,
+		input: { task: string; name?: string; costBudgetUsd?: number; tokenBudget?: number },
+		now: number,
+	): { events: SessionEvent[]; snapshot: SessionSnapshot; operation: DurableOperation; summary: SubagentSummary } {
+		const remainingCost = parent.costBudgetUsd === undefined ? undefined : Math.max(0, parent.costBudgetUsd - parent.usage.costUsd);
+		const remainingTokens = parent.tokenBudget === undefined ? undefined : Math.max(0, parent.tokenBudget - parent.usage.totalTokens);
+		if (remainingCost !== undefined && remainingCost <= 0) throw new OrchestratorError("budget_exceeded", "Parent session cost budget is exhausted");
+		if (remainingTokens !== undefined && remainingTokens <= 0) throw new OrchestratorError("budget_exceeded", "Parent session token budget is exhausted");
+		if (input.costBudgetUsd !== undefined && remainingCost !== undefined && input.costBudgetUsd > remainingCost) throw new OrchestratorError("budget_exceeded", "Subagent cost budget exceeds the parent session remaining budget");
+		if (input.tokenBudget !== undefined && remainingTokens !== undefined && input.tokenBudget > remainingTokens) throw new OrchestratorError("budget_exceeded", "Subagent token budget exceeds the parent session remaining budget");
+		const costBudgetUsd = input.costBudgetUsd ?? remainingCost;
+		const tokenBudget = input.tokenBudget ?? remainingTokens;
+		const sessionId = this.#idFactory();
+		const operationId = this.#idFactory();
+		const name = (input.name?.trim() || `Subagent: ${input.task.replace(/\s+/g, " ").slice(0, 80)}`).slice(0, 500);
+		const created: SessionEvent = {
+			type: "session.created",
+			eventId: this.#idFactory(),
+			sessionId,
+			revision: 1,
+			timestamp: now,
+			session: { id: sessionId, workspaceId: parent.session.workspaceId, name, phase: "idle", createdAt: now, updatedAt: now, parentSessionId: parent.session.id },
+			model: parent.model,
+			thinkingLevel: parent.thinkingLevel,
+			sandboxMode: parent.sandboxMode,
+			approvalPolicy: parent.approvalPolicy,
+			usage: EMPTY_USAGE,
+			...(costBudgetUsd === undefined ? {} : { costBudgetUsd }),
+			...(tokenBudget === undefined ? {} : { tokenBudget }),
+			...(parent.budgetWarningThreshold === undefined ? {} : { budgetWarningThreshold: parent.budgetWarningThreshold }),
+		};
+		let snapshot = reduceSessionEvent(undefined, created);
+		const userItemId = this.#idFactory();
+		const item: SessionEvent = {
+			type: "session.item.upserted",
+			eventId: this.#idFactory(),
+			sessionId,
+			revision: 2,
+			timestamp: now,
+			item: { id: userItemId, type: "user", createdAt: now, content: [{ type: "text", text: input.task }] },
+		};
+		snapshot = reduceSessionEvent(snapshot, item);
+		const phase: SessionEvent = { type: "session.phase.changed", eventId: this.#idFactory(), sessionId, revision: 3, timestamp: now, phase: "turn" };
+		snapshot = reduceSessionEvent(snapshot, phase);
+		const operation: DurableOperation = {
+			id: operationId,
+			sessionId,
+			type: "turn",
+			status: "queued",
+			payload: { type: "turn", mode: "prompt", userItemId, content: [{ type: "text", text: input.task }] },
+			attempt: 0,
+			createdAt: now,
+			updatedAt: now,
+			abortRequested: false,
+		};
+		return { events: [created, item, phase], snapshot, operation, summary: summarizeSubagent(snapshot, operation) };
 	}
 
 	listSubagents(parentSessionId: string, limit = 100): SubagentSummary[] {
@@ -573,9 +638,122 @@ export class SessionOrchestrator {
 		});
 	}
 
+	async createGoal(input: CreateGoalInput): Promise<Extract<CommandResult, { type: "goal.created" }>> {
+		return this.#serializeCommand(`goal:create:${input.sessionId}`, () => {
+			const now = this.#clock();
+			const objective = input.objective.trim();
+			if (!objective) throw new OrchestratorError("conflict", "Goal objective cannot be empty");
+			const hash = commandHash({ type: "goal.create", sessionId: input.sessionId, objective, title: input.title });
+			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
+			if (existing) return existing as Extract<CommandResult, { type: "goal.created" }>;
+			const parent = this.store.loadSnapshot(input.sessionId);
+			if (!parent) throw new OrchestratorError("not_found", `Session ${input.sessionId} does not exist`);
+			if (parent.session.parentSessionId !== undefined) throw new OrchestratorError("conflict", "Goals can only be created from a primary session");
+			if (parent.session.archivedAt !== undefined) throw new OrchestratorError("conflict", "Archived sessions cannot create goals");
+			const goal: DurableGoal = {
+				id: this.#idFactory(),
+				parentSessionId: input.sessionId,
+				title: (input.title?.trim() || objective.replace(/\s+/g, " ").slice(0, 80)).slice(0, 500),
+				objective,
+				createdAt: now,
+				updatedAt: now,
+			};
+			const result = { type: "goal.created", goal: summarizeGoal(goal) } as const;
+			return this.store.commitGoalMutation({
+				goal,
+				idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs },
+			}).result as Extract<CommandResult, { type: "goal.created" }>;
+		});
+	}
+
+	listGoals(parentSessionId: string, limit = 100): GoalSummary[] {
+		if (!this.store.loadSnapshot(parentSessionId)) throw new OrchestratorError("not_found", `Session ${parentSessionId} does not exist`);
+		return this.store.listGoals(parentSessionId, limit).map((goal) => {
+			if (!goal.runSessionId) return summarizeGoal(goal);
+			const snapshot = this.store.loadSnapshot(goal.runSessionId);
+			const operation = this.store.listOperations(goal.runSessionId, 1)[0];
+			return snapshot && operation ? summarizeGoal(goal, summarizeSubagent(snapshot, operation)) : summarizeGoal(goal);
+		});
+	}
+
+	async startGoal(input: GoalCommandInput): Promise<Extract<CommandResult, { type: "goal.started" }>> {
+		return this.#serializeCommand(`goal:start:${input.sessionId}:${input.goalId}`, () => {
+			const now = this.#clock();
+			const hash = commandHash({ type: "goal.start", sessionId: input.sessionId, goalId: input.goalId });
+			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
+			if (existing) return existing as Extract<CommandResult, { type: "goal.started" }>;
+			const goal = this.store.loadGoal(input.goalId);
+			if (!goal || goal.parentSessionId !== input.sessionId) throw new OrchestratorError("not_found", `Goal ${input.goalId} does not exist`);
+			if (goal.cancelledAt !== undefined) throw new OrchestratorError("conflict", `Goal ${input.goalId} is cancelled`);
+			if (goal.runSessionId !== undefined) throw new OrchestratorError("conflict", `Goal ${input.goalId} has already started`);
+			const parent = this.store.loadSnapshot(goal.parentSessionId);
+			if (!parent) throw new OrchestratorError("not_found", `Session ${goal.parentSessionId} does not exist`);
+			if (parent.session.archivedAt !== undefined) throw new OrchestratorError("conflict", "Archived sessions cannot start goals");
+			const prepared = this.#prepareSubagent(parent, {
+				task: goal.objective,
+				name: `Goal: ${goal.title}`.slice(0, 500),
+			}, now);
+			const updatedAt = Math.max(now, goal.updatedAt + 1);
+			const updated: DurableGoal = { ...goal, runSessionId: prepared.summary.sessionId, updatedAt };
+			const result = { type: "goal.started", goal: summarizeGoal(updated, prepared.summary) } as const;
+			return this.store.commitMutation({
+				sessionId: prepared.snapshot.session.id,
+				expectedRevision: 0,
+				events: prepared.events,
+				snapshot: prepared.snapshot,
+				operation: prepared.operation,
+				attachGoalRun: {
+					goalId: goal.id,
+					parentSessionId: goal.parentSessionId,
+					runSessionId: prepared.summary.sessionId,
+					expectedUpdatedAt: goal.updatedAt,
+					updatedAt,
+				},
+				idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs },
+			}).result as Extract<CommandResult, { type: "goal.started" }>;
+		});
+	}
+
+	async cancelGoal(input: GoalCommandInput): Promise<Extract<CommandResult, { type: "goal.cancel_requested" }>> {
+		return this.#serializeCommand(`goal:cancel:${input.sessionId}:${input.goalId}`, async () => {
+			const now = this.#clock();
+			const hash = commandHash({ type: "goal.cancel", sessionId: input.sessionId, goalId: input.goalId });
+			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
+			if (existing) return existing as Extract<CommandResult, { type: "goal.cancel_requested" }>;
+			const goal = this.store.loadGoal(input.goalId);
+			if (!goal || goal.parentSessionId !== input.sessionId) throw new OrchestratorError("not_found", `Goal ${input.goalId} does not exist`);
+			if (goal.cancelledAt !== undefined) throw new OrchestratorError("conflict", `Goal ${input.goalId} is already cancelled`);
+			let updated: DurableGoal;
+			let summary: GoalSummary;
+			if (goal.runSessionId === undefined) {
+				const updatedAt = Math.max(now, goal.updatedAt + 1);
+				updated = { ...goal, updatedAt, cancelledAt: updatedAt };
+				summary = summarizeGoal(updated);
+			} else {
+				const cancelled = await this.cancelSubagent({
+					principalId: input.principalId,
+					idempotencyKey: `goal-cancel:${goal.id}`,
+					sessionId: goal.parentSessionId,
+					subagentId: goal.runSessionId,
+				});
+				updated = { ...goal, updatedAt: Math.max(now, goal.updatedAt + 1) };
+				summary = summarizeGoal(updated, cancelled.subagent);
+			}
+			const result = { type: "goal.cancel_requested", goal: summary } as const;
+			return this.store.commitGoalMutation({
+				goal: updated,
+				expectedUpdatedAt: goal.updatedAt,
+				idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs },
+			}).result as Extract<CommandResult, { type: "goal.cancel_requested" }>;
+		});
+	}
+
 	async cancelSubagent(input: CancelSubagentInput): Promise<Extract<CommandResult, { type: "subagent.cancel_requested" }>> {
 		const result = await this.#serializeCommand(`subagent:cancel:${input.sessionId}:${input.subagentId}`, () => {
 			const now = this.#clock();
+			const hash = commandHash({ type: "subagent.cancel", sessionId: input.sessionId, subagentId: input.subagentId });
+			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
+			if (existing) return existing as Extract<CommandResult, { type: "subagent.cancel_requested" }>;
 			const parent = this.store.loadSnapshot(input.sessionId);
 			const child = this.store.loadSnapshot(input.subagentId);
 			if (!parent || !child || child.session.parentSessionId !== parent.session.id) throw new OrchestratorError("not_found", `Subagent ${input.subagentId} does not exist`);
@@ -587,7 +765,7 @@ export class SessionOrchestrator {
 			const committed = this.store.requestOperationAbort({
 				principalId: input.principalId,
 				idempotencyKey: input.idempotencyKey,
-				commandHash: commandHash({ type: "subagent.cancel", sessionId: input.sessionId, subagentId: input.subagentId }),
+				commandHash: hash,
 				sessionId: child.session.id,
 				result,
 				now,
@@ -609,6 +787,14 @@ export class SessionOrchestrator {
 			}
 			return committed as Extract<CommandResult, { type: "subagent.cancel_requested" }>;
 		});
+		const operation = this.store.listOperations(input.subagentId, 1)[0];
+		if (operation?.status === "queued" && operation.abortRequested) {
+			try {
+				await this.drainSession(input.subagentId, `subagent-cancel:${this.#idFactory()}`);
+			} catch (error) {
+				if (!(error instanceof OrchestratorError && error.code === "lease_conflict")) throw error;
+			}
+		}
 		await this.publishSubagentResult(input.sessionId, input.subagentId);
 		return result;
 	}

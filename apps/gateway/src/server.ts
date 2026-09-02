@@ -219,6 +219,7 @@ export class GatewayServer implements AsyncDisposable {
 			"session.resume",
 			"session.fork",
 			"subagents",
+			"goals",
 			"turn.steer",
 			"turn.follow_up",
 			...(options.approvals ? (["approval"] satisfies Capability[]) : []),
@@ -614,6 +615,18 @@ export class GatewayServer implements AsyncDisposable {
 					}
 				});
 			}
+			if (command.type === "goal.start" && result.type === "goal.started" && result.goal.runSessionId) {
+				const runSessionId = result.goal.runSessionId;
+				void (async () => {
+					await this.#orchestrator.drainSession(runSessionId, undefined, traceId);
+					await this.#orchestrator.publishSubagentResult(command.sessionId, runSessionId);
+				})().catch((error) => {
+					if (!(error instanceof OrchestratorError && error.code === "lease_conflict")) {
+						this.#logger.log("error", "gateway.goal.run_failed", { goalId: command.goalId, sessionId: runSessionId, parentSessionId: command.sessionId, error });
+						this.#onError(error);
+					}
+				});
+			}
 			this.#send(connection, { type: "response", requestId, ok: true, result });
 			this.#logger.log("info", "gateway.request.completed", { traceId, requestId, command: command.type, durationMs: Math.max(0, this.#clock() - startedAt), ...(sessionId === undefined ? {} : { sessionId }), ...(operationId === undefined ? {} : { operationId }), resultType: result.type });
 			if (command.type === "turn.prompt" || command.type === "turn.steer" || command.type === "turn.follow_up") {
@@ -849,6 +862,24 @@ export class GatewayServer implements AsyncDisposable {
 			case "subagent.cancel":
 				this.#requireSession(connection, command.sessionId);
 				return this.#orchestrator.cancelSubagent({ principalId: connection.principal.id, idempotencyKey, sessionId: command.sessionId, subagentId: command.subagentId });
+			case "goal.create":
+				this.#requireSession(connection, command.sessionId);
+				return this.#orchestrator.createGoal({
+					principalId: connection.principal.id,
+					idempotencyKey,
+					sessionId: command.sessionId,
+					objective: command.objective,
+					...(command.title === undefined ? {} : { title: command.title }),
+				});
+			case "goal.list":
+				this.#requireSession(connection, command.sessionId);
+				return { type: "goal.list", sessionId: command.sessionId, goals: this.#orchestrator.listGoals(command.sessionId, command.limit ?? 100) };
+			case "goal.start":
+				this.#requireSession(connection, command.sessionId);
+				return this.#orchestrator.startGoal({ principalId: connection.principal.id, idempotencyKey, sessionId: command.sessionId, goalId: command.goalId });
+			case "goal.cancel":
+				this.#requireSession(connection, command.sessionId);
+				return this.#orchestrator.cancelGoal({ principalId: connection.principal.id, idempotencyKey, sessionId: command.sessionId, goalId: command.goalId });
 			case "turn.prompt":
 			case "turn.steer":
 			case "turn.follow_up":

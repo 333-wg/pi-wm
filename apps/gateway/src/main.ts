@@ -385,7 +385,7 @@ async function main(): Promise<void> {
 		...(process.env.WUMING_DOCKER_IMAGE ? { dockerImage: process.env.WUMING_DOCKER_IMAGE } : {}),
 		searchProvider: searchConfiguration?.provider ?? "bing",
 	});
-	const capabilities: Capability[] = ["session.resume", "session.fork", "subagents", ...(runtimeMode === "pi" ? ["session.compaction" as const] : []), "turn.steer", "turn.follow_up", "artifact", "image_input", "git", "tools", ...(terminal ? ["terminal" as const] : [])];
+	const capabilities: Capability[] = ["session.resume", "session.fork", "subagents", "goals", ...(runtimeMode === "pi" ? ["session.compaction" as const] : []), "turn.steer", "turn.follow_up", "artifact", "image_input", "git", "tools", ...(terminal ? ["terminal" as const] : [])];
 	capabilities.push("skills");
 	capabilities.push("mcp");
 	capabilities.push("approval");

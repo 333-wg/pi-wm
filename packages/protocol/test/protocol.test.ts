@@ -174,6 +174,45 @@ describe("wire protocol", () => {
 		})).toBe(false);
 	});
 
+	it("validates goal lifecycle commands and summaries", () => {
+		const client = Compile(ClientMessageSchema);
+		for (const [requestId, command] of [
+			["goal-create", { type: "goal.create", sessionId: "session-1", title: "Release", objective: "Prepare and verify the release" }],
+			["goal-list", { type: "goal.list", sessionId: "session-1", limit: 50 }],
+			["goal-start", { type: "goal.start", sessionId: "session-1", goalId: "goal-1" }],
+			["goal-cancel", { type: "goal.cancel", sessionId: "session-1", goalId: "goal-1" }],
+		] as const) {
+			expect(client.Check({ type: "request", requestId, idempotencyKey: `${requestId}-key`, command })).toBe(true);
+		}
+		expect(client.Check({
+			type: "request",
+			requestId: "goal-list-too-large",
+			idempotencyKey: "goal-list-too-large-key",
+			command: { type: "goal.list", sessionId: "session-1", limit: 101 },
+		})).toBe(false);
+
+		expect(Compile(ServerMessageSchema).Check({
+			type: "response",
+			requestId: "goal-list",
+			ok: true,
+			result: {
+				type: "goal.list",
+				sessionId: "session-1",
+				goals: [{
+					id: "goal-1",
+					parentSessionId: "session-1",
+					title: "Release",
+					objective: "Prepare and verify the release",
+					status: "pending",
+					createdAt: 1,
+					updatedAt: 1,
+					usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 },
+					pendingApprovals: [],
+				}],
+			},
+		})).toBe(true);
+	});
+
 	it("validates custom model discovery without exposing provider details in the request", () => {
 		const client = Compile(ClientMessageSchema);
 		expect(client.Check({

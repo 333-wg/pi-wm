@@ -460,6 +460,18 @@ button { color: inherit; }
 .subagent-detail-heading small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .subagent-cancel { height: 29px; display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; border: 1px solid #dfb7b3; border-radius: 5px; background: #fff7f6; color: var(--red); cursor: pointer; font-size: 10px; font-weight: 650; }
 .subagent-cancel:disabled { cursor: wait; opacity: 0.5; }
+.goal-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; }
+.goal-start { height: 29px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid #1f2923; border-radius: 5px; background: #1f2923; color: #fff; cursor: pointer; font-size: 10px; font-weight: 650; }
+.goal-start:disabled { cursor: not-allowed; opacity: 0.45; }
+.goal-readonly { display: flex; align-items: center; gap: 7px; margin: 12px 12px 0; padding: 8px 10px; border: 1px solid #dfcfae; border-radius: 6px; background: #fff8e9; color: var(--amber); font-size: 10px; line-height: 1.45; }
+.goal-readonly svg { flex: 0 0 auto; }
+.goal-pending { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: #f8faf8; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.goal-pending svg { flex: 0 0 auto; }
+.goal-usage { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; margin: 0; }
+.goal-usage > div { min-width: 0; display: grid; gap: 3px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 5px; background: #f8faf8; }
+.goal-usage dt { color: var(--muted); font-size: 9px; font-weight: 650; }
+.goal-usage dd { margin: 0; overflow: hidden; color: var(--text); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-detail-scroll > .workbench-error { margin: 16px 0 0; }
 .subagent-detail-scroll { min-height: 0; overflow-y: auto; padding: 20px max(20px, calc((100% - 760px) / 2)) 32px; }
 .subagent-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 13px; padding-bottom: 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .subagent-status-label { display: inline-flex; align-items: center; gap: 6px; color: #455047; font-weight: 700; text-transform: capitalize; }

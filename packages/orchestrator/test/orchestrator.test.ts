@@ -4,7 +4,17 @@ import { join } from "node:path";
 import { reduceSessionEvent, replaySessionEvents, type SessionEvent } from "@wuming/domain";
 import type { AgentRuntime, RuntimeTurnResult } from "../src/types.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { OrchestratorError, SessionOrchestrator, SqliteOrchestratorStore } from "../src/index.js";
+import { OrchestratorError, SessionOrchestrator, SqliteOrchestratorStore, type CommitMutationOptions } from "../src/index.js";
+
+class RejectingGoalAttachStore extends SqliteOrchestratorStore {
+	override commitMutation(options: CommitMutationOptions) {
+		if (!options.attachGoalRun) return super.commitMutation(options);
+		return super.commitMutation({
+			...options,
+			attachGoalRun: { ...options.attachGoalRun, expectedUpdatedAt: -1 },
+		});
+	}
+}
 
 class FakeRuntime implements AgentRuntime {
 	calls = 0;
@@ -258,6 +268,90 @@ describe("session orchestrator", () => {
 		const summary = await orchestrator.publishSubagentResult(parent.snapshot.session.id, created.subagent.id);
 		expect(summary.status).toBe("cancelled");
 		expect(store.loadSnapshot(parent.snapshot.session.id)?.transcript.at(-1)).toMatchObject({ type: "tool", status: "aborted", isError: true });
+		store.close();
+	});
+
+	it("persists, starts, and projects a completed background goal", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const runtime = new FakeRuntime();
+		const orchestrator = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: ids("goal") });
+		const parent = await orchestrator.createSession(createInput());
+		const input = {
+			principalId: "user-1",
+			idempotencyKey: "goal-create-1",
+			sessionId: parent.snapshot.session.id,
+			title: "Release review",
+			objective: "Review the release and report blockers",
+		};
+		const created = await orchestrator.createGoal(input);
+		expect(await orchestrator.createGoal(input)).toEqual(created);
+		expect(created.goal).toMatchObject({ status: "pending", title: "Release review", objective: input.objective });
+		expect(orchestrator.listGoals(parent.snapshot.session.id)).toHaveLength(1);
+
+		const startInput = { principalId: "user-1", idempotencyKey: "goal-start-1", sessionId: parent.snapshot.session.id, goalId: created.goal.id };
+		const started = await orchestrator.startGoal(startInput);
+		expect(started.goal).toMatchObject({ status: "queued", runSessionId: expect.any(String), operationId: expect.any(String) });
+		expect(await orchestrator.startGoal(startInput)).toEqual(started);
+		expect(orchestrator.listSubagents(parent.snapshot.session.id)).toHaveLength(1);
+		await expect(orchestrator.startGoal({ ...startInput, idempotencyKey: "goal-start-again" })).rejects.toMatchObject({ code: "conflict" });
+		expect(orchestrator.listSubagents(parent.snapshot.session.id)).toHaveLength(1);
+		expect(await orchestrator.drainSession(started.goal.runSessionId!, "goal-worker")).toBe(1);
+		await orchestrator.publishSubagentResult(parent.snapshot.session.id, started.goal.runSessionId!);
+		expect(orchestrator.listGoals(parent.snapshot.session.id)).toEqual([
+			expect.objectContaining({ id: created.goal.id, status: "completed", result: "done", usage: expect.objectContaining({ totalTokens: 12 }) }),
+		]);
+
+		const restarted = new SessionOrchestrator(store, runtime, { clock: () => 200 });
+		expect(restarted.listGoals(parent.snapshot.session.id)[0]).toMatchObject({ id: created.goal.id, status: "completed", result: "done" });
+		store.close();
+	});
+
+	it("rolls back the child session when a goal run cannot be attached", async () => {
+		const store = new RejectingGoalAttachStore(":memory:");
+		const orchestrator = new SessionOrchestrator(store, new FakeRuntime(), { clock: () => 100, idFactory: ids("atomic-goal") });
+		const parent = await orchestrator.createSession(createInput());
+		const created = await orchestrator.createGoal({
+			principalId: "user-1",
+			idempotencyKey: "atomic-goal-create",
+			sessionId: parent.snapshot.session.id,
+			objective: "Start atomically",
+		});
+
+		await expect(orchestrator.startGoal({
+			principalId: "user-1",
+			idempotencyKey: "atomic-goal-start",
+			sessionId: parent.snapshot.session.id,
+			goalId: created.goal.id,
+		})).rejects.toMatchObject({ code: "conflict" });
+		expect(store.listChildSnapshots(parent.snapshot.session.id)).toEqual([]);
+		const goal = orchestrator.listGoals(parent.snapshot.session.id)[0];
+		expect(goal).toMatchObject({ status: "pending" });
+		expect(goal?.runSessionId).toBeUndefined();
+		store.close();
+	});
+
+	it("cancels pending and running goals", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const runtime = new BlockingRuntime();
+		const orchestrator = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: ids("cancel-goal") });
+		const parent = await orchestrator.createSession(createInput());
+		const pending = await orchestrator.createGoal({ principalId: "user-1", idempotencyKey: "goal-pending", sessionId: parent.snapshot.session.id, objective: "Do not start" });
+		const pendingCancelled = await orchestrator.cancelGoal({ principalId: "user-1", idempotencyKey: "goal-pending-cancel", sessionId: parent.snapshot.session.id, goalId: pending.goal.id });
+		expect(pendingCancelled.goal.status).toBe("cancelled");
+		await expect(orchestrator.startGoal({ principalId: "user-1", idempotencyKey: "goal-pending-start", sessionId: parent.snapshot.session.id, goalId: pending.goal.id })).rejects.toMatchObject({ code: "conflict" });
+		const queued = await orchestrator.createGoal({ principalId: "user-1", idempotencyKey: "goal-queued", sessionId: parent.snapshot.session.id, objective: "Cancel before worker claim" });
+		await orchestrator.startGoal({ principalId: "user-1", idempotencyKey: "goal-queued-start", sessionId: parent.snapshot.session.id, goalId: queued.goal.id });
+		await orchestrator.cancelGoal({ principalId: "user-1", idempotencyKey: "goal-queued-cancel", sessionId: parent.snapshot.session.id, goalId: queued.goal.id });
+		expect(orchestrator.listGoals(parent.snapshot.session.id).find((goal) => goal.id === queued.goal.id)?.status).toBe("cancelled");
+
+		const running = await orchestrator.createGoal({ principalId: "user-1", idempotencyKey: "goal-running", sessionId: parent.snapshot.session.id, objective: "Wait until cancelled" });
+		const started = await orchestrator.startGoal({ principalId: "user-1", idempotencyKey: "goal-running-start", sessionId: parent.snapshot.session.id, goalId: running.goal.id });
+		const draining = orchestrator.drainSession(started.goal.runSessionId!, "goal-cancel-worker");
+		await runtime.started;
+		const cancelled = await orchestrator.cancelGoal({ principalId: "user-1", idempotencyKey: "goal-running-cancel", sessionId: parent.snapshot.session.id, goalId: running.goal.id });
+		expect(cancelled.goal.status).toBe("cancelling");
+		await draining;
+		expect(orchestrator.listGoals(parent.snapshot.session.id).find((goal) => goal.id === running.goal.id)?.status).toBe("cancelled");
 		store.close();
 	});
 

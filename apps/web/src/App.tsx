@@ -17,6 +17,7 @@ import {
 	FolderOpen,
 	GitBranch,
 	GitCompareArrows,
+	Hourglass,
 	TerminalSquare,
 	Trash2,
 	Menu,
@@ -25,6 +26,7 @@ import {
 	PanelRight,
 	Paperclip,
 	Pencil,
+	Play,
 	Plus,
 	RefreshCw,
 	Search,
@@ -35,6 +37,7 @@ import {
 	Sparkles,
 	Square,
 	SquareTerminal,
+	Target,
 	Wrench,
 	X,
 } from "lucide-react";
@@ -52,6 +55,7 @@ import type {
 	GitDiff,
 	GitStatus,
 	GitStatusEntry,
+	GoalSummary,
 	ModelMetadata,
 	ModelRef,
 	RunSummary,
@@ -86,6 +90,7 @@ const STATUS_LABELS: Record<string, string> = {
 	compaction: "整理上下文",
 	retry: "重试中",
 	cancelling: "正在取消",
+	cancelled: "已取消",
 	aborted: "已中止",
 	complete: "已完成",
 	completed: "已完成",
@@ -1179,6 +1184,150 @@ function SubagentsView({
 	);
 }
 
+const GOAL_ACTIVE_STATUSES: readonly GoalSummary["status"][] = ["queued", "running", "awaiting_approval", "cancelling"];
+
+function goalActivityLabel(status: GoalSummary["status"]): string {
+	if (status === "queued") return "等待开始";
+	if (status === "cancelling") return "正在停止";
+	if (status === "awaiting_approval") return "等待批准工具调用";
+	return "正在执行";
+}
+
+function GoalsView({
+	goals,
+	disabled,
+	archived,
+	onCreate,
+	onStart,
+	onCancel,
+	onRespondApproval,
+	onRefresh,
+}: {
+	goals: GoalSummary[];
+	disabled: boolean;
+	archived: boolean;
+	onCreate: (input: { objective: string; title?: string }) => Promise<GoalSummary>;
+	onStart: (goalId: string) => Promise<GoalSummary>;
+	onCancel: (goalId: string) => Promise<GoalSummary>;
+	onRespondApproval: (sessionId: string, approvalId: string, decision: "approve" | "deny") => Promise<void>;
+	onRefresh: () => Promise<GoalSummary[]>;
+}) {
+	const [selectedId, setSelectedId] = useState<string>();
+	const [title, setTitle] = useState("");
+	const [objective, setObjective] = useState("");
+	const [creating, setCreating] = useState(false);
+	const [refreshing, setRefreshing] = useState(false);
+	const [action, setAction] = useState<{ goalId: string; kind: "start" | "cancel" }>();
+	const [formError, setFormError] = useState<string>();
+	const [actionError, setActionError] = useState<string>();
+	const selected = goals.find((goal) => goal.id === selectedId) ?? goals[0];
+
+	useEffect(() => {
+		if (!selectedId || !goals.some((goal) => goal.id === selectedId)) setSelectedId(goals[0]?.id);
+	}, [goals, selectedId]);
+
+	const submit = async (event: FormEvent) => {
+		event.preventDefault();
+		if (creating || disabled) return;
+		const normalizedObjective = objective.trim();
+		if (!normalizedObjective) return setFormError("请填写目标描述");
+		setCreating(true);
+		setFormError(undefined);
+		try {
+			const created = await onCreate({ objective: normalizedObjective, ...(title.trim() ? { title: title.trim() } : {}) });
+			setSelectedId(created.id);
+			setActionError(undefined);
+			setTitle("");
+			setObjective("");
+		} catch (cause) {
+			setFormError(cause instanceof Error ? cause.message : String(cause));
+		} finally {
+			setCreating(false);
+		}
+	};
+
+	const refresh = async () => {
+		if (refreshing) return;
+		setRefreshing(true);
+		setFormError(undefined);
+		try { await onRefresh(); } catch (cause) { setFormError(cause instanceof Error ? cause.message : String(cause)); } finally { setRefreshing(false); }
+	};
+
+	const act = async (goalId: string, kind: "start" | "cancel") => {
+		if (action || disabled) return;
+		setAction({ goalId, kind });
+		setActionError(undefined);
+		try { await (kind === "start" ? onStart(goalId) : onCancel(goalId)); } catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); } finally { setAction(undefined); }
+	};
+
+	const active = selected !== undefined && GOAL_ACTIVE_STATUSES.includes(selected.status);
+	const starting = selected !== undefined && action?.goalId === selected.id && action.kind === "start";
+	const cancelling = selected !== undefined && action?.goalId === selected.id && action.kind === "cancel";
+	return (
+		<section className="subagents-workbench goals-workbench" aria-label="目标">
+			<aside className="subagents-sidebar">
+				<div className="workbench-heading">
+					<div><strong>目标</strong><span>{goals.length} 个目标</span></div>
+					<button className="icon-button" title="刷新目标" disabled={refreshing} onClick={() => void refresh()}><RefreshCw className={refreshing ? "spin" : ""} size={15} /></button>
+				</div>
+				<form className="subagent-create goal-create" onSubmit={(event) => void submit(event)}>
+					<label><span>目标</span><textarea rows={4} maxLength={20_000} required placeholder="交付内容与完成条件" value={objective} readOnly={disabled} onChange={(event) => setObjective(event.target.value)} /></label>
+					<label><span>名称</span><input maxLength={500} placeholder="自动生成" value={title} readOnly={disabled} onChange={(event) => setTitle(event.target.value)} /></label>
+					<button className="subagent-create-button" type="submit" disabled={disabled || creating || !objective.trim()}>{creating ? <RefreshCw className="spin" size={15} /> : <Plus size={15} />}{creating ? "正在创建..." : "创建目标"}</button>
+				</form>
+				{archived && <div className="goal-readonly"><Archive size={14} />已归档会话为只读状态，无法创建或控制目标</div>}
+				{formError && <div className="workbench-error"><CircleAlert size={14} />{formError}</div>}
+				<nav className="subagent-list" aria-label="目标列表">
+					{goals.map((goal) => (
+						<button className={`subagent-entry ${selected?.id === goal.id ? "selected" : ""}`} type="button" key={goal.id} onClick={() => setSelectedId(goal.id)}>
+							<i className={`subagent-status status-${goal.status}`} />
+							<span><strong>{goal.title}</strong><small>{statusLabel(goal.status)} · {formatRunTime(goal.updatedAt)}</small></span>
+						</button>
+					))}
+					{goals.length === 0 && <div className="subagent-list-empty">暂无目标</div>}
+				</nav>
+			</aside>
+			<div className="subagent-detail">
+				{selected ? <>
+					<header className="subagent-detail-heading">
+						<div><Target size={16} /><span><strong>{selected.title}</strong><small>{selected.id}</small></span></div>
+						<div className="goal-actions">
+							{selected.status === "pending" && <button className="goal-start" type="button" title="启动目标" disabled={disabled || action !== undefined} onClick={() => void act(selected.id, "start")}>{starting ? <RefreshCw className="spin" size={13} /> : <Play size={13} />}{starting ? "正在启动" : "启动"}</button>}
+							{(selected.status === "pending" || active) && <button className="subagent-cancel" type="button" title="取消目标" disabled={disabled || action !== undefined || selected.status === "cancelling"} onClick={() => void act(selected.id, "cancel")}>{cancelling ? <RefreshCw className="spin" size={13} /> : <Square size={13} />}{selected.status === "cancelling" ? "正在取消" : cancelling ? "正在取消" : "取消"}</button>}
+						</div>
+					</header>
+					<div className="subagent-detail-scroll">
+						<div className="subagent-meta">
+							<span className={`subagent-status-label status-${selected.status}`}><i />{statusLabel(selected.status)}</span>
+							<span>{formatTokens(selected.usage.totalTokens)} Token</span>
+							<span>{formatMoney(selected.usage.costUsd)}</span>
+							{selected.startedAt && <span>{formatDuration(selected.startedAt, selected.finishedAt ?? Date.now())}</span>}
+						</div>
+						{actionError && <div className="workbench-error"><CircleAlert size={14} />{actionError}</div>}
+						<section className="subagent-section"><h2>目标</h2><p>{selected.objective}</p></section>
+						{selected.status === "pending" && <div className="goal-pending"><Hourglass size={15} /><span>目标已创建但尚未启动，点击“启动”开始后台执行。</span></div>}
+						<section className="subagent-section goal-usage-section">
+							<h2>用量</h2>
+							<dl className="goal-usage">
+								<div><dt>输入</dt><dd>{formatTokens(selected.usage.inputTokens)}</dd></div>
+								<div><dt>输出</dt><dd>{formatTokens(selected.usage.outputTokens)}</dd></div>
+								<div><dt>缓存读</dt><dd>{formatTokens(selected.usage.cacheReadTokens)}</dd></div>
+								<div><dt>缓存写</dt><dd>{formatTokens(selected.usage.cacheWriteTokens)}</dd></div>
+								<div><dt>合计</dt><dd>{formatTokens(selected.usage.totalTokens)}</dd></div>
+								<div><dt>成本</dt><dd>{formatMoney(selected.usage.costUsd)}</dd></div>
+							</dl>
+						</section>
+						{selected.pendingApprovals.map((approval) => <ApprovalPanel key={approval.id} approval={approval} onRespond={(decision) => onRespondApproval(approval.sessionId, approval.id, decision)} />)}
+						{selected.result !== undefined && <section className="subagent-section"><h2>结果</h2><pre>{selected.result || "目标已完成，但没有文本结果。"}</pre></section>}
+						{selected.error && <section className="subagent-error"><CircleAlert size={15} /><span>{selected.error}</span></section>}
+						{active && selected.pendingApprovals.length === 0 && <div className="subagent-running"><Activity size={17} /><span>{goalActivityLabel(selected.status)}</span></div>}
+					</div>
+				</> : <div className="workbench-empty"><Target size={24} /><span>创建一个目标</span></div>}
+			</div>
+		</section>
+	);
+}
+
 function BudgetEditor({ snapshot, onSave }: { snapshot: SessionSnapshot; onSave: (budget: { costBudgetUsd?: number | null; tokenBudget?: number | null; budgetWarningThreshold?: number }) => Promise<void> }) {
 	const [editing, setEditing] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -1424,7 +1573,7 @@ function SessionNavigation({
 
 export function App() {
 	const client = useWumingClient();
-	const [workbenchView, setWorkbenchView] = useState<"chat" | "agents" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp">("chat");
+	const [workbenchView, setWorkbenchView] = useState<"chat" | "agents" | "goals" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp">("chat");
 	const [mobileNav, setMobileNav] = useState(false);
 	const [showRight, setShowRight] = useState(() => window.innerWidth > 1080);
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1504,6 +1653,7 @@ export function App() {
 					<div className="workbench-tabs" role="tablist" aria-label="工作区视图">
 						<button role="tab" aria-selected={workbenchView === "chat"} className={workbenchView === "chat" ? "active" : ""} title="对话" onClick={() => setWorkbenchView("chat")}><MessageSquareCode size={15} /><span>对话</span></button>
 						{client.capabilities.includes("subagents") && <button role="tab" aria-selected={workbenchView === "agents"} className={workbenchView === "agents" ? "active" : ""} title="智能体" onClick={() => setWorkbenchView("agents")}><Bot size={15} /><span>智能体</span></button>}
+						{client.capabilities.includes("goals") && <button role="tab" aria-selected={workbenchView === "goals"} className={workbenchView === "goals" ? "active" : ""} title="目标" onClick={() => setWorkbenchView("goals")}><Target size={15} /><span>目标</span></button>}
 						<button role="tab" aria-selected={workbenchView === "files"} className={workbenchView === "files" ? "active" : ""} title="文件" onClick={() => setWorkbenchView("files")}><Folder size={15} /><span>文件</span></button>
 						<button role="tab" aria-selected={workbenchView === "changes"} className={workbenchView === "changes" ? "active" : ""} title="更改" onClick={() => setWorkbenchView("changes")}><GitBranch size={15} /><span>更改</span></button>
 						<button role="tab" aria-selected={workbenchView === "terminal"} className={workbenchView === "terminal" ? "active" : ""} title="终端" onClick={() => setWorkbenchView("terminal")}><TerminalSquare size={15} /><span>终端</span></button>
@@ -1578,6 +1728,16 @@ export function App() {
 					onCancel={client.cancelSubagent}
 					onRespondApproval={client.respondApproval}
 					onRefresh={() => client.snapshot ? client.refreshSubagents(client.snapshot.session.id) : Promise.resolve([])}
+				/>}
+				{workbenchView === "goals" && <GoalsView
+					goals={client.goals}
+					disabled={!client.snapshot || client.snapshot.session.archivedAt !== undefined || client.connection !== "connected"}
+					archived={client.snapshot?.session.archivedAt !== undefined}
+					onCreate={client.createGoal}
+					onStart={client.startGoal}
+					onCancel={client.cancelGoal}
+					onRespondApproval={client.respondApproval}
+					onRefresh={() => client.snapshot ? client.refreshGoals(client.snapshot.session.id) : Promise.resolve([])}
 				/>}
 				{workbenchView === "files" && selectedWorkspace && <WorkspaceFilesView token={client.token} workspaceId={selectedWorkspace.id} />}
 				{workbenchView === "changes" && selectedWorkspace && <ChangesView token={client.token} workspaceId={selectedWorkspace.id} />}

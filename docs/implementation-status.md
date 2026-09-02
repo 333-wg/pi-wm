@@ -93,9 +93,14 @@
   inherited model/sandbox/approval policy, bounded child budgets, create/list/
   cancel commands, approval handling, restart-safe execution, idempotent result
   and usage propagation to the parent, and responsive Web queue/detail controls.
+- Durable single-run goals with explicit pending/start semantics, atomic
+  idempotent lifecycle commands, child-session-backed background execution,
+  restart-safe status projection, approval/cancellation support, result and usage
+  recovery, and a responsive Web Goals workbench.
 - Isolated Playwright browser coverage for persisted turns, approval, active-run
-  cancellation, completed/cancelled subagents, refresh recovery, and the mobile
-  Agents layout, using dynamic ports and disposable demo runtime data.
+  cancellation, completed/cancelled subagents, durable goal restoration, refresh
+  recovery, and mobile workbench layouts, using dynamic ports and disposable
+  demo runtime data.
 - Dependency-free structured JSONL gateway/orchestrator logging with bounded
   sensitive-field redaction, request/operation correlation, runtime retry and
   failure lifecycle events, and restart-recovery events.
@@ -105,7 +110,7 @@
 
 ## Next production increments
 
-1. Background jobs, goals, review loops, and nested/multi-agent coordination.
+1. Scheduled/triggered jobs, multi-step goals, review loops, and nested/multi-agent coordination.
 2. Organization identity, encrypted credential store, RBAC, quotas, and audit UI.
 3. PostgreSQL/event transport, multi-node workers, deployment, and observability.
 
