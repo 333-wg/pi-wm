@@ -1,4 +1,4 @@
-import type { ProgressEvent, RunFailureKind, SessionSnapshot, TranscriptItem, Usage, UsageRequestSummary, UsageToolSummary, UserContentPart } from "@wuming/protocol";
+import type { GoalReviewPhase, GoalReviewRecord, ProgressEvent, RunFailureKind, SessionSnapshot, TranscriptItem, Usage, UsageRequestSummary, UsageToolSummary, UserContentPart } from "@wuming/protocol";
 
 export type StructuredLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -51,6 +51,15 @@ export interface DurableGoal {
 	updatedAt: number;
 	runSessionId?: string;
 	cancelledAt?: number;
+	review?: {
+		successCriteria: string;
+		maxRounds: number;
+		round: number;
+		phase: GoalReviewPhase;
+		runs: Array<{ round: number; workerSessionId: string; reviewerSessionId?: string }>;
+		history: GoalReviewRecord[];
+		failure?: string;
+	};
 }
 
 export type ApprovalExecutionMode = "preflight" | "failure_retry";

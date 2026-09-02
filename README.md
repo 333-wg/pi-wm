@@ -52,6 +52,11 @@ immediately. Starting a goal runs one independent child session in the
 background; its status, approvals, usage, result, and cancellation state remain
 available after navigation or restart. Multi-step plans and scheduled triggers
 are deferred beyond this increment.
+Protocol clients can optionally provide `successCriteria` and a bounded
+`maxRounds` value when creating a Goal. The backend then runs independent
+reviewer sessions, records pass/fail feedback, and starts a corrected worker
+round when required. Web controls for configuring and inspecting this review
+loop are tracked as the next frontend increment.
 Provider failures marked retryable use bounded retries (`WUMING_MAX_RETRIES` and
 `WUMING_RETRY_BASE_DELAY_MS`). Set `WUMING_COST_BUDGET_USD` for a default
 per-session budget, or send `costBudgetUsd` when creating a session; all model

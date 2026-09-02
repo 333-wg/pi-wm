@@ -177,7 +177,7 @@ describe("wire protocol", () => {
 	it("validates goal lifecycle commands and summaries", () => {
 		const client = Compile(ClientMessageSchema);
 		for (const [requestId, command] of [
-			["goal-create", { type: "goal.create", sessionId: "session-1", title: "Release", objective: "Prepare and verify the release" }],
+			["goal-create", { type: "goal.create", sessionId: "session-1", title: "Release", objective: "Prepare and verify the release", successCriteria: "All checks pass", maxRounds: 3 }],
 			["goal-list", { type: "goal.list", sessionId: "session-1", limit: 50 }],
 			["goal-start", { type: "goal.start", sessionId: "session-1", goalId: "goal-1" }],
 			["goal-cancel", { type: "goal.cancel", sessionId: "session-1", goalId: "goal-1" }],
@@ -189,6 +189,12 @@ describe("wire protocol", () => {
 			requestId: "goal-list-too-large",
 			idempotencyKey: "goal-list-too-large-key",
 			command: { type: "goal.list", sessionId: "session-1", limit: 101 },
+		})).toBe(false);
+		expect(client.Check({
+			type: "request",
+			requestId: "goal-too-many-rounds",
+			idempotencyKey: "goal-too-many-rounds-key",
+			command: { type: "goal.create", sessionId: "session-1", objective: "Release", successCriteria: "All checks pass", maxRounds: 6 },
 		})).toBe(false);
 
 		expect(Compile(ServerMessageSchema).Check({
@@ -208,6 +214,11 @@ describe("wire protocol", () => {
 					updatedAt: 1,
 					usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 },
 					pendingApprovals: [],
+					successCriteria: "All checks pass",
+					round: 1,
+					maxRounds: 3,
+					reviewPhase: "reviewing",
+					reviewHistory: [{ round: 1, verdict: "fail", feedback: "Missing evidence", reviewedAt: 2 }],
 				}],
 			},
 		})).toBe(true);

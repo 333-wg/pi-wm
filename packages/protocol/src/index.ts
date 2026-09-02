@@ -476,6 +476,24 @@ export const GoalStatusSchema = Type.Union([
 ]);
 export type GoalStatus = Static<typeof GoalStatusSchema>;
 
+export const GoalReviewPhaseSchema = Type.Union([
+	Type.Literal("pending"),
+	Type.Literal("executing"),
+	Type.Literal("reviewing"),
+	Type.Literal("passed"),
+	Type.Literal("failed"),
+	Type.Literal("cancelled"),
+]);
+export type GoalReviewPhase = Static<typeof GoalReviewPhaseSchema>;
+
+export const GoalReviewRecordSchema = StrictObject({
+	round: Type.Integer({ minimum: 1, maximum: 5 }),
+	verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
+	feedback: Type.String({ maxLength: 4000 }),
+	reviewedAt: Timestamp,
+});
+export type GoalReviewRecord = Static<typeof GoalReviewRecordSchema>;
+
 export const GoalSummarySchema = StrictObject({
 	id: Id,
 	parentSessionId: Id,
@@ -492,6 +510,11 @@ export const GoalSummarySchema = StrictObject({
 	pendingApprovals: Type.Array(ApprovalRequestSchema),
 	result: Type.Optional(Type.String({ maxLength: 200_000 })),
 	error: Type.Optional(Type.String({ maxLength: 4000 })),
+	successCriteria: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
+	round: Type.Optional(Type.Integer({ minimum: 0, maximum: 5 })),
+	maxRounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
+	reviewPhase: Type.Optional(GoalReviewPhaseSchema),
+	reviewHistory: Type.Optional(Type.Array(GoalReviewRecordSchema, { maxItems: 5 })),
 });
 export type GoalSummary = Static<typeof GoalSummarySchema>;
 
@@ -627,7 +650,7 @@ export const CommandSchema = Type.Union([
 	StrictObject({ type: Type.Literal("subagent.create"), sessionId: Id, task: Type.String({ minLength: 1, maxLength: 20_000 }), name: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })), costBudgetUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), tokenBudget: Type.Optional(Type.Integer({ exclusiveMinimum: 0 })), wait: Type.Optional(Type.Boolean()) }),
 	StrictObject({ type: Type.Literal("subagent.list"), sessionId: Id, limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }),
 	StrictObject({ type: Type.Literal("subagent.cancel"), sessionId: Id, subagentId: Id }),
-	StrictObject({ type: Type.Literal("goal.create"), sessionId: Id, title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })), objective: Type.String({ minLength: 1, maxLength: 20_000 }) }),
+	StrictObject({ type: Type.Literal("goal.create"), sessionId: Id, title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })), objective: Type.String({ minLength: 1, maxLength: 20_000 }), successCriteria: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })), maxRounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })) }),
 	StrictObject({ type: Type.Literal("goal.list"), sessionId: Id, limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }),
 	StrictObject({ type: Type.Literal("goal.start"), sessionId: Id, goalId: Id }),
 	StrictObject({ type: Type.Literal("goal.cancel"), sessionId: Id, goalId: Id }),

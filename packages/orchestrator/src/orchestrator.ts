@@ -123,6 +123,8 @@ export interface CreateGoalInput {
 	sessionId: string;
 	objective: string;
 	title?: string;
+	successCriteria?: string;
+	maxRounds?: number;
 }
 
 export interface GoalCommandInput {
@@ -274,39 +276,92 @@ function summarizeSubagent(snapshot: SessionSnapshot, operation: DurableOperatio
 	};
 }
 
-function summarizeGoal(goal: DurableGoal, subagent?: SubagentSummary): GoalSummary {
-	if (!subagent) {
-		return {
-			id: goal.id,
-			parentSessionId: goal.parentSessionId,
-			title: goal.title,
-			objective: goal.objective,
-			status: goal.cancelledAt === undefined ? "pending" : "cancelled",
-			createdAt: goal.createdAt,
-			updatedAt: goal.updatedAt,
-			usage: EMPTY_USAGE,
-			pendingApprovals: [],
-			...(goal.runSessionId === undefined ? {} : { runSessionId: goal.runSessionId }),
-			...(goal.cancelledAt === undefined ? {} : { finishedAt: goal.cancelledAt }),
-		};
-	}
+interface GoalProjection {
+	usage?: Usage;
+	result?: string;
+	error?: string;
+	startedAt?: number;
+	finishedAt?: number;
+}
+
+function summarizeGoal(goal: DurableGoal, subagent?: SubagentSummary, projection: GoalProjection = {}): GoalSummary {
+	const review = goal.review;
+	const status = goal.cancelledAt !== undefined || review?.phase === "cancelled"
+		? "cancelled" as const
+		: review?.phase === "passed"
+			? "completed" as const
+			: review?.phase === "failed"
+				? "failed" as const
+				: review?.phase === "pending"
+					? "pending" as const
+					: (review?.phase === "executing" || review?.phase === "reviewing") && (subagent?.status === "completed" || subagent?.status === "failed" || subagent?.status === "cancelled")
+						? "running" as const
+						: subagent?.status ?? (goal.runSessionId === undefined ? "pending" as const : "queued" as const);
+	const startedAt = projection.startedAt ?? subagent?.startedAt;
+	const finishedAt = goal.cancelledAt ?? projection.finishedAt ?? ((status === "completed" || status === "failed" || status === "cancelled") ? subagent?.finishedAt : undefined);
+	const result = projection.result ?? (review ? undefined : subagent?.result);
+	const error = projection.error ?? (review ? undefined : subagent?.error);
 	return {
 		id: goal.id,
 		parentSessionId: goal.parentSessionId,
 		title: goal.title,
 		objective: goal.objective,
-		status: subagent.status,
+		status,
 		createdAt: goal.createdAt,
-		updatedAt: Math.max(goal.updatedAt, subagent.updatedAt),
-		runSessionId: subagent.sessionId,
-		operationId: subagent.operationId,
-		...(subagent.startedAt === undefined ? {} : { startedAt: subagent.startedAt }),
-		...(subagent.finishedAt === undefined ? {} : { finishedAt: subagent.finishedAt }),
-		usage: subagent.usage,
-		pendingApprovals: subagent.pendingApprovals,
-		...(subagent.result === undefined ? {} : { result: subagent.result }),
-		...(subagent.error === undefined ? {} : { error: subagent.error }),
+		updatedAt: Math.max(goal.updatedAt, subagent?.updatedAt ?? goal.updatedAt),
+		...(goal.runSessionId === undefined ? {} : { runSessionId: goal.runSessionId }),
+		...(subagent?.operationId === undefined ? {} : { operationId: subagent.operationId }),
+		...(startedAt === undefined ? {} : { startedAt }),
+		...(finishedAt === undefined ? {} : { finishedAt }),
+		usage: projection.usage ?? subagent?.usage ?? EMPTY_USAGE,
+		pendingApprovals: subagent?.pendingApprovals ?? [],
+		...(result === undefined ? {} : { result }),
+		...(error === undefined ? {} : { error: error.slice(0, 4000) }),
+		...(review === undefined ? {} : {
+			successCriteria: review.successCriteria,
+			round: review.round,
+			maxRounds: review.maxRounds,
+			reviewPhase: review.phase,
+			reviewHistory: review.history,
+		}),
 	};
+}
+
+function parseGoalReview(text: string | undefined): { verdict: "pass" | "fail"; feedback: string } | undefined {
+	if (!text) return undefined;
+	const normalized = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+	try {
+		const value = JSON.parse(normalized) as unknown;
+		if (!value || typeof value !== "object") return undefined;
+		const record = value as Record<string, unknown>;
+		if (record.verdict !== "pass" && record.verdict !== "fail") return undefined;
+		if (typeof record.feedback !== "string") return undefined;
+		return { verdict: record.verdict, feedback: record.feedback.trim().slice(0, 4000) };
+	} catch {
+		return undefined;
+	}
+}
+
+function goalReviewPrompt(goal: DurableGoal, candidate: string): string {
+	return [
+		"Review the candidate result against the goal and success criteria.",
+		"Return exactly one JSON object with no commentary or markdown. Set verdict to either pass or fail:",
+		'{"verdict":"pass","feedback":"concise evidence and required corrections"}',
+		`Goal:\n${goal.objective.slice(0, 7000)}`,
+		`Success criteria:\n${goal.review!.successCriteria}`,
+		`Candidate result:\n${candidate.slice(0, 7000)}`,
+	].join("\n\n").slice(0, 20_000);
+}
+
+function goalRetryPrompt(goal: DurableGoal, candidate: string, feedback: string): string {
+	return [
+		`Continue working on this goal. This is round ${goal.review!.round + 1} of ${goal.review!.maxRounds}.`,
+		`Goal:\n${goal.objective.slice(0, 9000)}`,
+		`Success criteria:\n${goal.review!.successCriteria}`,
+		`Previous result:\n${candidate.slice(0, 3500)}`,
+		`Reviewer feedback:\n${feedback.slice(0, 3500)}`,
+		"Produce a corrected final result that satisfies every criterion.",
+	].join("\n\n").slice(0, 20_000);
 }
 
 export class SessionOrchestrator {
@@ -643,7 +698,12 @@ export class SessionOrchestrator {
 			const now = this.#clock();
 			const objective = input.objective.trim();
 			if (!objective) throw new OrchestratorError("conflict", "Goal objective cannot be empty");
-			const hash = commandHash({ type: "goal.create", sessionId: input.sessionId, objective, title: input.title });
+			const successCriteria = input.successCriteria?.trim();
+			if (input.successCriteria !== undefined && !successCriteria) throw new OrchestratorError("conflict", "Goal success criteria cannot be empty");
+			if (input.maxRounds !== undefined && !successCriteria) throw new OrchestratorError("conflict", "Goal max rounds require success criteria");
+			const maxRounds = successCriteria ? (input.maxRounds ?? 3) : undefined;
+			if (maxRounds !== undefined && (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 5)) throw new OrchestratorError("conflict", "Goal max rounds must be between 1 and 5");
+			const hash = commandHash({ type: "goal.create", sessionId: input.sessionId, objective, title: input.title, successCriteria, maxRounds });
 			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
 			if (existing) return existing as Extract<CommandResult, { type: "goal.created" }>;
 			const parent = this.store.loadSnapshot(input.sessionId);
@@ -657,6 +717,9 @@ export class SessionOrchestrator {
 				objective,
 				createdAt: now,
 				updatedAt: now,
+				...(successCriteria === undefined || maxRounds === undefined ? {} : {
+					review: { successCriteria, maxRounds, round: 0, phase: "pending" as const, runs: [], history: [] },
+				}),
 			};
 			const result = { type: "goal.created", goal: summarizeGoal(goal) } as const;
 			return this.store.commitGoalMutation({
@@ -668,11 +731,43 @@ export class SessionOrchestrator {
 
 	listGoals(parentSessionId: string, limit = 100): GoalSummary[] {
 		if (!this.store.loadSnapshot(parentSessionId)) throw new OrchestratorError("not_found", `Session ${parentSessionId} does not exist`);
-		return this.store.listGoals(parentSessionId, limit).map((goal) => {
-			if (!goal.runSessionId) return summarizeGoal(goal);
-			const snapshot = this.store.loadSnapshot(goal.runSessionId);
-			const operation = this.store.listOperations(goal.runSessionId, 1)[0];
-			return snapshot && operation ? summarizeGoal(goal, summarizeSubagent(snapshot, operation)) : summarizeGoal(goal);
+		return this.store.listGoals(parentSessionId, limit).map((goal) => this.#summarizeStoredGoal(goal));
+	}
+
+	#loadSubagentSummary(sessionId: string): SubagentSummary | undefined {
+		const snapshot = this.store.loadSnapshot(sessionId);
+		const operation = this.store.listOperations(sessionId, 1)[0];
+		return snapshot && operation ? summarizeSubagent(snapshot, operation) : undefined;
+	}
+
+	#summarizeStoredGoal(goal: DurableGoal): GoalSummary {
+		const active = goal.runSessionId ? this.#loadSubagentSummary(goal.runSessionId) : undefined;
+		if (!goal.review) return summarizeGoal(goal, active);
+		let usage = EMPTY_USAGE;
+		let startedAt: number | undefined;
+		let finishedAt: number | undefined;
+		const summaries = new Map<string, SubagentSummary>();
+		for (const run of goal.review.runs) {
+			for (const sessionId of [run.workerSessionId, run.reviewerSessionId]) {
+				if (!sessionId || summaries.has(sessionId)) continue;
+				const summary = this.#loadSubagentSummary(sessionId);
+				if (!summary) continue;
+				summaries.set(sessionId, summary);
+				usage = addUsage(usage, summary.usage);
+				startedAt = startedAt === undefined ? summary.startedAt : Math.min(startedAt, summary.startedAt ?? startedAt);
+				finishedAt = Math.max(finishedAt ?? 0, summary.finishedAt ?? 0) || finishedAt;
+			}
+		}
+		const workerSessionId = goal.review.runs.at(-1)?.workerSessionId;
+		const worker = workerSessionId ? summaries.get(workerSessionId) ?? this.#loadSubagentSummary(workerSessionId) : undefined;
+		const terminal = goal.review.phase === "passed" || goal.review.phase === "failed" || goal.review.phase === "cancelled";
+		const feedback = goal.review.history.at(-1)?.feedback;
+		return summarizeGoal(goal, active, {
+			usage,
+			...(terminal && worker?.result !== undefined ? { result: worker.result } : {}),
+			...(goal.review.phase === "failed" ? { error: goal.review.failure || feedback || active?.error || worker?.error || "Goal review failed" } : {}),
+			...(startedAt === undefined ? {} : { startedAt }),
+			...(terminal && finishedAt !== undefined ? { finishedAt } : {}),
 		});
 	}
 
@@ -694,7 +789,13 @@ export class SessionOrchestrator {
 				name: `Goal: ${goal.title}`.slice(0, 500),
 			}, now);
 			const updatedAt = Math.max(now, goal.updatedAt + 1);
-			const updated: DurableGoal = { ...goal, runSessionId: prepared.summary.sessionId, updatedAt };
+			const review = goal.review ? {
+				...goal.review,
+				round: 1,
+				phase: "executing" as const,
+				runs: [{ round: 1, workerSessionId: prepared.summary.sessionId }],
+			} : undefined;
+			const updated: DurableGoal = { ...goal, runSessionId: prepared.summary.sessionId, updatedAt, ...(review === undefined ? {} : { review }) };
 			const result = { type: "goal.started", goal: summarizeGoal(updated, prepared.summary) } as const;
 			return this.store.commitMutation({
 				sessionId: prepared.snapshot.session.id,
@@ -708,10 +809,174 @@ export class SessionOrchestrator {
 					runSessionId: prepared.summary.sessionId,
 					expectedUpdatedAt: goal.updatedAt,
 					updatedAt,
+					...(review === undefined ? {} : { review }),
 				},
 				idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs },
 			}).result as Extract<CommandResult, { type: "goal.started" }>;
 		});
+	}
+
+	#attachGoalReviewRun(
+		goal: DurableGoal,
+		prepared: { events: SessionEvent[]; snapshot: SessionSnapshot; operation: DurableOperation; summary: SubagentSummary },
+		review: NonNullable<DurableGoal["review"]>,
+	): DurableGoal {
+		const updatedAt = Math.max(this.#clock(), goal.updatedAt + 1);
+		const updated: DurableGoal = { ...goal, runSessionId: prepared.summary.sessionId, updatedAt, review };
+		this.store.commitMutation({
+			sessionId: prepared.snapshot.session.id,
+			expectedRevision: 0,
+			events: prepared.events,
+			snapshot: prepared.snapshot,
+			operation: prepared.operation,
+			attachGoalRun: {
+				goalId: goal.id,
+				parentSessionId: goal.parentSessionId,
+				runSessionId: prepared.summary.sessionId,
+				...(goal.runSessionId === undefined ? {} : { expectedRunSessionId: goal.runSessionId }),
+				expectedUpdatedAt: goal.updatedAt,
+				updatedAt,
+				review,
+			},
+		});
+		return updated;
+	}
+
+	#settleGoalReview(
+		goal: DurableGoal,
+		review: NonNullable<DurableGoal["review"]>,
+		runSessionId = goal.runSessionId,
+		cancelled = false,
+	): DurableGoal {
+		const updatedAt = Math.max(this.#clock(), goal.updatedAt + 1);
+		const updated: DurableGoal = {
+			...goal,
+			updatedAt,
+			...(runSessionId === undefined ? {} : { runSessionId }),
+			...(cancelled ? { cancelledAt: updatedAt } : {}),
+			review,
+		};
+		this.store.updateGoal(updated, goal.updatedAt);
+		return updated;
+	}
+
+	async driveGoal(parentSessionId: string, goalId: string, traceId?: string): Promise<GoalSummary> {
+		return this.#serializeCommand(`goal:${goalId}`, async () => {
+			for (;;) {
+				let goal = this.store.loadGoal(goalId);
+				if (!goal || goal.parentSessionId !== parentSessionId) throw new OrchestratorError("not_found", `Goal ${goalId} does not exist`);
+				if (!goal.runSessionId || goal.cancelledAt !== undefined || goal.review?.phase === "passed" || goal.review?.phase === "failed" || goal.review?.phase === "cancelled") {
+					return this.#summarizeStoredGoal(goal);
+				}
+
+				const activeSessionId = goal.runSessionId;
+				await this.drainSession(activeSessionId, undefined, traceId);
+				await this.publishSubagentResult(parentSessionId, activeSessionId);
+				goal = this.store.loadGoal(goalId);
+				if (!goal || goal.parentSessionId !== parentSessionId) throw new OrchestratorError("not_found", `Goal ${goalId} does not exist`);
+				if (goal.runSessionId !== activeSessionId) continue;
+				if (goal.cancelledAt !== undefined || goal.review?.phase === "cancelled") return this.#summarizeStoredGoal(goal);
+
+				const active = this.#loadSubagentSummary(activeSessionId);
+				if (!active) throw new OrchestratorError("not_found", `Goal run ${activeSessionId} does not exist`);
+				if (active.status === "queued" || active.status === "running" || active.status === "awaiting_approval" || active.status === "cancelling") {
+					return this.#summarizeStoredGoal(goal);
+				}
+				if (!goal.review) return this.#summarizeStoredGoal(goal);
+
+				if (active.status === "cancelled") {
+					goal = this.#settleGoalReview(goal, { ...goal.review, phase: "cancelled" }, activeSessionId, true);
+					return this.#summarizeStoredGoal(goal);
+				}
+				if (active.status === "failed") {
+					goal = this.#settleGoalReview(goal, { ...goal.review, phase: "failed", failure: active.error ?? "Goal run failed" });
+					return this.#summarizeStoredGoal(goal);
+				}
+
+				const parent = this.store.loadSnapshot(parentSessionId);
+				if (!parent) throw new OrchestratorError("not_found", `Session ${parentSessionId} does not exist`);
+				if (goal.review.phase === "executing") {
+					const currentRound = goal.review.round;
+					const candidate = active.result ?? "";
+					let prepared;
+					try {
+						prepared = this.#prepareSubagent(parent, {
+							task: goalReviewPrompt(goal, candidate),
+							name: `Review: ${goal.title} (round ${goal.review.round})`.slice(0, 500),
+						}, this.#clock());
+					} catch (error) {
+						if (!(error instanceof OrchestratorError && error.code === "budget_exceeded")) throw error;
+						goal = this.#settleGoalReview(goal, { ...goal.review, phase: "failed", failure: "Parent session budget is exhausted before goal review" });
+						return this.#summarizeStoredGoal(goal);
+					}
+					const runs = goal.review.runs.map((run) => run.round === currentRound
+						? { ...run, reviewerSessionId: prepared.summary.sessionId }
+						: run);
+					goal = this.#attachGoalReviewRun(goal, prepared, { ...goal.review, phase: "reviewing", runs });
+					continue;
+				}
+
+				if (goal.review.phase !== "reviewing") return this.#summarizeStoredGoal(goal);
+				const parsed = parseGoalReview(active.result);
+				const record = parsed ?? { verdict: "fail" as const, feedback: "Reviewer returned an invalid structured verdict." };
+				const history = [...goal.review.history, { round: goal.review.round, verdict: record.verdict, feedback: record.feedback, reviewedAt: this.#clock() }];
+				const workerSessionId = goal.review.runs.at(-1)?.workerSessionId;
+				if (!parsed) {
+					goal = this.#settleGoalReview(goal, { ...goal.review, phase: "failed", history, failure: record.feedback }, workerSessionId);
+					return this.#summarizeStoredGoal(goal);
+				}
+				if (parsed.verdict === "pass") {
+					goal = this.#settleGoalReview(goal, { ...goal.review, phase: "passed", history }, workerSessionId);
+					return this.#summarizeStoredGoal(goal);
+				}
+				if (goal.review.round >= goal.review.maxRounds) {
+					goal = this.#settleGoalReview(goal, { ...goal.review, phase: "failed", history, failure: parsed.feedback }, workerSessionId);
+					return this.#summarizeStoredGoal(goal);
+				}
+
+				const previousWorker = workerSessionId ? this.#loadSubagentSummary(workerSessionId) : undefined;
+				let prepared;
+				try {
+					prepared = this.#prepareSubagent(parent, {
+						task: goalRetryPrompt(goal, previousWorker?.result ?? "", parsed.feedback),
+						name: `Goal: ${goal.title} (round ${goal.review.round + 1})`.slice(0, 500),
+					}, this.#clock());
+				} catch (error) {
+					if (!(error instanceof OrchestratorError && error.code === "budget_exceeded")) throw error;
+					goal = this.#settleGoalReview(goal, { ...goal.review, phase: "failed", history, failure: "Parent session budget is exhausted before the next goal round" }, workerSessionId);
+					return this.#summarizeStoredGoal(goal);
+				}
+				const round = goal.review.round + 1;
+				goal = this.#attachGoalReviewRun(goal, prepared, {
+					...goal.review,
+					round,
+					phase: "executing",
+					runs: [...goal.review.runs, { round, workerSessionId: prepared.summary.sessionId }],
+					history,
+				});
+			}
+		});
+	}
+
+	async resumeGoalReviews(): Promise<number> {
+		let resumed = 0;
+		for (const goal of this.store.listReviewGoals()) {
+			if (!goal.runSessionId || goal.cancelledAt !== undefined || goal.review?.phase === "pending" || goal.review?.phase === "passed" || goal.review?.phase === "failed" || goal.review?.phase === "cancelled") continue;
+			try {
+				await this.driveGoal(goal.parentSessionId, goal.id);
+				resumed += 1;
+			} catch (error) {
+				if (!(error instanceof OrchestratorError && error.code === "lease_conflict")) {
+					this.#logger.log("error", "orchestrator.goal.resume_failed", { goalId: goal.id, parentSessionId: goal.parentSessionId, error });
+				}
+			}
+		}
+		return resumed;
+	}
+
+	async continueGoalForSession(sessionId: string): Promise<GoalSummary | undefined> {
+		const goal = this.store.findGoalByRunSessionId(sessionId);
+		return goal?.review ? this.driveGoal(goal.parentSessionId, goal.id) : undefined;
 	}
 
 	async cancelGoal(input: GoalCommandInput): Promise<Extract<CommandResult, { type: "goal.cancel_requested" }>> {
@@ -723,12 +988,22 @@ export class SessionOrchestrator {
 			const goal = this.store.loadGoal(input.goalId);
 			if (!goal || goal.parentSessionId !== input.sessionId) throw new OrchestratorError("not_found", `Goal ${input.goalId} does not exist`);
 			if (goal.cancelledAt !== undefined) throw new OrchestratorError("conflict", `Goal ${input.goalId} is already cancelled`);
+			if (goal.review?.phase === "passed" || goal.review?.phase === "failed" || goal.review?.phase === "cancelled") throw new OrchestratorError("conflict", `Goal ${input.goalId} is already ${goal.review.phase}`);
 			let updated: DurableGoal;
 			let summary: GoalSummary;
 			if (goal.runSessionId === undefined) {
 				const updatedAt = Math.max(now, goal.updatedAt + 1);
-				updated = { ...goal, updatedAt, cancelledAt: updatedAt };
+				updated = {
+					...goal,
+					updatedAt,
+					cancelledAt: updatedAt,
+					...(goal.review === undefined ? {} : { review: { ...goal.review, phase: "cancelled" as const } }),
+				};
 				summary = summarizeGoal(updated);
+			} else if (goal.review && ["completed", "failed", "cancelled"].includes(this.#loadSubagentSummary(goal.runSessionId)?.status ?? "")) {
+				const updatedAt = Math.max(now, goal.updatedAt + 1);
+				updated = { ...goal, updatedAt, cancelledAt: updatedAt, review: { ...goal.review, phase: "cancelled" } };
+				summary = this.#summarizeStoredGoal(updated);
 			} else {
 				const cancelled = await this.cancelSubagent({
 					principalId: input.principalId,
@@ -740,11 +1015,24 @@ export class SessionOrchestrator {
 				summary = summarizeGoal(updated, cancelled.subagent);
 			}
 			const result = { type: "goal.cancel_requested", goal: summary } as const;
-			return this.store.commitGoalMutation({
-				goal: updated,
-				expectedUpdatedAt: goal.updatedAt,
-				idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs },
-			}).result as Extract<CommandResult, { type: "goal.cancel_requested" }>;
+			try {
+				return this.store.commitGoalMutation({
+					goal: updated,
+					expectedUpdatedAt: goal.updatedAt,
+					idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs },
+				}).result as Extract<CommandResult, { type: "goal.cancel_requested" }>;
+			} catch (error) {
+				if (!(error instanceof OrchestratorError && error.code === "conflict")) throw error;
+				const latest = this.store.loadGoal(goal.id);
+				if (!latest || (latest.cancelledAt === undefined && latest.review?.phase !== "cancelled")) throw error;
+				const reconciled: DurableGoal = { ...latest, updatedAt: Math.max(now, latest.updatedAt + 1) };
+				const reconciledResult = { type: "goal.cancel_requested", goal: this.#summarizeStoredGoal(reconciled) } as const;
+				return this.store.commitGoalMutation({
+					goal: reconciled,
+					expectedUpdatedAt: latest.updatedAt,
+					idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result: reconciledResult, expiresAt: now + this.#idempotencyTtlMs },
+				}).result as Extract<CommandResult, { type: "goal.cancel_requested" }>;
+			}
 		});
 	}
 

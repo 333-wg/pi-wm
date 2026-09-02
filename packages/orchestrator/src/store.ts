@@ -6,6 +6,7 @@ import {
 	SessionSnapshotSchema,
 } from "@wuming/protocol";
 import { DatabaseSync } from "node:sqlite";
+import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { OrchestratorError } from "./errors.js";
 import type { ApprovalExecutionMode, ApprovalExecutionState, DurableApprovalExecution, DurableGoal, DurableOperation, OperationPayload, OperationStatus, WriterLease } from "./types.js";
@@ -13,6 +14,31 @@ import type { ApprovalExecutionMode, ApprovalExecutionState, DurableApprovalExec
 const checkEvent = Compile(SessionEventSchema);
 const checkSnapshot = Compile(SessionSnapshotSchema);
 const checkCommandResult = Compile(CommandResultSchema);
+const checkGoalReview = Compile(Type.Object({
+	successCriteria: Type.String({ minLength: 1, maxLength: 4000 }),
+	maxRounds: Type.Integer({ minimum: 1, maximum: 5 }),
+	round: Type.Integer({ minimum: 0, maximum: 5 }),
+	phase: Type.Union([
+		Type.Literal("pending"),
+		Type.Literal("executing"),
+		Type.Literal("reviewing"),
+		Type.Literal("passed"),
+		Type.Literal("failed"),
+		Type.Literal("cancelled"),
+	]),
+	runs: Type.Array(Type.Object({
+		round: Type.Integer({ minimum: 1, maximum: 5 }),
+		workerSessionId: Type.String({ minLength: 1, maxLength: 200 }),
+		reviewerSessionId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+	}, { additionalProperties: false }), { maxItems: 5 }),
+	history: Type.Array(Type.Object({
+		round: Type.Integer({ minimum: 1, maximum: 5 }),
+		verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
+		feedback: Type.String({ maxLength: 4000 }),
+		reviewedAt: Type.Integer({ minimum: 0 }),
+	}, { additionalProperties: false }), { maxItems: 5 }),
+	failure: Type.Optional(Type.String({ maxLength: 4000 })),
+}, { additionalProperties: false }));
 
 interface MutationIdempotency {
 	principalId: string;
@@ -33,8 +59,10 @@ export interface CommitMutationOptions {
 		goalId: string;
 		parentSessionId: string;
 		runSessionId: string;
+		expectedRunSessionId?: string;
 		expectedUpdatedAt: number;
 		updatedAt: number;
+		review?: DurableGoal["review"];
 	};
 	settleOperation?: { id: string; status: "completed" | "failed" | "interrupted"; error?: string; usage?: DurableOperation["usage"]; tools?: DurableOperation["tools"]; failureKind?: DurableOperation["failureKind"]; retryHistory?: DurableOperation["retryHistory"] };
 	retryOperation?: { id: string; error: string; retryAfter: number; retryHistory: NonNullable<DurableOperation["retryHistory"]>; usage?: DurableOperation["usage"]; tools?: DurableOperation["tools"]; failureKind?: DurableOperation["failureKind"] };
@@ -97,6 +125,7 @@ interface GoalRow {
 	created_at: number;
 	updated_at: number;
 	cancelled_at: number | null;
+	review_json: string | null;
 }
 
 export interface CommitGoalMutationOptions {
@@ -193,6 +222,7 @@ function mapGoal(row: GoalRow): DurableGoal {
 		updatedAt: row.updated_at,
 		...(row.run_session_id === null ? {} : { runSessionId: row.run_session_id }),
 		...(row.cancelled_at === null ? {} : { cancelledAt: row.cancelled_at }),
+		...(row.review_json === null ? {} : { review: parseChecked<NonNullable<DurableGoal["review"]>>(row.review_json, checkGoalReview, `Goal review ${row.goal_id}`) }),
 	};
 }
 
@@ -234,6 +264,7 @@ export class SqliteOrchestratorStore implements Disposable {
 				created_at INTEGER NOT NULL,
 				updated_at INTEGER NOT NULL,
 				cancelled_at INTEGER,
+				review_json TEXT,
 				FOREIGN KEY (parent_session_id) REFERENCES session_snapshots(session_id) ON DELETE CASCADE,
 				FOREIGN KEY (run_session_id) REFERENCES session_snapshots(session_id) ON DELETE SET NULL
 			);
@@ -314,6 +345,8 @@ export class SqliteOrchestratorStore implements Disposable {
 		}
 		this.#db.exec("CREATE INDEX IF NOT EXISTS session_snapshots_list ON session_snapshots(workspace_id, archived_at, updated_at DESC)");
 		this.#db.exec("CREATE INDEX IF NOT EXISTS session_snapshots_parent ON session_snapshots(parent_session_id, updated_at DESC)");
+		const goalColumns = this.#db.prepare("PRAGMA table_info(goals)").all() as unknown as Array<{ name: string }>;
+		if (!goalColumns.some((column) => column.name === "review_json")) this.#db.exec("ALTER TABLE goals ADD COLUMN review_json TEXT");
 		const operationColumns = this.#db.prepare("PRAGMA table_info(operations)").all() as unknown as Array<{ name: string }>;
 		if (!operationColumns.some((column) => column.name === "abort_requested")) {
 			this.#db.exec("ALTER TABLE operations ADD COLUMN abort_requested INTEGER NOT NULL DEFAULT 0");
@@ -413,15 +446,29 @@ export class SqliteOrchestratorStore implements Disposable {
 
 	loadGoal(goalId: string): DurableGoal | undefined {
 		const row = this.#db
-			.prepare("SELECT goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at FROM goals WHERE goal_id = ?")
+			.prepare("SELECT goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at, review_json FROM goals WHERE goal_id = ?")
 			.get(goalId) as unknown as GoalRow | undefined;
+		return row ? mapGoal(row) : undefined;
+	}
+
+	findGoalByRunSessionId(sessionId: string): DurableGoal | undefined {
+		const row = this.#db
+			.prepare("SELECT goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at, review_json FROM goals WHERE run_session_id = ?")
+			.get(sessionId) as unknown as GoalRow | undefined;
 		return row ? mapGoal(row) : undefined;
 	}
 
 	listGoals(parentSessionId: string, limit = 100): DurableGoal[] {
 		const rows = this.#db
-			.prepare("SELECT goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at FROM goals WHERE parent_session_id = ? ORDER BY updated_at DESC, goal_id DESC LIMIT ?")
+			.prepare("SELECT goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at, review_json FROM goals WHERE parent_session_id = ? ORDER BY updated_at DESC, goal_id DESC LIMIT ?")
 			.all(parentSessionId, Math.max(1, Math.min(100, Math.trunc(limit)))) as unknown as GoalRow[];
+		return rows.map(mapGoal);
+	}
+
+	listReviewGoals(): DurableGoal[] {
+		const rows = this.#db
+			.prepare("SELECT goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at, review_json FROM goals WHERE review_json IS NOT NULL ORDER BY updated_at, goal_id")
+			.all() as unknown as GoalRow[];
 		return rows.map(mapGoal);
 	}
 
@@ -446,12 +493,15 @@ export class SqliteOrchestratorStore implements Disposable {
 			if (!checkCommandResult.Check(options.idempotency.result)) {
 				throw new OrchestratorError("conflict", "Goal mutation contains an invalid command result");
 			}
+			if (options.goal.review && !checkGoalReview.Check(options.goal.review)) {
+				throw new OrchestratorError("conflict", `Goal ${options.goal.id} contains invalid review state`);
+			}
 			if (options.expectedUpdatedAt === undefined) {
-				this.#db.prepare("INSERT INTO goals(goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-					.run(options.goal.id, options.goal.parentSessionId, options.goal.title, options.goal.objective, options.goal.runSessionId ?? null, options.goal.createdAt, options.goal.updatedAt, options.goal.cancelledAt ?? null);
+				this.#db.prepare("INSERT INTO goals(goal_id, parent_session_id, title, objective, run_session_id, created_at, updated_at, cancelled_at, review_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+					.run(options.goal.id, options.goal.parentSessionId, options.goal.title, options.goal.objective, options.goal.runSessionId ?? null, options.goal.createdAt, options.goal.updatedAt, options.goal.cancelledAt ?? null, options.goal.review ? JSON.stringify(options.goal.review) : null);
 			} else {
-				const updated = this.#db.prepare("UPDATE goals SET title = ?, objective = ?, run_session_id = ?, updated_at = ?, cancelled_at = ? WHERE goal_id = ? AND parent_session_id = ? AND updated_at = ?")
-					.run(options.goal.title, options.goal.objective, options.goal.runSessionId ?? null, options.goal.updatedAt, options.goal.cancelledAt ?? null, options.goal.id, options.goal.parentSessionId, options.expectedUpdatedAt);
+				const updated = this.#db.prepare("UPDATE goals SET title = ?, objective = ?, run_session_id = ?, updated_at = ?, cancelled_at = ?, review_json = ? WHERE goal_id = ? AND parent_session_id = ? AND updated_at = ?")
+					.run(options.goal.title, options.goal.objective, options.goal.runSessionId ?? null, options.goal.updatedAt, options.goal.cancelledAt ?? null, options.goal.review ? JSON.stringify(options.goal.review) : null, options.goal.id, options.goal.parentSessionId, options.expectedUpdatedAt);
 				if (Number(updated.changes) !== 1) throw new OrchestratorError("conflict", `Goal ${options.goal.id} changed concurrently`);
 			}
 			this.#db.prepare("INSERT INTO idempotency_results(principal_id, idempotency_key, command_hash, result_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
@@ -462,6 +512,13 @@ export class SqliteOrchestratorStore implements Disposable {
 			this.#db.exec("ROLLBACK");
 			throw error;
 		}
+	}
+
+	updateGoal(goal: DurableGoal, expectedUpdatedAt: number): void {
+		if (goal.review && !checkGoalReview.Check(goal.review)) throw new OrchestratorError("conflict", `Goal ${goal.id} contains invalid review state`);
+		const updated = this.#db.prepare("UPDATE goals SET title = ?, objective = ?, run_session_id = ?, updated_at = ?, cancelled_at = ?, review_json = ? WHERE goal_id = ? AND parent_session_id = ? AND updated_at = ?")
+			.run(goal.title, goal.objective, goal.runSessionId ?? null, goal.updatedAt, goal.cancelledAt ?? null, goal.review ? JSON.stringify(goal.review) : null, goal.id, goal.parentSessionId, expectedUpdatedAt);
+		if (Number(updated.changes) !== 1) throw new OrchestratorError("conflict", `Goal ${goal.id} changed concurrently`);
 	}
 
 	getIdempotencyResult(
@@ -628,13 +685,18 @@ export class SqliteOrchestratorStore implements Disposable {
 					);
 			}
 			if (options.attachGoalRun) {
+				if (options.attachGoalRun.review && !checkGoalReview.Check(options.attachGoalRun.review)) {
+					throw new OrchestratorError("conflict", `Goal ${options.attachGoalRun.goalId} contains invalid review state`);
+				}
 				const attached = this.#db
-					.prepare("UPDATE goals SET run_session_id = ?, updated_at = ? WHERE goal_id = ? AND parent_session_id = ? AND run_session_id IS NULL AND cancelled_at IS NULL AND updated_at = ?")
+					.prepare("UPDATE goals SET run_session_id = ?, updated_at = ?, review_json = ? WHERE goal_id = ? AND parent_session_id = ? AND run_session_id IS ? AND cancelled_at IS NULL AND updated_at = ?")
 					.run(
 						options.attachGoalRun.runSessionId,
 						options.attachGoalRun.updatedAt,
+						options.attachGoalRun.review ? JSON.stringify(options.attachGoalRun.review) : null,
 						options.attachGoalRun.goalId,
 						options.attachGoalRun.parentSessionId,
+						options.attachGoalRun.expectedRunSessionId ?? null,
 						options.attachGoalRun.expectedUpdatedAt,
 					);
 				if (Number(attached.changes) !== 1) {

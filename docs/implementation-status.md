@@ -97,6 +97,9 @@
   idempotent lifecycle commands, child-session-backed background execution,
   restart-safe status projection, approval/cancellation support, result and usage
   recovery, and a responsive Web Goals workbench.
+- Optional backend Goal review loops with bounded success criteria, independent
+  worker/reviewer child sessions, durable verdict history, feedback-driven retry
+  rounds, aggregate usage, atomic run transitions, and restart continuation.
 - Isolated Playwright browser coverage for persisted turns, approval, active-run
   cancellation, completed/cancelled subagents, durable goal restoration, refresh
   recovery, and mobile workbench layouts, using dynamic ports and disposable
@@ -110,7 +113,7 @@
 
 ## Next production increments
 
-1. Scheduled/triggered jobs, multi-step goals, review loops, and nested/multi-agent coordination.
+1. Review-loop Web controls, scheduled/triggered jobs, multi-step goals, and nested/multi-agent coordination.
 2. Organization identity, encrypted credential store, RBAC, quotas, and audit UI.
 3. PostgreSQL/event transport, multi-node workers, deployment, and observability.
 

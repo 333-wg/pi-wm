@@ -101,7 +101,9 @@ class DemoRuntime implements AgentRuntime {
 				});
 			}
 			if (text.trim() === "/inject") await this.#waitForInjection(active, input.signal);
-			const answer = text.trim() === "/long"
+			const answer = text.trim().startsWith("Review the candidate result against the goal")
+				? JSON.stringify({ verdict: "pass", feedback: "Demo reviewer accepted the candidate result." })
+				: text.trim() === "/long"
 				? Array.from({ length: 600 }, (_, index) => `demo-step-${index + 1}`).join(" ")
 				: text.trim() === "/inject"
 					? `Active ${active.injected[0]?.mode ?? "instruction"} received: ${active.injected[0]?.text ?? ""}`
@@ -373,7 +375,9 @@ async function main(): Promise<void> {
 	handleRecoveredDecision = (approval) => {
 		if (!orchestrator.handleRecoveredApproval(approval)) return;
 		logger.log("warn", "gateway.approval.recovered", { sessionId: approval.sessionId, approvalId: approval.id, status: approval.status });
-		void orchestrator.drainSession(approval.sessionId).catch((error) => logger.log("error", "gateway.approval.recovery_failed", { sessionId: approval.sessionId, error }));
+		void orchestrator.drainSession(approval.sessionId)
+			.then(() => orchestrator.continueGoalForSession(approval.sessionId))
+			.catch((error) => logger.log("error", "gateway.approval.recovery_failed", { sessionId: approval.sessionId, error }));
 	};
 	store.clearWriterLeases();
 	const recoveredInterruptedOperations = orchestrator.recoverInterruptedOperations();
@@ -428,7 +432,9 @@ async function main(): Promise<void> {
 	if (recoveredInterruptedOperations > 0) console.log(`Recovered ${recoveredInterruptedOperations} interrupted operation(s)`);
 	if (recoveredPendingApprovals > 0) console.log(`Restored ${recoveredPendingApprovals} pending approval(s)`);
 	if (reconciledSubagentResults > 0) console.log(`Published ${reconciledSubagentResults} recovered subagent result(s)`);
-	void orchestrator.resumeQueuedSessions().catch((error) => logger.log("error", "gateway.queue.recovery_failed", { error }));
+	void orchestrator.resumeQueuedSessions()
+		.then(() => orchestrator.resumeGoalReviews())
+		.catch((error) => logger.log("error", "gateway.queue.recovery_failed", { error }));
 	if (runtimeMode === "pi") {
 		console.log(`Process sandbox: ${process.env.WUMING_DOCKER_IMAGE ? "Docker" : "disabled (set WUMING_DOCKER_IMAGE)"}`);
 	}

@@ -57,6 +57,43 @@ class FakeRuntime implements AgentRuntime {
 	}
 }
 
+class GoalReviewRuntime implements AgentRuntime {
+	calls = 0;
+	workerCalls = 0;
+	reviewerCalls = 0;
+
+	constructor(readonly verdicts: Array<"pass" | "fail">) {}
+
+	async executeTurn(input: Parameters<AgentRuntime["executeTurn"]>[0]): Promise<RuntimeTurnResult> {
+		this.calls += 1;
+		const text = input.operation.payload.content
+			.filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
+			.map((part) => part.text)
+			.join("\n");
+		const reviewing = text.startsWith("Review the candidate result");
+		let result: string;
+		if (reviewing) {
+			this.reviewerCalls += 1;
+			const verdict = this.verdicts.shift() ?? "pass";
+			result = JSON.stringify({ verdict, feedback: verdict === "pass" ? "All criteria are satisfied." : "Add concrete verification evidence." });
+		} else {
+			this.workerCalls += 1;
+			result = `candidate-${this.workerCalls}`;
+		}
+		return {
+			items: [{
+				id: `goal-review-assistant-${this.calls}`,
+				type: "assistant",
+				createdAt: input.snapshot.session.updatedAt + 1,
+				status: "complete",
+				content: [{ type: "text", text: result }],
+				model: input.snapshot.model,
+			}],
+			usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 2, costUsd: 0.01 },
+		};
+	}
+}
+
 class FailingRuntime implements AgentRuntime {
 	async executeTurn(): Promise<RuntimeTurnResult> {
 		throw new Error("provider failed");
@@ -327,6 +364,145 @@ describe("session orchestrator", () => {
 		const goal = orchestrator.listGoals(parent.snapshot.session.id)[0];
 		expect(goal).toMatchObject({ status: "pending" });
 		expect(goal?.runSessionId).toBeUndefined();
+		store.close();
+	});
+
+	it("reviews goal results and uses bounded feedback rounds", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const runtime = new GoalReviewRuntime(["fail", "pass"]);
+		const orchestrator = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: ids("review-goal") });
+		const parent = await orchestrator.createSession(createInput());
+		const created = await orchestrator.createGoal({
+			principalId: "user-1",
+			idempotencyKey: "review-goal-create",
+			sessionId: parent.snapshot.session.id,
+			objective: "Produce a verified release report",
+			successCriteria: "The report includes concrete verification evidence.",
+			maxRounds: 2,
+		});
+		expect(created.goal).toMatchObject({ status: "pending", reviewPhase: "pending", round: 0, maxRounds: 2 });
+
+		await orchestrator.startGoal({ principalId: "user-1", idempotencyKey: "review-goal-start", sessionId: parent.snapshot.session.id, goalId: created.goal.id });
+		const completed = await orchestrator.driveGoal(parent.snapshot.session.id, created.goal.id);
+
+		expect(runtime).toMatchObject({ calls: 4, workerCalls: 2, reviewerCalls: 2 });
+		expect(completed).toMatchObject({
+			status: "completed",
+			reviewPhase: "passed",
+			round: 2,
+			maxRounds: 2,
+			result: "candidate-2",
+			usage: { totalTokens: 8, costUsd: 0.04 },
+			reviewHistory: [
+				{ round: 1, verdict: "fail", feedback: "Add concrete verification evidence." },
+				{ round: 2, verdict: "pass", feedback: "All criteria are satisfied." },
+			],
+		});
+		expect(orchestrator.listSubagents(parent.snapshot.session.id)).toHaveLength(4);
+		store.close();
+	});
+
+	it("persists review configuration across a SQLite reopen", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "wuming-goal-review-"));
+		cleanup.push(directory);
+		const path = join(directory, "orchestrator.sqlite");
+		const firstStore = new SqliteOrchestratorStore(path);
+		const first = new SessionOrchestrator(firstStore, new FakeRuntime(), { clock: () => 100, idFactory: ids("persisted-review-goal") });
+		const parent = await first.createSession(createInput());
+		const created = await first.createGoal({
+			principalId: "user-1",
+			idempotencyKey: "persisted-review-goal-create",
+			sessionId: parent.snapshot.session.id,
+			objective: "Persist review state",
+			successCriteria: "The state survives reopening SQLite.",
+			maxRounds: 4,
+		});
+		firstStore.close();
+
+		const reopenedStore = new SqliteOrchestratorStore(path);
+		const reopened = new SessionOrchestrator(reopenedStore, new FakeRuntime());
+		expect(reopened.listGoals(parent.snapshot.session.id)[0]).toMatchObject({
+			id: created.goal.id,
+			status: "pending",
+			successCriteria: "The state survives reopening SQLite.",
+			maxRounds: 4,
+			round: 0,
+			reviewPhase: "pending",
+		});
+		await expect(reopened.createGoal({
+			principalId: "user-1",
+			idempotencyKey: "invalid-review-goal-create",
+			sessionId: parent.snapshot.session.id,
+			objective: "Invalid review state",
+			maxRounds: 2,
+		})).rejects.toMatchObject({ code: "conflict" });
+		reopenedStore.close();
+	});
+
+	it("fails a reviewed goal after the configured round limit", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const runtime = new GoalReviewRuntime(["fail"]);
+		const orchestrator = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: ids("failed-review-goal") });
+		const parent = await orchestrator.createSession(createInput());
+		const created = await orchestrator.createGoal({
+			principalId: "user-1",
+			idempotencyKey: "failed-review-goal-create",
+			sessionId: parent.snapshot.session.id,
+			objective: "Produce a verified release report",
+			successCriteria: "The report includes verification evidence.",
+			maxRounds: 1,
+		});
+		await orchestrator.startGoal({ principalId: "user-1", idempotencyKey: "failed-review-goal-start", sessionId: parent.snapshot.session.id, goalId: created.goal.id });
+		const failed = await orchestrator.driveGoal(parent.snapshot.session.id, created.goal.id);
+		expect(failed).toMatchObject({ status: "failed", reviewPhase: "failed", round: 1, result: "candidate-1", error: "Add concrete verification evidence." });
+		expect(runtime).toMatchObject({ calls: 2, workerCalls: 1, reviewerCalls: 1 });
+		store.close();
+	});
+
+	it("resumes review progression after the orchestrator is recreated", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const runtime = new GoalReviewRuntime(["pass"]);
+		const first = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: ids("resumed-review-goal") });
+		const parent = await first.createSession(createInput());
+		const created = await first.createGoal({
+			principalId: "user-1",
+			idempotencyKey: "resumed-review-goal-create",
+			sessionId: parent.snapshot.session.id,
+			objective: "Produce a verified report",
+			successCriteria: "The report is complete.",
+		});
+		const started = await first.startGoal({ principalId: "user-1", idempotencyKey: "resumed-review-goal-start", sessionId: parent.snapshot.session.id, goalId: created.goal.id });
+		expect(await first.drainSession(started.goal.runSessionId!)).toBe(1);
+		expect(first.listGoals(parent.snapshot.session.id)[0]).toMatchObject({ status: "running", reviewPhase: "executing" });
+
+		const restarted = new SessionOrchestrator(store, runtime, { clock: () => 200, idFactory: ids("restarted-review-goal") });
+		expect(await restarted.resumeGoalReviews()).toBe(1);
+		expect(restarted.listGoals(parent.snapshot.session.id)[0]).toMatchObject({ status: "completed", reviewPhase: "passed", result: "candidate-1" });
+		expect(runtime).toMatchObject({ calls: 2, workerCalls: 1, reviewerCalls: 1 });
+		store.close();
+	});
+
+	it("cancels an active reviewed goal while its driver is running", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const runtime = new BlockingRuntime();
+		const orchestrator = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: ids("cancel-review-goal") });
+		const parent = await orchestrator.createSession(createInput());
+		const created = await orchestrator.createGoal({
+			principalId: "user-1",
+			idempotencyKey: "cancel-review-goal-create",
+			sessionId: parent.snapshot.session.id,
+			objective: "Wait for cancellation",
+			successCriteria: "The run finishes successfully.",
+		});
+		await orchestrator.startGoal({ principalId: "user-1", idempotencyKey: "cancel-review-goal-start", sessionId: parent.snapshot.session.id, goalId: created.goal.id });
+		const driving = orchestrator.driveGoal(parent.snapshot.session.id, created.goal.id);
+		await runtime.started;
+		const cancelInput = { principalId: "user-1", idempotencyKey: "cancel-review-goal-cancel", sessionId: parent.snapshot.session.id, goalId: created.goal.id };
+		const cancelled = await orchestrator.cancelGoal(cancelInput);
+		expect(["cancelling", "cancelled"]).toContain(cancelled.goal.status);
+		await driving;
+		expect(orchestrator.listGoals(parent.snapshot.session.id)[0]).toMatchObject({ status: "cancelled", reviewPhase: "cancelled" });
+		expect(await orchestrator.cancelGoal(cancelInput)).toEqual(cancelled);
 		store.close();
 	});
 

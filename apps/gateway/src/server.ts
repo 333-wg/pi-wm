@@ -616,13 +616,17 @@ export class GatewayServer implements AsyncDisposable {
 				});
 			}
 			if (command.type === "goal.start" && result.type === "goal.started" && result.goal.runSessionId) {
-				const runSessionId = result.goal.runSessionId;
-				void (async () => {
-					await this.#orchestrator.drainSession(runSessionId, undefined, traceId);
-					await this.#orchestrator.publishSubagentResult(command.sessionId, runSessionId);
-				})().catch((error) => {
+				void this.#orchestrator.driveGoal(command.sessionId, command.goalId, traceId).catch((error) => {
 					if (!(error instanceof OrchestratorError && error.code === "lease_conflict")) {
-						this.#logger.log("error", "gateway.goal.run_failed", { goalId: command.goalId, sessionId: runSessionId, parentSessionId: command.sessionId, error });
+						this.#logger.log("error", "gateway.goal.run_failed", { goalId: command.goalId, parentSessionId: command.sessionId, error });
+						this.#onError(error);
+					}
+				});
+			}
+			if (command.type === "approval.respond" && result.type === "approval.accepted") {
+				void this.#orchestrator.continueGoalForSession(command.sessionId).catch((error) => {
+					if (!(error instanceof OrchestratorError && error.code === "lease_conflict")) {
+						this.#logger.log("error", "gateway.goal.approval_continuation_failed", { sessionId: command.sessionId, error });
 						this.#onError(error);
 					}
 				});
@@ -870,6 +874,8 @@ export class GatewayServer implements AsyncDisposable {
 					sessionId: command.sessionId,
 					objective: command.objective,
 					...(command.title === undefined ? {} : { title: command.title }),
+					...(command.successCriteria === undefined ? {} : { successCriteria: command.successCriteria }),
+					...(command.maxRounds === undefined ? {} : { maxRounds: command.maxRounds }),
 				});
 			case "goal.list":
 				this.#requireSession(connection, command.sessionId);
