@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.wuming-data/
+.wuming-pi-agent/

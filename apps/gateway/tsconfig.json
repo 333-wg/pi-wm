@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../../packages/artifacts" },
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/orchestrator" },
+    { "path": "../../packages/pi-adapter" },
+    { "path": "../../packages/sandbox" }
+  ],
+  "include": ["src/**/*.ts"]
+}

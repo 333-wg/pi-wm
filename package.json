@@ -1,0 +1,37 @@
+{
+  "name": "wuming-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsc -b && npm run build --workspace @wuming/web",
+    "check": "tsc -b --pretty false && npm run check --workspace @wuming/web && npm run check:e2e",
+    "check:e2e": "tsc -p e2e/tsconfig.json --noEmit --pretty false",
+    "clean": "tsc -b --clean",
+    "dev": "concurrently -k -n gateway,web -c green,cyan \"npm run dev --workspace @wuming/gateway\" \"npm run dev --workspace @wuming/web\"",
+    "dev:gateway": "npm run dev --workspace @wuming/gateway",
+    "dev:web": "npm run dev --workspace @wuming/web",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:install": "playwright install chromium",
+    "verify:pi-provider": "tsx scripts/verify-pi-provider.ts",
+    "verify:pi-tools": "tsx scripts/verify-pi-tools.ts",
+    "verify:pi-approval-restart": "npm run build && tsx scripts/verify-pi-approval-restart.ts",
+    "verify:pi-fault-recovery": "npm run build && tsx scripts/verify-pi-fault-recovery.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "22.19.19",
+    "concurrently": "10.0.5",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "vitest": "4.1.9"
+  }
+}

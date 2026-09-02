@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../protocol" },
+    { "path": "../domain" },
+    { "path": "../orchestrator" }
+  ],
+  "include": ["src/**/*.ts"]
+}
