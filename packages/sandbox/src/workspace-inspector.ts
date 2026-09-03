@@ -1,7 +1,7 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { relative, resolve, sep } from "node:path";
-import type { GitDiff, GitStatus, GitStatusEntry, WorkspaceDirectory, WorkspaceFileView } from "@wuming/protocol";
+import type { GitDiff, GitStatus, GitStatusEntry, WorkspaceDirectory, WorkspaceEntry, WorkspaceFileView, WorkspaceSearch } from "@wuming/protocol";
 import { SandboxError } from "./errors.js";
 import { WorkspacePathPolicy } from "./path-policy.js";
 
@@ -11,6 +11,8 @@ export interface WorkspaceInspectorOptions {
 	maxGitBytes?: number;
 	gitTimeoutMs?: number;
 	ignoredNames?: Iterable<string>;
+	/** Upper bound on files visited by a single searchFiles walk. */
+	maxSearchVisits?: number;
 }
 
 interface GitResult {
@@ -38,6 +40,45 @@ function decodeUtf8(content: Buffer): string | undefined {
 	}
 }
 
+function isBoundary(character: string | undefined): boolean {
+	return character === undefined || character === "/" || character === "." || character === "-" || character === "_";
+}
+
+/**
+ * Case-insensitive subsequence score, higher is better, `undefined` when the
+ * needle is not a subsequence of the haystack. Consecutive runs and matches
+ * that land on a word boundary are rewarded while skipped characters cost, so
+ * `wi` ranks `workspace-inspector.ts` above an incidental hit.
+ */
+function subsequenceScore(haystack: string, needle: string): number | undefined {
+	if (needle === "") return 0;
+	const hay = haystack.toLowerCase();
+	let score = 0;
+	let cursor = 0;
+	let previous = -2;
+	for (const character of needle.toLowerCase()) {
+		const found = hay.indexOf(character, cursor);
+		if (found === -1) return undefined;
+		score += 12;
+		if (found === previous + 1) score += 10;
+		if (isBoundary(hay[found - 1])) score += 8;
+		score -= Math.min(found - cursor, 10);
+		previous = found;
+		cursor = found + 1;
+	}
+	return score;
+}
+
+/** Paths score against their trailing name as well, which most queries target. */
+function pathScore(path: string, needle: string): number | undefined {
+	const depthPenalty = Math.min(path.length, 60) / 4;
+	if (needle === "") return -depthPenalty;
+	const whole = subsequenceScore(path, needle);
+	const trailing = subsequenceScore(path.slice(path.lastIndexOf("/") + 1), needle);
+	if (whole === undefined && trailing === undefined) return undefined;
+	return Math.max(whole ?? 0, trailing === undefined ? 0 : trailing + 24) - depthPenalty;
+}
+
 export class WorkspaceInspector {
 	readonly root: string;
 	readonly #policy: WorkspacePathPolicy;
@@ -46,6 +87,7 @@ export class WorkspaceInspector {
 	readonly #maxGitBytes: number;
 	readonly #gitTimeoutMs: number;
 	readonly #ignoredNames: Set<string>;
+	readonly #maxSearchVisits: number;
 
 	private constructor(policy: WorkspacePathPolicy, options: WorkspaceInspectorOptions) {
 		this.#policy = policy;
@@ -55,6 +97,7 @@ export class WorkspaceInspector {
 		this.#maxGitBytes = options.maxGitBytes ?? 2 * 1024 * 1024;
 		this.#gitTimeoutMs = options.gitTimeoutMs ?? 10_000;
 		this.#ignoredNames = new Set(options.ignoredNames ?? [".git", ".wuming-data", "node_modules"]);
+		this.#maxSearchVisits = options.maxSearchVisits ?? 20_000;
 	}
 
 	static async create(root: string, options: WorkspaceInspectorOptions = {}): Promise<WorkspaceInspector> {
@@ -93,6 +136,69 @@ export class WorkspaceInspector {
 			});
 		}
 		return { path, entries, truncated: children.length > selected.length };
+	}
+
+	/**
+	 * Breadth-first fuzzy path search used by the composer's `@` mentions. An
+	 * empty query returns the shallowest entries, which makes the menu useful
+	 * before the first keystroke. Only the entries that survive ranking are
+	 * stat-ed, so a large tree costs one readdir per directory.
+	 */
+	async searchFiles(rawQuery = "", limit = 40): Promise<WorkspaceSearch> {
+		const query = rawQuery.trim().replaceAll("\\", "/");
+		if (query.includes("\0")) throw new SandboxError("path_invalid", "Search query is invalid");
+		const bounded = Math.min(Math.max(Math.trunc(limit) || 0, 1), 200);
+		const candidates: { path: string; score: number; order: number; directory: boolean }[] = [];
+		const queue: string[] = ["."];
+		let visits = 0;
+		let truncated = false;
+		while (queue.length > 0 && !truncated) {
+			const current = queue.shift();
+			if (current === undefined) break;
+			let children;
+			try {
+				children = await readdir(await this.#policy.existing(current), { withFileTypes: true });
+			} catch {
+				continue;
+			}
+			for (const child of children) {
+				if (this.#ignoredNames.has(child.name) || child.isSymbolicLink()) continue;
+				const directory = child.isDirectory();
+				if (!directory && !child.isFile()) continue;
+				const childPath = current === "." ? child.name : `${current}/${child.name}`;
+				if (directory) queue.push(childPath);
+				visits += 1;
+				if (visits > this.#maxSearchVisits) {
+					truncated = true;
+					break;
+				}
+				const score = pathScore(childPath, query);
+				if (score === undefined) continue;
+				candidates.push({ path: childPath, score, order: visits, directory });
+			}
+		}
+		candidates.sort((left, right) => right.score - left.score || left.order - right.order);
+		const entries: WorkspaceEntry[] = [];
+		for (const candidate of candidates) {
+			if (entries.length >= bounded) {
+				truncated = true;
+				break;
+			}
+			let stats;
+			try {
+				stats = await stat(await this.#policy.existing(candidate.path));
+			} catch {
+				continue;
+			}
+			entries.push({
+				path: candidate.path,
+				name: candidate.path.slice(candidate.path.lastIndexOf("/") + 1),
+				kind: candidate.directory ? "directory" : "file",
+				...(candidate.directory ? {} : { size: stats.size }),
+				modifiedAt: Math.floor(stats.mtimeMs),
+			});
+		}
+		return { query, entries, truncated };
 	}
 
 	async readFile(input: string): Promise<WorkspaceFileView> {

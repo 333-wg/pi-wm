@@ -1,17 +1,59 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { SessionSnapshot } from "@wuming/protocol";
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
-import { createDefaultPiSessionFactory } from "../src/default-factory.js";
+import { createDefaultPiSessionFactory, recoverInterruptedSession } from "../src/default-factory.js";
 import type { PiSessionLike } from "../src/types.js";
 
 const directories: string[] = [];
 
 afterEach(async () => {
 	for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
+});
+
+function assistant(stopReason: AssistantMessage["stopReason"], errorMessage?: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: "openai-completions",
+		provider: "test",
+		model: "test",
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		stopReason,
+		...(errorMessage ? { errorMessage } : {}),
+		timestamp: 1,
+	};
+}
+
+it("branches away from an interrupted turn before accepting a new prompt", () => {
+	const manager = SessionManager.inMemory();
+	manager.appendMessage({ role: "user", content: "stable", timestamp: 1 });
+	manager.appendMessage(assistant("stop"));
+	const stableLeaf = manager.getLeafId();
+	manager.appendMessage({ role: "user", content: "old weather request", timestamp: 2 });
+	manager.appendMessage(assistant("error", "This operation was aborted"));
+	manager.appendMessage({ role: "user", content: "new document request", timestamp: 3 });
+	manager.appendMessage(assistant("aborted"));
+
+	expect(recoverInterruptedSession(manager)).toBe(true);
+	expect(manager.getLeafId()).toBe(stableLeaf);
+	expect(manager.buildSessionContext().messages.map((message) => message.role === "user" ? message.content : message.role)).toEqual([
+		"stable",
+		"assistant",
+	]);
+});
+
+it("keeps a completed turn as the active context", () => {
+	const manager = SessionManager.inMemory();
+	manager.appendMessage({ role: "user", content: "current request", timestamp: 1 });
+	manager.appendMessage(assistant("stop"));
+	const leaf = manager.getLeafId();
+	expect(recoverInterruptedSession(manager)).toBe(false);
+	expect(manager.getLeafId()).toBe(leaf);
 });
 
 it("disables Pi host tools while keeping Wuming custom tools active", async () => {
@@ -36,6 +78,7 @@ it("disables Pi host tools while keeping Wuming custom tools active", async () =
 		name: "write",
 		label: "write",
 		description: "Test-only Wuming write tool",
+		promptSnippet: "Test-only Wuming write tool",
 		parameters: Type.Object({ path: Type.String() }),
 		execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
 	};
@@ -52,17 +95,35 @@ it("disables Pi host tools while keeping Wuming custom tools active", async () =
 		pendingApprovals: [],
 		usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 },
 	};
-	const session = await createDefaultPiSessionFactory({
+	const factory = createDefaultPiSessionFactory({
 		agentDir,
 		sessionDataDir,
 		resolveWorkspace: () => workspace,
 		createCustomTools: () => [customWrite],
-	})(snapshot);
+	});
+	const session = await factory(snapshot);
 
 	try {
 		const activeTools = (session as PiSessionLike & { agent: { state: { tools: Array<{ name: string }> } } }).agent.state.tools;
 		expect(activeTools.map((tool) => tool.name)).toEqual(["write"]);
+		// Pi would otherwise introduce itself and describe its own tool names. The
+		// prompt is rendered from the live tool set, so the custom tool appears in it.
+		const prompt = session.getSystemPrompt?.() ?? "";
+		expect(prompt.startsWith("You are Wuming (无名), a coding agent.")).toBe(true);
+		expect(prompt).toContain("- write: Test-only Wuming write tool");
+		expect(prompt).toContain("Sandbox mode: workspace_write");
 	} finally {
 		session.dispose();
+	}
+
+	// A project that ships its own prompt still owns it: ours is the default only.
+	await mkdir(join(workspace, ".pi"));
+	await writeFile(join(workspace, ".pi", "SYSTEM.md"), "Project prompt wins.\n");
+	const overridden = await factory({ ...snapshot, session: { ...snapshot.session, id: "override-session" } });
+	try {
+		expect(overridden.getSystemPrompt?.()).toContain("Project prompt wins.");
+		expect(overridden.getSystemPrompt?.()).not.toContain("You are Wuming");
+	} finally {
+		overridden.dispose();
 	}
 });

@@ -29,6 +29,30 @@ describe("WorkspaceInspector", () => {
 		await expect(inspector.readFile("../outside.txt")).rejects.toMatchObject({ code: "path_escape" });
 	});
 
+	it("ranks fuzzy path matches and skips ignored directories while searching", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wuming-inspector-search-"));
+		cleanup.push(root);
+		await mkdir(join(root, "src", "components"), { recursive: true });
+		await mkdir(join(root, "node_modules"), { recursive: true });
+		await writeFile(join(root, "readme.md"), "# readme\n", "utf8");
+		await writeFile(join(root, "src", "index.ts"), "export const value = 1;\n", "utf8");
+		await writeFile(join(root, "src", "components", "ToolCard.tsx"), "export const card = 1;\n", "utf8");
+		await writeFile(join(root, "node_modules", "index.ts"), "hidden", "utf8");
+		const inspector = await WorkspaceInspector.create(root);
+		const scoped = await inspector.searchFiles("toolcard");
+		expect(scoped.entries.map((entry) => entry.path)).toEqual(["src/components/ToolCard.tsx"]);
+		const initials = await inspector.searchFiles("tc.tsx");
+		expect(initials.entries[0]?.path).toBe("src/components/ToolCard.tsx");
+		const ignored = await inspector.searchFiles("index");
+		expect(ignored.entries.map((entry) => entry.path)).toEqual(["src/index.ts"]);
+		const shallow = await inspector.searchFiles("");
+		expect(shallow.entries.slice(0, 2).map((entry) => entry.path)).toEqual(["src", "readme.md"]);
+		const bounded = await inspector.searchFiles("", 1);
+		expect(bounded).toMatchObject({ query: "", truncated: true });
+		expect(bounded.entries).toHaveLength(1);
+		expect((await inspector.searchFiles("zzzz")).entries).toEqual([]);
+	});
+
 	it("returns structured status plus working and staged unified diffs", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wuming-inspector-git-"));
 		cleanup.push(root);

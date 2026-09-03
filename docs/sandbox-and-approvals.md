@@ -20,7 +20,6 @@ injects workspace-scoped file operations and the approval wrapper:
 | `run_python` | `process.exec` | write-capable mode and configured Docker image | high |
 | `web_fetch` | `network.connect` | every sandbox mode | low |
 | `web_search` | `network.connect`, optional `secret.use` | every sandbox mode; Bing default | low |
-| `weather` | `network.connect` | every sandbox mode; Open-Meteo | low |
 
 ## Filesystem enforcement
 
@@ -42,19 +41,40 @@ deployment.
 
 There is deliberately no host-shell implementation. `exec` and `run_python` are absent unless
 `WUMING_DOCKER_IMAGE` is set. By default the image reference must contain an
-`@sha256:` digest. Each call starts a new Docker container with:
+`@sha256:` digest. `docker/wuming-sandbox.Dockerfile` is the reference recipe;
+because the container root is read-only, the toolchain has to be baked into the
+image rather than installed per command. Each call starts a new Docker container
+with:
 
-- `--network none`
+- no network (`--network none`) unless the deployment sets
+  `WUMING_DOCKER_NETWORK=bridge`; `host` requires the additional
+  `WUMING_DOCKER_ALLOW_HOST_NETWORK=true`
 - dropped Linux capabilities and `no-new-privileges`
-- a read-only container root and bounded `/tmp`
-- CPU, memory, and PID limits
+- a read-only container root whose only writable paths are the workspace mount,
+  a bounded `/tmp`, and a bounded `$HOME` (`--tmpfs`, `noexec,nosuid`), or a
+  Docker volume at `$HOME` when `WUMING_DOCKER_CACHE_VOLUME` is set so package
+  caches survive between commands
+- CPU, memory, and PID limits, and `--init` so PID 1 reaps the command's children
+  and forwards the kill signal
 - a single workspace bind mount at `/workspace`
 - bounded output and wall time
 - forced container removal after timeout or abort
+- `--label wuming.sandbox=1`, so an operator can find and remove strays
+
+Every size and path option is shape-validated before it reaches the Docker
+command line: these values interpolate into comma-separated mount-option strings,
+where a size like `64m,exec` would otherwise silently undo `noexec`.
+
+Opening the network is a real reduction in the boundary, not a convenience
+setting: a command that can reach the network can send workspace contents out of
+the host. It stays off unless a deployment asks for it.
 
 The workspace mount is writable because write-capable sessions need to modify
-the repository. Production images should use a non-root user and contain only
-the required toolchain. `run_python` requires `python3` in that pinned image.
+the repository. On POSIX hosts the container runs as the gateway's own `uid:gid`
+by default (override with `WUMING_DOCKER_USER`) so files the model creates stay
+editable outside the container instead of landing root-owned. Production images
+should contain only the required toolchain. `run_python` requires `python3` in
+that pinned image.
 
 ## Web enforcement
 
@@ -71,9 +91,9 @@ Redirect destinations repeat the complete validation.
 
 `web_fetch` converts HTML to readable text before returning it. `web_search`
 uses structured Bing HTML results by default; DuckDuckGo HTML, Brave Search, and
-a deployment-controlled SearXNG endpoint are selectable providers. `weather`
-uses Open-Meteo geocoding and forecast endpoints without a key. Provider keys
-stay in the Gateway environment. Network and secret
+a deployment-controlled SearXNG endpoint are selectable providers. Current
+weather and forecast questions use the same search path. Provider keys stay in
+the Gateway environment. Network and secret
 capabilities remain subject to the durable approval policy, including in a
 `read_only` session; that mode still forbids files writes and processes.
 

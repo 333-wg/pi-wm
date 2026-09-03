@@ -26,6 +26,8 @@ import {
 	type ToolStatus,
 	type WorkspaceDirectory,
 	type WorkspaceFileView,
+	type WorkspaceSearch,
+	type WorkspaceSummary,
 	ServerMessageSchema,
 } from "@wuming/protocol";
 import { Compile } from "typebox/compile";
@@ -90,9 +92,19 @@ export interface GatewayCustomModelService {
 
 export interface GatewayWorkspaceService {
 	listDirectory(workspaceId: string, path: string): Promise<WorkspaceDirectory>;
+	searchFiles(workspaceId: string, query: string, limit: number): Promise<WorkspaceSearch>;
 	readFile(workspaceId: string, path: string): Promise<WorkspaceFileView>;
 	gitStatus(workspaceId: string): Promise<GitStatus>;
 	gitDiff(workspaceId: string, path: string | undefined, staged: boolean): Promise<GitDiff>;
+}
+
+export interface GatewayProjectService {
+	pick(ownerId: string, kind: "file" | "directory"): Promise<WorkspaceSummary>;
+	create(ownerId: string, name: string): Promise<WorkspaceSummary>;
+	writeFile(ownerId: string, projectId: string, path: string, content: Buffer): Promise<void>;
+	complete(ownerId: string, projectId: string): Promise<WorkspaceSummary>;
+	rename(ownerId: string, projectId: string, name: string): Promise<WorkspaceSummary>;
+	remove(ownerId: string, projectId: string): Promise<void>;
 }
 
 export interface GatewayServerOptions {
@@ -102,6 +114,7 @@ export interface GatewayServerOptions {
 	approvals?: ApprovalResponder;
 	artifacts?: GatewayArtifactService;
 	workspace?: GatewayWorkspaceService;
+	projects?: GatewayProjectService;
 	skills?: SkillCatalog;
 	mcp?: FileMcpCatalog;
 	tools?: GatewayToolCatalog;
@@ -180,6 +193,7 @@ export class GatewayServer implements AsyncDisposable {
 	readonly #approvals: ApprovalResponder | undefined;
 	readonly #artifacts: GatewayArtifactService | undefined;
 	readonly #workspace: GatewayWorkspaceService | undefined;
+	readonly #projects: GatewayProjectService | undefined;
 	readonly #skills: SkillCatalog | undefined;
 	readonly #mcp: FileMcpCatalog | undefined;
 	readonly #tools: GatewayToolCatalog | undefined;
@@ -207,6 +221,7 @@ export class GatewayServer implements AsyncDisposable {
 		this.#approvals = options.approvals;
 		this.#artifacts = options.artifacts;
 		this.#workspace = options.workspace;
+		this.#projects = options.projects;
 		this.#skills = options.skills;
 		this.#mcp = options.mcp;
 		this.#tools = options.tools;
@@ -263,11 +278,17 @@ export class GatewayServer implements AsyncDisposable {
 			}
 			const upload = /^\/api\/workspaces\/([^/]+)\/artifacts$/.exec(url.pathname);
 			const download = /^\/api\/artifacts\/([^/]+)$/.exec(url.pathname);
+			const projectCreate = url.pathname === "/api/projects";
+			const projectPick = url.pathname === "/api/projects/pick";
+			const projectFile = /^\/api\/projects\/([^/]+)\/files$/.exec(url.pathname);
+			const projectComplete = /^\/api\/projects\/([^/]+)\/complete$/.exec(url.pathname);
+			const projectDetail = /^\/api\/projects\/([^/]+)$/.exec(url.pathname);
 			const tree = /^\/api\/workspaces\/([^/]+)\/tree$/.exec(url.pathname);
+			const search = /^\/api\/workspaces\/([^/]+)\/search$/.exec(url.pathname);
 			const file = /^\/api\/workspaces\/([^/]+)\/file$/.exec(url.pathname);
 			const gitStatus = /^\/api\/workspaces\/([^/]+)\/git\/status$/.exec(url.pathname);
 			const gitDiff = /^\/api\/workspaces\/([^/]+)\/git\/diff$/.exec(url.pathname);
-			if (!upload && !download && !tree && !file && !gitStatus && !gitDiff) {
+			if (!upload && !download && !projectCreate && !projectPick && !projectFile && !projectComplete && !projectDetail && !tree && !search && !file && !gitStatus && !gitDiff) {
 				this.#json(response, 404, { error: "Not found" });
 				return;
 			}
@@ -275,6 +296,100 @@ export class GatewayServer implements AsyncDisposable {
 			if (!principal) {
 				response.setHeader("WWW-Authenticate", "Bearer");
 				this.#json(response, 401, { error: "Unauthorized" });
+				return;
+			}
+			if (projectPick && request.method === "POST") {
+				if (!this.#projects) throw Object.assign(new Error("Project selection is unavailable"), { httpStatus: 501 });
+				const remoteAddress = request.socket.remoteAddress ?? "";
+				if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remoteAddress)) {
+					throw Object.assign(new Error("Local project selection is available only on the gateway computer"), { httpStatus: 403 });
+				}
+				const content = await this.#readRequestBody(request);
+				let value: unknown;
+				try {
+					value = JSON.parse(content.toString("utf8"));
+				} catch {
+					throw Object.assign(new Error("Project request must contain valid JSON"), { httpStatus: 400 });
+				}
+				const kind = value && typeof value === "object" ? (value as { kind?: unknown }).kind : undefined;
+				if (kind !== "file" && kind !== "directory") throw Object.assign(new Error("Project kind must be file or directory"), { httpStatus: 400 });
+				const project = await this.#projects.pick(principal.id, kind);
+				if (!principal.workspaces.some((workspace) => workspace.id === project.id)) principal.workspaces.push(project);
+				this.#json(response, 200, { project });
+				return;
+			}
+			if (projectCreate && request.method === "POST") {
+				if (!this.#projects) throw Object.assign(new Error("Project import is unavailable"), { httpStatus: 501 });
+				const content = await this.#readRequestBody(request);
+				let value: unknown;
+				try {
+					value = JSON.parse(content.toString("utf8"));
+				} catch {
+					throw Object.assign(new Error("Project request must contain valid JSON"), { httpStatus: 400 });
+				}
+				const name = value && typeof value === "object" ? (value as { name?: unknown }).name : undefined;
+				if (typeof name !== "string") throw Object.assign(new Error("Project name is required"), { httpStatus: 400 });
+				this.#json(response, 201, { project: await this.#projects.create(principal.id, name) });
+				return;
+			}
+			if (projectFile && request.method === "PUT") {
+				if (!this.#projects) throw Object.assign(new Error("Project import is unavailable"), { httpStatus: 501 });
+				const projectId = this.#decodePathSegment(projectFile[1] ?? "");
+				const encodedPath = request.headers["x-wuming-project-path"];
+				if (typeof encodedPath !== "string") throw Object.assign(new Error("X-Wuming-Project-Path is required"), { httpStatus: 400 });
+				let path: string;
+				try {
+					path = decodeURIComponent(encodedPath);
+				} catch {
+					throw Object.assign(new Error("X-Wuming-Project-Path is invalid"), { httpStatus: 400 });
+				}
+				await this.#projects.writeFile(principal.id, projectId, path, await this.#readRequestBody(request));
+				response.writeHead(204, { "cache-control": "no-store" });
+				response.end();
+				return;
+			}
+			if (projectComplete && request.method === "POST") {
+				if (!this.#projects) throw Object.assign(new Error("Project import is unavailable"), { httpStatus: 501 });
+				const projectId = this.#decodePathSegment(projectComplete[1] ?? "");
+				const project = await this.#projects.complete(principal.id, projectId);
+				if (!principal.workspaces.some((workspace) => workspace.id === project.id)) principal.workspaces.push(project);
+				this.#json(response, 200, { project });
+				return;
+			}
+			if (projectDetail && request.method === "PATCH") {
+				if (!this.#projects) throw Object.assign(new Error("Project management is unavailable"), { httpStatus: 501 });
+				const projectId = this.#decodePathSegment(projectDetail[1] ?? "");
+				this.#requirePrincipalWorkspace(principal, projectId);
+				const content = await this.#readRequestBody(request);
+				let value: unknown;
+				try {
+					value = JSON.parse(content.toString("utf8"));
+				} catch {
+					throw Object.assign(new Error("Project request must contain valid JSON"), { httpStatus: 400 });
+				}
+				const name = value && typeof value === "object" ? (value as { name?: unknown }).name : undefined;
+				if (typeof name !== "string") throw Object.assign(new Error("Project name is required"), { httpStatus: 400 });
+				const project = await this.#projects.rename(principal.id, projectId, name);
+				const index = principal.workspaces.findIndex((workspace) => workspace.id === projectId);
+				if (index >= 0) principal.workspaces[index] = project;
+				this.#json(response, 200, { project });
+				return;
+			}
+			if (projectDetail && request.method === "DELETE") {
+				if (!this.#projects) throw Object.assign(new Error("Project management is unavailable"), { httpStatus: 501 });
+				const projectId = this.#decodePathSegment(projectDetail[1] ?? "");
+				this.#requirePrincipalWorkspace(principal, projectId);
+				await this.#projects.remove(principal.id, projectId);
+				const index = principal.workspaces.findIndex((workspace) => workspace.id === projectId);
+				if (index >= 0) principal.workspaces.splice(index, 1);
+				for (const connection of this.#connections) {
+					if (connection.principal.id !== principal.id) continue;
+					for (const sessionId of connection.attachedSessions) {
+						if (this.#store.loadSnapshot(sessionId)?.session.workspaceId === projectId) connection.attachedSessions.delete(sessionId);
+					}
+				}
+				response.writeHead(204, { "cache-control": "no-store" });
+				response.end();
 				return;
 			}
 			if (upload && request.method === "POST") {
@@ -318,13 +433,21 @@ export class GatewayServer implements AsyncDisposable {
 				response.end(value.content);
 				return;
 			}
-			const workspaceMatch = tree ?? file ?? gitStatus ?? gitDiff;
+			const workspaceMatch = tree ?? search ?? file ?? gitStatus ?? gitDiff;
 			if (workspaceMatch && request.method === "GET") {
 				if (!this.#workspace) throw Object.assign(new Error("Workspace service is unavailable"), { httpStatus: 501 });
 				const workspaceId = this.#decodePathSegment(workspaceMatch[1] ?? "");
 				this.#requirePrincipalWorkspace(principal, workspaceId);
 				if (tree) {
 					this.#json(response, 200, await this.#workspace.listDirectory(workspaceId, this.#queryPath(url, ".")));
+					return;
+				}
+				if (search) {
+					const query = url.searchParams.get("query") ?? "";
+					if (query.length > 400) throw Object.assign(new Error("Search query is too long"), { httpStatus: 400 });
+					const limit = Number(url.searchParams.get("limit") ?? 30);
+					if (!Number.isFinite(limit) || limit < 1) throw Object.assign(new Error("Search limit is invalid"), { httpStatus: 400 });
+					this.#json(response, 200, await this.#workspace.searchFiles(workspaceId, query, Math.min(Math.trunc(limit), 200)));
 					return;
 				}
 				if (file) {
@@ -340,7 +463,7 @@ export class GatewayServer implements AsyncDisposable {
 				this.#json(response, 200, await this.#workspace.gitDiff(workspaceId, path, url.searchParams.get("staged") === "true"));
 				return;
 			}
-			response.setHeader("Allow", upload ? "POST" : "GET");
+			response.setHeader("Allow", upload || projectCreate || projectPick || projectComplete ? "POST" : projectFile ? "PUT" : projectDetail ? "PATCH, DELETE" : "GET");
 			this.#json(response, 405, { error: "Method not allowed" });
 		} catch (error) {
 			const status = this.#httpErrorStatus(error);
@@ -780,14 +903,20 @@ export class GatewayServer implements AsyncDisposable {
 					sessionId: command.sessionId,
 					archived: command.archived,
 				});
-			case "session.fork":
+			case "session.fork": {
 				this.#requireSession(connection, command.sessionId);
-				return this.#orchestrator.forkSession({
+				const result = await this.#orchestrator.forkSession({
 					principalId: connection.principal.id,
 					idempotencyKey,
 					sessionId: command.sessionId,
 					...(command.fromItemId === undefined ? {} : { fromItemId: command.fromItemId }),
 				});
+				// A fork is a creation, so it attaches like one: without this the
+				// caller holds a snapshot of a session whose events it never
+				// receives, and the next turn it starts there never renders.
+				connection.attachedSessions.add(result.snapshot.session.id);
+				return result;
+			}
 			case "session.compact":
 				this.#requireSession(connection, command.sessionId);
 				return this.#orchestrator.compactSession({
@@ -818,6 +947,15 @@ export class GatewayServer implements AsyncDisposable {
 					idempotencyKey,
 					sessionId: command.sessionId,
 					thinkingLevel: command.thinkingLevel,
+				});
+			case "session.policy.set":
+				this.#requireSession(connection, command.sessionId);
+				return this.#orchestrator.setSessionPolicy({
+					principalId: connection.principal.id,
+					idempotencyKey,
+					sessionId: command.sessionId,
+					sandboxMode: command.sandboxMode,
+					approvalPolicy: command.approvalPolicy,
 				});
 			case "session.budget.set":
 				this.#requireSession(connection, command.sessionId);

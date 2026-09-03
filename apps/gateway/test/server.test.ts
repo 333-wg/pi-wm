@@ -172,12 +172,22 @@ describe("GatewayServer", () => {
 		send(ws, { type: "request", requestId: "set-thinking", idempotencyKey: "set-thinking", command: { type: "session.thinking.set", sessionId: created.snapshot.session.id, thinkingLevel: "high" } });
 		const thinkingResult = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "set-thinking" && message.ok);
 		expect(thinkingResult.result.type).toBe("session.configured");
+		send(ws, { type: "request", requestId: "set-policy", idempotencyKey: "set-policy", command: { type: "session.policy.set", sessionId: created.snapshot.session.id, sandboxMode: "unrestricted", approvalPolicy: "never" } });
+		const policyResult = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "set-policy" && message.ok);
+		expect(policyResult.result).toMatchObject({ type: "session.configured", snapshot: { sandboxMode: "unrestricted", approvalPolicy: "never" } });
 		send(ws, { type: "request", requestId: "set-budget", idempotencyKey: "set-budget", command: { type: "session.budget.set", sessionId: created.snapshot.session.id, costBudgetUsd: 1.5, tokenBudget: 20_000, budgetWarningThreshold: 0.75 } });
 		const budgetResult = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "set-budget" && message.ok);
 		expect(budgetResult.result).toMatchObject({ type: "session.configured", snapshot: { costBudgetUsd: 1.5, tokenBudget: 20_000, budgetWarningThreshold: 0.75 } });
 		send(ws, { type: "request", requestId: "fork", idempotencyKey: "fork", command: { type: "session.fork", sessionId: created.snapshot.session.id } });
 		const forkResult = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "fork" && message.ok);
 		expect(forkResult.result.type).toBe("session.forked");
+		if (forkResult.result.type !== "session.forked") throw new Error("Expected forked session");
+		// A fork attaches the connection that asked for it, the way a creation does.
+		// Without that the caller holds the forked snapshot but never receives its
+		// events, so the first turn it starts there renders nothing.
+		const forkedSessionId = forkResult.result.snapshot.session.id;
+		send(ws, { type: "request", requestId: "fork-prompt", idempotencyKey: "fork-prompt", command: { type: "turn.prompt", sessionId: forkedSessionId, content: [{ type: "text", text: "continue in the fork" }] } });
+		await collector.waitFor((message) => message.type === "event" && message.event.sessionId === forkedSessionId && message.event.type === "session.item.upserted" && message.event.item.type === "assistant");
 		send(ws, { type: "request", requestId: "subagent-create", idempotencyKey: "subagent-create", command: { type: "subagent.create", sessionId: created.snapshot.session.id, task: "Inspect the configured session", wait: true } });
 		const subagentCreated = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "subagent-create" && message.ok);
 		expect(subagentCreated.result).toMatchObject({ type: "subagent.created", subagent: { parentSessionId: created.snapshot.session.id, status: "completed", result: "hello" } });
@@ -209,7 +219,7 @@ describe("GatewayServer", () => {
 			store,
 			tools: {
 				runtime: "pi",
-				list: () => [{ name: "weather", label: "天气查询", description: "查询天气", category: "network", status: "ready", backend: "Open-Meteo", risk: "low", sandboxModes: ["read_only", "workspace_write", "unrestricted"] }],
+				list: () => [{ name: "web_search", label: "网络搜索", description: "搜索公开网页", category: "network", status: "ready", backend: "Bing", risk: "low", sandboxModes: ["read_only", "workspace_write", "unrestricted"] }],
 			},
 			capabilities: ["tools"],
 		});
@@ -221,7 +231,7 @@ describe("GatewayServer", () => {
 		expect(hello.capabilities).toContain("tools");
 		send(ws, { type: "request", requestId: "tools", idempotencyKey: "tools", command: { type: "tool.list", workspaceId: workspace.id } });
 		const response = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "tools" && message.ok);
-		expect(response.result).toMatchObject({ type: "tool.list", runtime: "pi", tools: [{ name: "weather", status: "ready" }] });
+		expect(response.result).toMatchObject({ type: "tool.list", runtime: "pi", tools: [{ name: "web_search", status: "ready" }] });
 	});
 
 	it("runs the authenticated create, prompt, progress, durable event, and replay flow", async () => {
@@ -621,6 +631,7 @@ describe("GatewayServer", () => {
 			store,
 			workspace: {
 				listDirectory: (_workspaceId, path) => inspector.listDirectory(path),
+				searchFiles: (_workspaceId, query, limit) => inspector.searchFiles(query, limit),
 				readFile: (_workspaceId, path) => inspector.readFile(path),
 				gitStatus: () => inspector.gitStatus(),
 				gitDiff: (_workspaceId, path, staged) => inspector.gitDiff(path, staged),
@@ -640,6 +651,11 @@ describe("GatewayServer", () => {
 			headers: { Authorization: "Bearer secret" },
 		});
 		expect(await file.json()).toMatchObject({ path: "src/index.ts", content: "export const answer = 42;\n" });
+		const search = await fetch(`${base}/api/workspaces/${workspace.id}/search?query=idx&limit=5`, {
+			headers: { Authorization: "Bearer secret" },
+		});
+		expect(search.status).toBe(200);
+		expect(await search.json()).toMatchObject({ query: "idx", entries: [{ path: "src/index.ts", kind: "file" }] });
 		const escaped = await fetch(`${base}/api/workspaces/${workspace.id}/file?path=${encodeURIComponent("../secret.txt")}`, {
 			headers: { Authorization: "Bearer secret" },
 		});
@@ -648,6 +664,115 @@ describe("GatewayServer", () => {
 			headers: { Authorization: "Bearer secret" },
 		});
 		expect(forbidden.status).toBe(403);
+	});
+
+	it("imports a project and exposes it to the existing websocket connection", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		cleanup.push(() => store.close());
+		const workspaces = [workspace];
+		const imported: WorkspaceSummary = {
+			id: "project-imported",
+			name: "Imported app",
+			status: "ready",
+			createdAt: 10,
+			updatedAt: 11,
+		};
+		let uploaded: { path: string; content: string } | undefined;
+		let removedProjectId: string | undefined;
+		const server = new GatewayServer({
+			auth: new StaticTokenAuth("secret", { id: "user-1", workspaces }),
+			orchestrator: new SessionOrchestrator(store, new GatewayRuntime()),
+			store,
+			projects: {
+				pick: async () => imported,
+				create: async (_ownerId, name) => ({ ...imported, name, status: "provisioning" }),
+				writeFile: async (_ownerId, projectId, path, content) => {
+					expect(projectId).toBe(imported.id);
+					uploaded = { path, content: content.toString("utf8") };
+				},
+				complete: async () => imported,
+				rename: async (_ownerId, projectId, name) => ({ ...imported, id: projectId, name }),
+				remove: async (_ownerId, projectId) => { removedProjectId = projectId; },
+			},
+		});
+		const address = await server.listen();
+		cleanup.push(() => server.close());
+		const base = `http://127.0.0.1:${address.port}`;
+		const { ws, collector } = await openClient(`ws://127.0.0.1:${address.port}/api/ws`);
+		send(ws, { type: "hello", protocolVersion: 1, clientId: "project-client", capabilities: [] });
+		await collector.waitFor((message) => message.type === "hello");
+		const picked = await fetch(`${base}/api/projects/pick`, {
+			method: "POST",
+			headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+			body: JSON.stringify({ kind: "directory" }),
+		});
+		expect(picked.status).toBe(200);
+		expect(await picked.json()).toMatchObject({ project: { id: imported.id } });
+
+		const created = await fetch(`${base}/api/projects`, {
+			method: "POST",
+			headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+			body: JSON.stringify({ name: "Imported app" }),
+		});
+		expect(created.status).toBe(201);
+		const uploadedResponse = await fetch(`${base}/api/projects/${imported.id}/files`, {
+			method: "PUT",
+			headers: { Authorization: "Bearer secret", "X-Wuming-Project-Path": encodeURIComponent("src/index.ts") },
+			body: "export const imported = true;\n",
+		});
+		expect(uploadedResponse.status).toBe(204);
+		expect(uploaded).toEqual({ path: "src/index.ts", content: "export const imported = true;\n" });
+		const completed = await fetch(`${base}/api/projects/${imported.id}/complete`, {
+			method: "POST",
+			headers: { Authorization: "Bearer secret" },
+		});
+		expect(completed.status).toBe(200);
+		const renamed = await fetch(`${base}/api/projects/${imported.id}`, {
+			method: "PATCH",
+			headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+			body: JSON.stringify({ name: "Renamed app" }),
+		});
+		expect(renamed.status).toBe(200);
+		expect(await renamed.json()).toMatchObject({ project: { id: imported.id, name: "Renamed app" } });
+
+		send(ws, { type: "request", requestId: "project-list", idempotencyKey: "project-list", command: { type: "workspace.list" } });
+		const listed = await collector.waitFor(
+			(message): message is Extract<ServerMessage, { type: "response"; ok: true }> =>
+				message.type === "response" && message.ok && message.requestId === "project-list",
+		);
+		expect(listed.result).toMatchObject({ type: "workspace.list", workspaces: [{ id: workspace.id }, { id: imported.id, name: "Renamed app" }] });
+
+		send(ws, {
+			type: "request",
+			requestId: "project-session",
+			idempotencyKey: "project-session",
+			command: {
+				type: "session.create",
+				workspaceId: imported.id,
+				model: { provider: "test", id: "test" },
+				thinkingLevel: "off",
+				sandboxMode: "workspace_write",
+				approvalPolicy: "on_risk",
+			},
+		});
+		const session = await collector.waitFor(
+			(message): message is Extract<ServerMessage, { type: "response"; ok: true }> =>
+				message.type === "response" && message.ok && message.requestId === "project-session",
+		);
+		expect(session.result).toMatchObject({ type: "session.created", snapshot: { session: { workspaceId: imported.id } } });
+
+		const removed = await fetch(`${base}/api/projects/${imported.id}`, {
+			method: "DELETE",
+			headers: { Authorization: "Bearer secret" },
+		});
+		expect(removed.status).toBe(204);
+		expect(removedProjectId).toBe(imported.id);
+		send(ws, { type: "request", requestId: "project-list-after-remove", idempotencyKey: "project-list-after-remove", command: { type: "workspace.list" } });
+		const afterRemove = await collector.waitFor(
+			(message): message is Extract<ServerMessage, { type: "response"; ok: true }> =>
+				message.type === "response" && message.ok && message.requestId === "project-list-after-remove",
+		);
+		expect(afterRemove.result).toMatchObject({ type: "workspace.list", workspaces: [{ id: workspace.id }] });
 	});
 
 	it("routes an authenticated terminal PTY over the protocol", async () => {

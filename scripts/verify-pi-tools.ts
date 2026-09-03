@@ -199,7 +199,6 @@ async function main(): Promise<void> {
 		{ name: "edit", prompt: "Call edit exactly once on edit-proof.txt, replacing EDIT_BEFORE with EDIT_AFTER. Do not call another tool.", verify: async () => assert(await readFile(join(workspace, "edit-proof.txt"), "utf8") === "EDIT_AFTER\n", "edit: file content mismatch") },
 		{ name: "web_search", prompt: "Call web_search exactly once with query OpenAI official website and count 3. Do not call another tool.", verify: (item) => assert(!toolText(item).includes("No search results found"), "web_search: no results returned") },
 		{ name: "web_fetch", prompt: "Call web_fetch exactly once with URL https://example.com and max_chars 4000. Do not call another tool.", verify: (item) => assert(toolText(item).includes("Example Domain"), "web_fetch: expected page content missing") },
-		{ name: "weather", prompt: "Call weather exactly once for Shanghai with days 1. Do not call another tool.", verify: (item) => assert(toolText(item).includes("Shanghai"), "weather: expected location missing") },
 	];
 	if (process.env.WUMING_DOCKER_IMAGE?.trim()) {
 		cases.push(

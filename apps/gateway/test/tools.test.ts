@@ -6,10 +6,31 @@ describe("built-in tool catalog", () => {
 		const catalog = createBuiltinToolCatalog({ runtime: "pi", searchProvider: "bing" });
 		const tools = await catalog.list("workspace-1");
 
-		expect(tools).toHaveLength(8);
-		expect(tools.find((tool) => tool.name === "web_search")).toMatchObject({ status: "ready", backend: "bing via SafeWebClient" });
-		expect(tools.find((tool) => tool.name === "weather")).toMatchObject({ status: "ready", backend: "Open-Meteo via SafeWebClient" });
+		expect(tools).toHaveLength(12);
+		expect(tools.find((tool) => tool.name === "web_search")).toMatchObject({
+			status: "ready",
+			backend: "bing via SafeWebClient",
+			description: expect.stringContaining("天气"),
+		});
+		expect(tools.find((tool) => tool.name === "weather")).toBeUndefined();
+		// Search is read-only, so it must be offered in every sandbox mode.
+		for (const name of ["grep", "glob", "ls"]) {
+			expect(tools.find((tool) => tool.name === name)).toMatchObject({
+				status: "ready",
+				backend: "WorkspaceSearcher",
+				risk: "low",
+				sandboxModes: ["read_only", "workspace_write", "unrestricted"],
+			});
+		}
 		expect(tools.find((tool) => tool.name === "exec")).toMatchObject({ status: "requires_configuration", reason: "需要配置 WUMING_DOCKER_IMAGE" });
+		// Planning and delegation need no host capability, so they are ready in every mode.
+		expect(tools.find((tool) => tool.name === "update_plan")).toMatchObject({ category: "agent", status: "ready", risk: "low" });
+		expect(tools.find((tool) => tool.name === "subagent")).toMatchObject({
+			category: "agent",
+			status: "ready",
+			backend: "SessionOrchestrator",
+			sandboxModes: ["read_only", "workspace_write", "unrestricted"],
+		});
 	});
 
 	it("reports all tools disabled when the agent runtime is Demo", async () => {

@@ -23,20 +23,14 @@ npm install --legacy-peer-deps
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/`. The zero-configuration development token is
-`dev-token`; it is only suitable while the gateway is bound to loopback.
+Open `http://127.0.0.1:5173/`. The zero-configuration development password is
+`wuming`; it is only suitable while the gateway is bound to loopback. The browser
+remembers it after the first successful connection.
 
-The default runtime is deterministic demo mode. It exercises the real browser,
-WebSocket, event store, session worker, streaming, reconnect, and persistence
-path without calling a paid model.
-Send `/approval` in demo mode to exercise the real durable approval round trip;
-the demo request performs no filesystem or process action. A pending preflight
-approval survives a Gateway restart and resumes the exact approved tool-call
-boundary after the user responds. Send `/long` to run
-a long streaming response and exercise the Stop control. Send `/inject`, then
-submit a steer or follow-up message to verify active-turn injection.
-Send `/retry-once` to simulate one transient provider failure and exercise the
-durable retry/backoff path without calling a paid model.
+The default runtime is Pi. On the first successful connection, configure a real
+model service in the setup dialog; its API key is encrypted on the Gateway and
+never returned to the browser. A model already stored in `.wuming-data` is loaded
+automatically.
 The composer accepts validated images and UTF-8 text/source attachments; the
 same artifact path is used in demo and Pi modes.
 The Run rail shows recent durable operations with queue/run status, attempt,
@@ -66,7 +60,7 @@ both limits can be changed from the Run rail while the session is idle.
 The session sidebar supports server-backed name/ID search, inline rename, and a
 recoverable archived-session view. Archived sessions remain readable but cannot
 start or queue turns until restored.
-When running Pi, the Settings dialog accepts a Base URL and API key, discovers
+The Settings dialog accepts a Base URL and API key, discovers
 the endpoint's model catalog, and lets the user search, multi-select, and add
 models. A model name is optional; protocol and model limits remain available in
 the collapsed advanced section. Saved models have a separate one-token test
@@ -105,18 +99,27 @@ controls the session list, files, changes, uploads, and terminal; model
 selection applies when creating the next session and does not mutate existing
 sessions.
 
-## Run with Pi
+The **Open project** control can add a file or directory while the gateway runs.
+On a loopback deployment, the gateway opens the operating system picker and
+stores a reference to the selected local path in
+`WUMING_DATA_DIR/projects/projects.json`; project contents are not copied or
+uploaded. Selecting a file uses its parent directory as the session workspace.
+When the browser connects to a remote gateway, the same UI falls back to an
+authenticated upload into `WUMING_DATA_DIR/projects`. Imported projects are
+restored after a gateway restart and each project keeps an independent session
+list.
+
+## Configure Pi from the environment
 
 Configure a server-side Pi agent directory and an authenticated model. The
 browser never receives these credentials.
 
 ```powershell
-$env:WUMING_RUNTIME = "pi"
 $env:WUMING_AGENT_DIR = "C:\path\to\.pi\agent"
 $env:WUMING_MODEL_PROVIDER = "anthropic"
 $env:WUMING_MODEL_ID = "your-model-id"
 $env:WUMING_WORKSPACE = "D:\path\to\workspace"
-$env:WUMING_TOKEN = "replace-with-a-long-random-token"
+$env:WUMING_TOKEN = "wuming"
 npm run dev
 ```
 
@@ -128,19 +131,33 @@ Wuming exposes `read_file`, `write_file`, and multi-block `edit` while reusing
 Pi's corresponding tool definitions and algorithms with workspace-scoped
 Wuming file operations, durable approval, and authenticated artifact handling
 underneath. To
-enable process execution, configure a digest-pinned container image:
+enable process execution, build the reference image and configure it by digest:
 
 ```powershell
+docker build -f docker/wuming-sandbox.Dockerfile -t wuming-runner:local .
 $env:WUMING_DOCKER_IMAGE = "your-registry/wuming-runner@sha256:<digest>"
 ```
 
-The `exec` and `run_python` tools have no host-process fallback. They use Docker with networking
-disabled, a read-only container root, dropped Linux capabilities, bounded CPU,
-memory, PIDs, output, and wall time. Docker must be installed on the gateway
-host. See `docs/sandbox-and-approvals.md` for the exact boundary.
+The `exec` and `run_python` tools have no host-process fallback. They use Docker
+with a read-only container root, dropped Linux capabilities, no new privileges,
+networking disabled, and bounded CPU, memory, PIDs, output, and wall time. The
+workspace bind mount, `/tmp`, and `$HOME` are the only writable paths, so the
+toolchain has to be present in the image rather than installed per command.
+Docker must be installed on the gateway host.
 
-`web_fetch`, `web_search`, and `weather` are available in Pi mode without API
-credentials. Web fetch accepts only
+The defaults suit a real build (2 CPUs, 2 GiB, a 5-minute default and 30-minute
+maximum per command) and every limit is tunable: `WUMING_DOCKER_CPUS`,
+`WUMING_DOCKER_MEMORY`, `WUMING_DOCKER_PIDS_LIMIT`,
+`WUMING_DOCKER_TMPFS_SIZE`, `WUMING_DOCKER_HOME_SIZE`,
+`WUMING_DOCKER_TIMEOUT_MS`, `WUMING_DOCKER_MAX_TIMEOUT_MS`, and
+`WUMING_DOCKER_MAX_OUTPUT_BYTES`. `WUMING_DOCKER_CACHE_VOLUME` mounts a Docker
+volume at `$HOME` so package caches survive between commands, and
+`WUMING_DOCKER_NETWORK=bridge` opts a deployment into dependency installation —
+which also lets a command send workspace contents out, so it stays off unless
+asked for. See `docs/sandbox-and-approvals.md` for the exact boundary.
+
+`web_fetch` and `web_search` are available in Pi mode without API credentials.
+Weather and forecast questions use `web_search` instead of a separate tool. Web fetch accepts only
 public HTTP(S) destinations on standard ports, validates every redirect and DNS
 answer, pins the validated address for the connection, rejects binary content,
 and bounds time and response size. HTTPS remains usable with transparent proxies
@@ -161,8 +178,7 @@ $env:WUMING_WEB_SEARCH_ENDPOINT = "https://search.example.com/search"
 
 Search credentials remain server-side and are never exposed in tool arguments
 or results. `WUMING_WEB_TIMEOUT_MS` and `WUMING_WEB_MAX_RESPONSE_BYTES` control
-the shared network limits. `weather` resolves place names and retrieves current
-conditions plus a 1-7 day forecast from the no-key Open-Meteo APIs.
+the shared network limits.
 
 ### Configure MCP servers
 
@@ -229,7 +245,7 @@ run prints the provider response and aggregate usage as JSON.
 
 The tool acceptance gate runs real Pi sessions through the Gateway and verifies
 each registered tool by name and observable output. It covers file read/write/edit,
-web search, web fetch, and weather by default. When `WUMING_DOCKER_IMAGE` is set,
+web search, and web fetch by default. When `WUMING_DOCKER_IMAGE` is set,
 it also covers `exec` and `run_python` inside the configured container. This gate
 can make multiple billable provider requests and is deliberately excluded from
 `npm test`:
@@ -241,7 +257,7 @@ $env:WUMING_MODEL_ID = "your-model-id"
 npm run verify:pi-tools
 ```
 
-Use `WUMING_PI_TOOL_CASES=weather,web_search` to rerun a comma-separated subset.
+Use `WUMING_PI_TOOL_CASES=web_search,web_fetch` to rerun a comma-separated subset.
 The gate uses disposable workspace and data directories and removes them after
 the run. It never prints provider credentials.
 

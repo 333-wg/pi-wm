@@ -209,6 +209,7 @@ async function preparePrompt(
 	snapshot: SessionSnapshot,
 	resolveArtifact: ArtifactResolver | undefined,
 ): Promise<{ text: string; images: Array<{ type: "image"; data: string; mimeType: string }> }> {
+	const supportedImageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 	const text: string[] = [];
 	const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
 	for (const part of content) {
@@ -218,8 +219,20 @@ async function preparePrompt(
 		}
 		if (!resolveArtifact) throw new Error(`Artifact input ${part.artifact.id} is not configured`);
 		const resolved = await resolveArtifact(part.artifact, snapshot);
-		if (resolved.mimeType.startsWith("image/")) {
+		if (!resolved.binary && supportedImageMimes.has(resolved.mimeType)) {
 			images.push({ type: "image", data: resolved.data, mimeType: resolved.mimeType });
+			continue;
+		}
+		if (resolved.extractedText !== undefined) {
+			text.push(
+				`<attached_file name=${JSON.stringify(part.artifact.name)} mime_type=${JSON.stringify(resolved.mimeType)} extracted="true">\n${resolved.extractedText}\n</attached_file>`,
+			);
+			continue;
+		}
+		if (resolved.binary) {
+			text.push(
+				`<attached_file name=${JSON.stringify(part.artifact.name)} mime_type=${JSON.stringify(resolved.mimeType)} size=${JSON.stringify(part.artifact.size)} binary="true">\n${resolved.extractionNotice ?? "The binary file was uploaded successfully, but no readable text could be extracted from it."}\n</attached_file>`,
+			);
 			continue;
 		}
 		const textual = resolved.mimeType.startsWith("text/") || [
@@ -230,7 +243,12 @@ async function preparePrompt(
 			"application/yaml",
 			"application/toml",
 		].includes(resolved.mimeType);
-		if (!textual) throw new Error(`Artifact ${part.artifact.id} has unsupported model input type ${resolved.mimeType}`);
+		if (!textual) {
+			text.push(
+				`<attached_file name=${JSON.stringify(part.artifact.name)} mime_type=${JSON.stringify(resolved.mimeType)} size=${JSON.stringify(part.artifact.size)} binary="true">\n${resolved.extractionNotice ?? "The binary file was uploaded successfully, but no readable text could be extracted from it."}\n</attached_file>`,
+			);
+			continue;
+		}
 		let content: string;
 		try {
 			content = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(resolved.data, "base64"));
@@ -251,7 +269,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 	readonly #idFactory: () => string;
 	readonly #clock: () => number;
 	readonly #maxProgressPreviewChars: number;
-	readonly #sessions = new Map<string, { modelKey: string; pending: Promise<PiSessionLike> }>();
+	readonly #sessions = new Map<string, { configurationKey: string; pending: Promise<PiSessionLike> }>();
 
 	constructor(options: PiAgentRuntimeOptions) {
 		this.#createSession = options.createSession;
@@ -263,15 +281,21 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 	}
 
 	async #session(snapshot: SessionSnapshot): Promise<PiSessionLike> {
-		const modelKey = `${snapshot.model.provider}\0${snapshot.model.id}`;
+		const configurationKey = [
+			snapshot.model.provider,
+			snapshot.model.id,
+			snapshot.thinkingLevel,
+			snapshot.sandboxMode,
+			snapshot.approvalPolicy,
+		].join("\0");
 		const existing = this.#sessions.get(snapshot.session.id);
-		if (existing?.modelKey === modelKey) return existing.pending;
+		if (existing?.configurationKey === configurationKey) return existing.pending;
 		if (existing) {
 			this.#sessions.delete(snapshot.session.id);
 			void existing.pending.then((session) => session.dispose()).catch(() => {});
 		}
 		const pending = this.#createSession(snapshot);
-		this.#sessions.set(snapshot.session.id, { modelKey, pending });
+		this.#sessions.set(snapshot.session.id, { configurationKey, pending });
 		pending.catch(() => {
 			const current = this.#sessions.get(snapshot.session.id);
 			if (current?.pending === pending) this.#sessions.delete(snapshot.session.id);
@@ -459,6 +483,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				recordToolEnd(resumed.message.toolCallId, resumed.message.toolName, resumed.message, resumed.message.isError);
 				items.unshift(mapToolResult(resumed.message, jsonValue(resumed.input)));
 			} else {
+				if (input.operation.payload.mode === "prompt") session.prepareForPrompt?.();
 				await session.prompt(prepared.text, {
 					images: prepared.images,
 					...(session.isStreaming && input.operation.payload.mode !== "prompt"

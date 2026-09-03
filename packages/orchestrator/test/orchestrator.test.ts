@@ -57,6 +57,32 @@ class FakeRuntime implements AgentRuntime {
 	}
 }
 
+/**
+ * Stands in for the gateway's `subagent` tool: it spawns an inline child from inside
+ * the parent's own turn and waits for it, exactly as the tool does.
+ */
+class InlineSubagentRuntime extends FakeRuntime {
+	orchestrator!: SessionOrchestrator;
+	childSessionId?: string;
+	parentUsageDuringTurn?: number;
+
+	override async executeTurn(input: Parameters<AgentRuntime["executeTurn"]>[0]): Promise<RuntimeTurnResult> {
+		if (input.snapshot.session.parentSessionId === undefined && this.childSessionId === undefined) {
+			const created = await this.orchestrator.createSubagent({
+				principalId: `agent:${input.operation.sessionId}`,
+				idempotencyKey: "subagent-tool:call-1",
+				sessionId: input.operation.sessionId,
+				task: "Find every caller of the approval broker",
+				deliverInline: true,
+			});
+			this.childSessionId = created.subagent.sessionId;
+			await this.orchestrator.drainSession(this.childSessionId, "inline-subagent-worker");
+			this.parentUsageDuringTurn = this.orchestrator.store.loadSnapshot(input.operation.sessionId)?.usage.totalTokens;
+		}
+		return super.executeTurn(input);
+	}
+}
+
 class GoalReviewRuntime implements AgentRuntime {
 	calls = 0;
 	workerCalls = 0;
@@ -305,6 +331,40 @@ describe("session orchestrator", () => {
 		const summary = await orchestrator.publishSubagentResult(parent.snapshot.session.id, created.subagent.id);
 		expect(summary.status).toBe("cancelled");
 		expect(store.loadSnapshot(parent.snapshot.session.id)?.transcript.at(-1)).toMatchObject({ type: "tool", status: "aborted", isError: true });
+		store.close();
+	});
+
+	it("charges an inline subagent to the parent after the turn instead of duplicating its result", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const runtime = new InlineSubagentRuntime();
+		const orchestrator = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: ids("inline") });
+		runtime.orchestrator = orchestrator;
+		const parent = await orchestrator.createSession({ ...createInput(), costBudgetUsd: 5, tokenBudget: 500 });
+		const parentId = parent.snapshot.session.id;
+
+		await orchestrator.acceptTurn({ principalId: "user-1", idempotencyKey: "turn-1", sessionId: parentId, mode: "prompt", content: [{ type: "text", text: "Delegate the search" }] });
+		expect(await orchestrator.drainSession(parentId, "parent-worker")).toBe(1);
+		const childId = runtime.childSessionId!;
+
+		// The child's spend must not land on the parent while the parent's own turn is
+		// still accumulating usage: whichever was written second would replace the other.
+		expect(runtime.parentUsageDuringTurn).toBe(0);
+		const parentAfter = store.loadSnapshot(parentId)!;
+		expect(parentAfter.usage).toMatchObject({ totalTokens: 24, costUsd: 0.02 });
+		expect(parentAfter.usageByTurn?.map((turn) => turn.turnId)).toContain(childId);
+		// The model already received the report as its tool result, so there is no
+		// second copy in the transcript.
+		expect(parentAfter.transcript.some((item) => item.id === `subagent:${childId}`)).toBe(false);
+		expect(orchestrator.listSubagents(parentId)).toHaveLength(1);
+		expect(orchestrator.subagentSummary(parentId, childId)).toMatchObject({ status: "completed", result: "done" });
+
+		// Restart reconciliation must not publish it a second time either.
+		expect(await orchestrator.reconcileSubagentResults()).toBe(0);
+		await orchestrator.publishSubagentResult(parentId, childId);
+		const reconciled = store.loadSnapshot(parentId)!;
+		expect(reconciled.usage.totalTokens).toBe(24);
+		expect(reconciled.transcript.some((item) => item.id === `subagent:${childId}`)).toBe(false);
+		expect(() => orchestrator.subagentSummary(childId, childId)).toThrow(OrchestratorError);
 		store.close();
 	});
 
@@ -587,6 +647,59 @@ describe("session orchestrator", () => {
 				content: [{ type: "text", text: "two" }],
 			}),
 		).rejects.toMatchObject({ code: "idempotency_conflict" });
+		store.close();
+	});
+
+	it("automatically names an unnamed session with its first prompt", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const orchestrator = new SessionOrchestrator(store, new FakeRuntime(), { clock: () => 100, idFactory: ids("auto-title") });
+		const { name: _name, ...unnamedInput } = createInput();
+		const created = await orchestrator.createSession(unnamedInput);
+		await orchestrator.acceptTurn({
+			principalId: "user-1",
+			idempotencyKey: "auto-title-turn",
+			sessionId: created.snapshot.session.id,
+			mode: "prompt",
+			content: [{ type: "text", text: "Investigate the flaky login tests" }],
+		});
+
+		const snapshot = store.loadSnapshot(created.snapshot.session.id)!;
+		expect(snapshot.session.name).toBe("Investigate the flaky login tests");
+		expect(store.loadEvents(created.snapshot.session.id).map((event) => event.type)).toEqual([
+			"session.created",
+			"session.item.upserted",
+			"session.phase.changed",
+			"session.renamed",
+		]);
+		store.close();
+	});
+
+	it("backfills existing unnamed and legacy fork sessions without changing their order timestamp", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const orchestrator = new SessionOrchestrator(store, new FakeRuntime(), { clock: () => 200, idFactory: ids("backfill-title") });
+		for (const legacyName of [undefined, "Session (fork)"] as const) {
+			const { name: _name, ...baseInput } = createInput();
+			const created = await orchestrator.createSession({
+				...baseInput,
+				idempotencyKey: `create-${legacyName ?? "unnamed"}`,
+				...(legacyName === undefined ? {} : { name: legacyName }),
+			});
+			const item: SessionEvent = {
+				type: "session.item.upserted",
+				eventId: `legacy-item-${legacyName ?? "unnamed"}`,
+				sessionId: created.snapshot.session.id,
+				revision: 2,
+				timestamp: 100,
+				item: { id: `user-${legacyName ?? "unnamed"}`, type: "user", createdAt: 100, content: [{ type: "text", text: "Repair project imports" }] },
+			};
+			store.commitMutation({ sessionId: created.snapshot.session.id, expectedRevision: 1, events: [item], snapshot: reduceSessionEvent(created.snapshot, item) });
+		}
+
+		expect(await orchestrator.backfillSessionNames("workspace-1")).toBe(2);
+		const sessions = store.listSnapshots("workspace-1", { limit: 10 });
+		expect(sessions.map((snapshot) => snapshot.session.name).sort()).toEqual(["Repair project imports", "Repair project imports (fork)"].sort());
+		expect(sessions.every((snapshot) => snapshot.session.updatedAt === 100)).toBe(true);
+		expect(await orchestrator.backfillSessionNames("workspace-1")).toBe(0);
 		store.close();
 	});
 
@@ -1049,6 +1162,21 @@ describe("session orchestrator", () => {
 			model: { provider: "openai", id: "gpt-test" },
 		});
 		expect(changed.snapshot.model).toEqual({ provider: "openai", id: "gpt-test" });
+		const policyChanged = await orchestrator.setSessionPolicy({
+			principalId: "user-1",
+			idempotencyKey: "policy-1",
+			sessionId,
+			sandboxMode: "unrestricted",
+			approvalPolicy: "never",
+		});
+		expect(policyChanged.snapshot).toMatchObject({ sandboxMode: "unrestricted", approvalPolicy: "never" });
+		await expect(orchestrator.setSessionPolicy({
+			principalId: "user-1",
+			idempotencyKey: "policy-1",
+			sessionId,
+			sandboxMode: "unrestricted",
+			approvalPolicy: "never",
+		})).resolves.toEqual(policyChanged);
 		const changedAgain = await orchestrator.setSessionThinking({
 			principalId: "user-1",
 			idempotencyKey: "thinking-1",

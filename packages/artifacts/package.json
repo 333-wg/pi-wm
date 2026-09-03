@@ -11,13 +11,20 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@wuming/protocol": "0.1.0"
+    "@wuming/protocol": "0.1.0",
+    "mammoth": "^1.12.2",
+    "pdf-parse": "^2.4.5"
+  },
+  "devDependencies": {
+    "jszip": "^3.10.1"
   }
 }

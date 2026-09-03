@@ -139,6 +139,12 @@ describe("wire protocol", () => {
 		const check = Compile(ClientMessageSchema);
 		expect(check.Check({
 			type: "request",
+			requestId: "policy",
+			idempotencyKey: "policy-key",
+			command: { type: "session.policy.set", sessionId: "session-1", sandboxMode: "unrestricted", approvalPolicy: "never" },
+		})).toBe(true);
+		expect(check.Check({
+			type: "request",
 			requestId: "sessions",
 			idempotencyKey: "sessions-key",
 			command: { type: "session.list", workspaceId: "workspace-1", query: "release", archived: true, limit: 50 },

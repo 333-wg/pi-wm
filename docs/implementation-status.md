@@ -37,8 +37,8 @@
   support, per-redirect SSRF
   validation, standard-port enforcement, deadlines, body limits, content-type
   restrictions, and HTML-to-text conversion; default Bing HTML `web_search`,
-  optional DuckDuckGo/Brave/SearXNG providers, and no-key Open-Meteo `weather`,
-  all with durable network/secret approval capabilities.
+  optional DuckDuckGo/Brave/SearXNG providers, and weather retrieval through
+  search, all with durable network/secret approval capabilities.
 - Durable approval requests and immutable settlements, per-session serialization,
   timeout/abort settlement, attributed decisions, and idempotent responses.
 - Gateway approval authorization and a responsive Web approval panel.

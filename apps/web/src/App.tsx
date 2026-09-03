@@ -1,14 +1,15 @@
 import {
 	Activity,
+	ArrowDown,
 	BookOpen,
 	Archive,
-	ArchiveRestore,
 	Bot,
 	Check,
 	BrainCircuit,
 	ChevronDown,
 	ChevronRight,
 	CircleAlert,
+	Command,
 	Copy,
 	Download,
 	FileCode2,
@@ -20,28 +21,32 @@ import {
 	Hourglass,
 	TerminalSquare,
 	Trash2,
+	Upload,
 	Menu,
+	MoreHorizontal,
 	MessageSquareCode,
 	Plug,
+	PanelLeftClose,
+	PanelLeftOpen,
 	PanelRight,
 	Paperclip,
 	Pencil,
 	Play,
 	Plus,
 	RefreshCw,
-	Search,
 	Send,
 	Settings,
 	ShieldAlert,
 	ShieldCheck,
 	Sparkles,
 	Square,
-	SquareTerminal,
+	Sun,
+	MoonStar,
 	Target,
 	Wrench,
 	X,
 } from "lucide-react";
-import { lazy, Suspense, type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, type ChangeEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	ApprovalRequest,
 	ArtifactRef,
@@ -63,17 +68,42 @@ import type {
 	SessionSummary,
 	TranscriptItem,
 	WorkspaceDirectory,
+	WorkspaceEntry,
 	WorkspaceFileView,
+	WorkspaceSummary,
 	Skill,
 	SkillSummary,
 	McpServer,
 	McpServerSummary,
 	SubagentSummary,
+	ThinkingLevel,
 	UsageToolSummary,
 	ToolStatus,
 } from "@wuming/protocol";
 import { type LiveAssistant, type LiveTool, useWumingClient } from "./use-wuming-client.js";
 import { workspaceApi } from "./workspace-api.js";
+import { Markdown } from "./components/Markdown.js";
+import { UnifiedDiff } from "./components/DiffView.js";
+import { ToolCard, ToolResult, type ToolStatusValue } from "./components/ToolCard.js";
+import {
+	commandItems,
+	type ComposerCommand,
+	fileItems,
+	SuggestMenu,
+	type SuggestItem,
+} from "./components/ComposerSuggest.js";
+import { CommandPalette, modifierLabel, type PaletteEntry } from "./components/CommandPalette.js";
+import { MessageActions, MessageEditor } from "./components/MessageActions.js";
+import { ShortcutsDialog } from "./components/ShortcutsDialog.js";
+import { ContextMeter, ContextPill } from "./components/ContextMeter.js";
+import { PermissionPicker, type PermissionValue } from "./components/PermissionPicker.js";
+import { estimateContext, formatTokens, type ContextUsage } from "./lib/context-usage.js";
+import { anchorBefore, formatItemTime, formatItemTimestamp, latestUserItemIndex, messageText } from "./lib/transcript.js";
+import { isNearBottom } from "./lib/scroll.js";
+import { themeLabel, type ThemeChoice } from "./lib/theme.js";
+import { isImplicitWorkspace } from "./lib/workspaces.js";
+import { useTheme } from "./use-theme.js";
+import { applyCompletion, cycleIndex, detectTrigger, quoteMention, type Trigger } from "./lib/suggest.js";
 const TerminalView = lazy(() => import("./terminal-view.js").then((module) => ({ default: module.TerminalView })));
 
 function formatMoney(value: number): string {
@@ -107,8 +137,56 @@ const STATUS_LABELS: Record<string, string> = {
 	denied: "已拒绝",
 };
 
+const ONBOARDING_STORAGE_KEY = "wuming.onboarding.complete";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "wuming.sidebar.collapsed";
+const SIDEBAR_WIDTH_STORAGE_KEY = "wuming.sidebar.width";
+const DEFAULT_SIDEBAR_WIDTH = 252;
+const MIN_SIDEBAR_WIDTH = 200;
+const MAX_SIDEBAR_WIDTH = 420;
+const DEFAULT_SESSION_TITLE = "新对话";
+
+function clampSidebarWidth(width: number): number {
+	return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
+}
+
+function storedSidebarWidth(): number {
+	const width = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+	return Number.isFinite(width) && width > 0 ? clampSidebarWidth(width) : DEFAULT_SIDEBAR_WIDTH;
+}
+
 function statusLabel(value: string): string {
 	return STATUS_LABELS[value] ?? value.replaceAll("_", " ");
+}
+
+function GatewayPasswordForm({
+	draft,
+	status,
+	submitted,
+	firstUse = false,
+	onChange,
+	onSubmit,
+}: {
+	draft: string;
+	status: "connecting" | "connected" | "disconnected" | "error";
+	submitted: boolean;
+	firstUse?: boolean;
+	onChange: (value: string) => void;
+	onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+	const failed = submitted && status !== "connecting" && status !== "connected";
+	return (
+		<form className={firstUse ? "gateway-login" : "gateway-reconnect"} onSubmit={onSubmit}>
+			{firstUse && <div className="gateway-login-copy"><span className="settings-section-title">连接服务</span><p className="settings-hint">首次使用请输入访问密码。验证成功后，这台设备会自动记住连接。</p></div>}
+			<label>访问密码<input aria-label="访问密码" autoComplete="current-password" autoFocus={firstUse} type="password" value={draft} onChange={(event) => onChange(event.target.value)} /></label>
+			{failed && <div className="settings-error" role="alert">密码不正确或服务暂时不可用，请检查后重试。</div>}
+			{submitted && status === "connected" && !firstUse && <div className="settings-success" role="status">连接成功，密码已记住。</div>}
+			<div className="dialog-actions">
+				<button className={firstUse ? "primary-button" : "secondary-button"} disabled={!draft.trim() || status === "connecting"} type="submit">
+					<Plug size={14} />{status === "connecting" ? "连接中" : firstUse ? "连接" : "重新连接"}
+				</button>
+			</div>
+		</form>
+	);
 }
 
 function riskLabel(value: string): string {
@@ -117,7 +195,7 @@ function riskLabel(value: string): string {
 
 function sandboxLabel(value: string | undefined): string {
 	if (!value) return "-";
-	return ({ read_only: "只读", workspace_write: "工作区可写", danger_full_access: "完全访问" } as Record<string, string>)[value] ?? value.replaceAll("_", " ");
+	return ({ read_only: "只读", workspace_write: "工作区可写", unrestricted: "完全访问" } as Record<string, string>)[value] ?? value.replaceAll("_", " ");
 }
 
 function approvalPolicyLabel(value: string | undefined): string {
@@ -127,6 +205,101 @@ function approvalPolicyLabel(value: string | undefined): string {
 
 function workspaceName(name: string): string {
 	return name === "Local workspace" ? "本地工作区" : name;
+}
+
+function ProjectImportDialog({
+	local,
+	onOpenLocal,
+	onImport,
+	onClose,
+}: {
+	local: boolean;
+	onOpenLocal: (kind: "file" | "directory") => Promise<unknown>;
+	onImport: (name: string, files: Array<{ file: File; path: string }>, onProgress: (uploaded: number, total: number) => void) => Promise<unknown>;
+	onClose: () => void;
+}) {
+	const folderInput = useRef<HTMLInputElement>(null);
+	const fileInput = useRef<HTMLInputElement>(null);
+	const [pickerOpen, setPickerOpen] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [progress, setProgress] = useState<{ uploaded: number; total: number }>();
+	const [error, setError] = useState<string>();
+
+	const importSelection = async (name: string, files: Array<{ file: File; path: string }>) => {
+		setBusy(true);
+		setError(undefined);
+		setProgress({ uploaded: 0, total: files.length });
+		try {
+			await onImport(name, files, (uploaded, total) => setProgress({ uploaded, total }));
+			onClose();
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : String(cause));
+			setBusy(false);
+		}
+	};
+
+	const pickFolder = (event: ChangeEvent<HTMLInputElement>) => {
+		const selected = [...(event.target.files ?? [])];
+		if (selected.length === 0) return;
+		const root = selected[0]?.webkitRelativePath.split("/")[0] || "新项目";
+		const prefix = `${root}/`;
+		void importSelection(root, selected.map((file) => ({
+			file,
+			path: file.webkitRelativePath.startsWith(prefix) ? file.webkitRelativePath.slice(prefix.length) : file.name,
+		})));
+	};
+
+	const pickFile = (event: ChangeEvent<HTMLInputElement>) => {
+		const file = event.target.files?.[0];
+		if (!file) return;
+		const dot = file.name.lastIndexOf(".");
+		const name = dot > 0 ? file.name.slice(0, dot) : file.name;
+		void importSelection(name, [{ file, path: file.name }]);
+	};
+	const openLocal = async (kind: "file" | "directory") => {
+		setBusy(true);
+		setError(undefined);
+		try {
+			await onOpenLocal(kind);
+			onClose();
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : String(cause));
+			setBusy(false);
+		}
+	};
+
+	return (
+		<div className="modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}>
+			<div className="project-dialog" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
+				<div className="dialog-header">
+					<div><h2 id="project-dialog-title">打开项目</h2><span>{local ? "使用这台电脑上的文件和文件夹" : "导入到 Wuming 工作区"}</span></div>
+					<button className="icon-button" type="button" title="关闭" disabled={busy} onClick={onClose}><X size={18} /></button>
+				</div>
+				<div className={`project-import-choice ${pickerOpen ? "open" : ""}`}>
+					<button className="project-import-trigger" type="button" aria-expanded={pickerOpen} disabled={busy} onClick={() => setPickerOpen((open) => !open)}>
+						<Paperclip size={20} />
+						<span><strong>文件和文件夹</strong><small>{local ? "打开这台电脑上的项目内容" : "上传内容并创建项目"}</small></span>
+						<ChevronDown size={16} />
+					</button>
+					{pickerOpen && <div className="project-import-kinds" role="group" aria-label="选择项目内容类型">
+						<button type="button" disabled={busy} onClick={() => local ? void openLocal("file") : (() => { if (fileInput.current) { fileInput.current.value = ""; fileInput.current.click(); } })()}>
+							<FileCode2 size={17} /><span><strong>文件</strong><small>{local ? "使用文件所在目录" : "上传为独立项目"}</small></span>
+						</button>
+						<button type="button" disabled={busy} onClick={() => local ? void openLocal("directory") : (() => { if (folderInput.current) { folderInput.current.value = ""; folderInput.current.click(); } })()}>
+							<FolderOpen size={17} /><span><strong>文件夹</strong><small>{local ? "直接使用本机目录" : "上传并保留目录结构"}</small></span>
+						</button>
+					</div>}
+				</div>
+				{!local && <>
+					<input ref={folderInput} className="visually-hidden" type="file" multiple {...{ webkitdirectory: "" }} onChange={pickFolder} />
+					<input ref={fileInput} className="visually-hidden" type="file" onChange={pickFile} />
+				</>}
+				{local && busy && <div className="project-picker-wait" role="status"><Hourglass size={14} />等待系统选择</div>}
+				{!local && progress && <div className="project-import-progress" role="status"><span>{busy ? "正在导入" : "导入已停止"}</span><strong>{progress.uploaded} / {progress.total}</strong><i><b style={{ width: `${progress.total ? progress.uploaded / progress.total * 100 : 0}%` }} /></i></div>}
+				{error && <div className="settings-error" role="alert">{error}</div>}
+			</div>
+		</div>
+	);
 }
 
 function CustomModelSettings({
@@ -324,10 +497,6 @@ function CustomModelSettings({
 	</div>;
 }
 
-function formatTokens(value: number): string {
-	return value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : String(value);
-}
-
 function formatRunDuration(run: RunSummary): string {
 	return formatDuration(run.startedAt, run.finishedAt ?? (run.status === "running" ? Date.now() : run.updatedAt), run.status === "queued" ? "排队中" : "暂无耗时");
 }
@@ -444,11 +613,21 @@ function formatToolObservation(tool: UsageToolSummary): string {
 	].filter((value): value is string => value !== undefined).join(" · ");
 }
 
-function Content({ parts, onDownload }: { parts: ContentPart[]; onDownload?: (artifact: ArtifactRef) => Promise<void> }) {
+function Content({
+	parts,
+	onDownload,
+	renderedToolCalls,
+	hideToolCalls = false,
+}: {
+	parts: ContentPart[];
+	onDownload?: (artifact: ArtifactRef) => Promise<void>;
+	renderedToolCalls?: Set<string> | undefined;
+	hideToolCalls?: boolean;
+}) {
 	return (
 		<div className="message-content">
 			{parts.map((part, index) => {
-				if (part.type === "text") return <div className="prose" key={index}>{part.text}</div>;
+				if (part.type === "text") return part.text.trim() === "" ? null : <Markdown text={part.text} key={index} />;
 				if (part.type === "thinking") {
 					return (
 						<details className="thinking" key={index}>
@@ -458,13 +637,11 @@ function Content({ parts, onDownload }: { parts: ContentPart[]; onDownload?: (ar
 					);
 				}
 				if (part.type === "tool_call") {
-					return (
-						<div className="inline-tool" key={index}>
-							<SquareTerminal size={15} />
-							<strong>{part.toolName}</strong>
-							<code>{JSON.stringify(part.input)}</code>
-						</div>
-					);
+					if (hideToolCalls) return null;
+					// The tool gets its own transcript item once it starts; render the
+					// call inline only while that item does not exist yet.
+					if (renderedToolCalls?.has(part.toolCallId)) return null;
+					return <ToolCard toolName={part.toolName} input={part.input} status="pending" key={index} />;
 				}
 				return (
 					<div className="artifact-line" key={index}>
@@ -477,20 +654,50 @@ function Content({ parts, onDownload }: { parts: ContentPart[]; onDownload?: (ar
 	);
 }
 
-function TranscriptItemView({ item, onDownload }: { item: TranscriptItem; onDownload: (artifact: ArtifactRef) => Promise<void> }) {
+/**
+ * What a message can do besides being read. Owned by `App` because forking and
+ * re-sending both switch the attached session, which is not a decision a single
+ * transcript row gets to make.
+ */
+interface MessageActionState {
+	editing: boolean;
+	busy: boolean;
+	/** Set while forking or re-sending is impossible: mid-turn, archived, offline. */
+	branchDisabled: boolean;
+	branchTitle: string;
+	error?: string | undefined;
+	onFork: () => void;
+	onEditStart: () => void;
+	onEditCancel: () => void;
+	onEditSubmit: (text: string) => void;
+}
+
+function TranscriptItemView({
+	item,
+	onDownload,
+	renderedToolCalls,
+	actions,
+	now,
+	hideToolCalls = false,
+}: {
+	item: TranscriptItem;
+	onDownload: (artifact: ArtifactRef) => Promise<void>;
+	renderedToolCalls?: Set<string> | undefined;
+	actions?: MessageActionState | undefined;
+	now: number;
+	hideToolCalls?: boolean;
+}) {
 	if (item.type === "tool") {
 		return (
 			<div className={`tool-row ${item.isError ? "tool-error" : ""}`}>
-				<div className="tool-title">
-					<SquareTerminal size={15} />
-					<strong>{item.toolName}</strong>
-					<span>{statusLabel(item.status)}</span>
-				</div>
-				<Content parts={item.content} onDownload={onDownload} />
+				<ToolCard toolName={item.toolName} input={item.input} status={item.status as ToolStatusValue}>
+					<ToolResult parts={item.content} toolName={item.toolName} input={item.input} isError={item.isError} onDownload={(artifact) => void onDownload(artifact)} />
+				</ToolCard>
 			</div>
 		);
 	}
 
+	const text = messageText(item.content);
 	return (
 		<div className={`message-row ${item.type}`}>
 			<div className="message-avatar" aria-hidden="true">
@@ -500,29 +707,48 @@ function TranscriptItemView({ item, onDownload }: { item: TranscriptItem; onDown
 				<div className="message-meta">
 					<strong>{item.type === "user" ? "你" : "Wuming"}</strong>
 					{item.type === "assistant" && item.status !== "complete" && <span>{statusLabel(item.status)}</span>}
+					<time className="message-time" dateTime={new Date(item.createdAt).toISOString()} title={formatItemTimestamp(item.createdAt)}>
+						{formatItemTime(item.createdAt, now)}
+					</time>
+					{actions && !actions.editing && (
+						<MessageActions
+							text={text}
+							busy={actions.busy}
+							branchDisabled={actions.branchDisabled}
+							branchTitle={actions.branchTitle}
+							onFork={actions.onFork}
+							{...(item.type === "user" ? { onEdit: actions.onEditStart } : {})}
+						/>
+					)}
 				</div>
-				<Content parts={item.content} onDownload={onDownload} />
+				{actions?.editing ? (
+					<MessageEditor initial={text} busy={actions.busy} onCancel={actions.onEditCancel} onSubmit={actions.onEditSubmit} />
+				) : (
+					<Content parts={item.content} onDownload={onDownload} renderedToolCalls={renderedToolCalls} hideToolCalls={hideToolCalls} />
+				)}
 				{item.type === "assistant" && item.error && (
 					<div className="message-error"><CircleAlert size={15} />{item.error}</div>
 				)}
+				{actions?.error && <div className="message-error"><CircleAlert size={15} />{actions.error}</div>}
 			</div>
 		</div>
 	);
 }
 
 function LiveAssistantView({ item }: { item: LiveAssistant }) {
+	if (item.thinking.trim() === "" && item.text.trim() === "") return null;
 	return (
 		<div className="message-row assistant streaming-row">
 			<div className="message-avatar"><Sparkles size={16} /></div>
 			<div className="message-body">
 				<div className="message-meta"><strong>Wuming</strong><span className="live-label">实时</span></div>
 				{item.thinking && (
-					<details className="thinking" open>
+					<details className="thinking live-thinking" open>
 						<summary><BrainCircuit size={14} /> 思考过程</summary>
 						<div>{item.thinking}</div>
 					</details>
 				)}
-				{item.text && <div className="prose">{item.text}<span className="cursor" /></div>}
+				{item.text && <Markdown text={item.text} className="prose streaming" />}
 			</div>
 		</div>
 	);
@@ -544,11 +770,17 @@ function ThinkingActivity({ phase }: { phase: SessionSnapshot["session"]["phase"
 	);
 }
 
-function LiveToolView({ tool }: { tool: LiveTool }) {
+function LiveToolView({ tool, input, awaitingApproval = false }: { tool: LiveTool; input?: unknown; awaitingApproval?: boolean }) {
 	return (
 		<div className="tool-row live-tool">
-			<div className="tool-title"><Activity size={15} /><strong>{tool.toolName}</strong><span>运行中</span></div>
-			{tool.preview && <pre>{tool.preview}</pre>}
+			<ToolCard toolName={tool.toolName} input={input} status={awaitingApproval ? "awaiting_approval" : "running"}>
+				{tool.preview ? (
+					<pre className="tool-output">
+						{tool.preview}
+						{tool.truncated ? "\n…" : ""}
+					</pre>
+				) : null}
+			</ToolCard>
 		</div>
 	);
 }
@@ -599,7 +831,14 @@ function Composer({
 	models,
 	selectedModel,
 	modelSelectionDisabled,
+	token,
+	workspaceId,
+	commands,
+	contextUsage,
+	permission,
+	permissionDisabled,
 	onSelectModel,
+	onSelectPermission,
 	onSend,
 	onAbort,
 	onUpload,
@@ -609,7 +848,14 @@ function Composer({
 	models: ModelMetadata[];
 	selectedModel: ModelMetadata | undefined;
 	modelSelectionDisabled: boolean;
+	token: string;
+	workspaceId: string | undefined;
+	commands: ComposerCommand[];
+	contextUsage: ContextUsage | undefined;
+	permission: PermissionValue;
+	permissionDisabled: boolean;
 	onSelectModel: (model: ModelRef) => void;
+	onSelectPermission: (value: PermissionValue) => Promise<void>;
 	onSend: (text: string, artifacts: ArtifactRef[], queueMode: "steer" | "follow_up") => Promise<void>;
 	onAbort: () => Promise<void>;
 	onUpload: (file: File) => Promise<ArtifactRef>;
@@ -617,19 +863,118 @@ function Composer({
 	const [text, setText] = useState("");
 	const [attachments, setAttachments] = useState<ArtifactRef[]>([]);
 	const [uploading, setUploading] = useState(false);
+	const [draggingFiles, setDraggingFiles] = useState(false);
 	const [uploadError, setUploadError] = useState<string>();
 	const [sendError, setSendError] = useState<string>();
 	const fileInput = useRef<HTMLInputElement>(null);
+	const dragDepth = useRef(0);
+	const input = useRef<HTMLTextAreaElement>(null);
 	const [queueMode, setQueueMode] = useState<"steer" | "follow_up">("steer");
 	const [sending, setSending] = useState(false);
 	const [stopping, setStopping] = useState(false);
+	const [trigger, setTrigger] = useState<Trigger>();
+	const [dismissed, setDismissed] = useState(false);
+	const [activeIndex, setActiveIndex] = useState(0);
+	const [files, setFiles] = useState<WorkspaceEntry[]>([]);
+	const [searching, setSearching] = useState(false);
+	const [searchError, setSearchError] = useState<string>();
+	const [caret, setCaret] = useState<number>();
 	useEffect(() => {
 		if (!active) setStopping(false);
 	}, [active]);
+
+	// The trigger is derived from the caret, so every interaction that can move
+	// it (typing, clicking, arrow keys) re-reads the textarea selection.
+	const syncTrigger = (element: HTMLTextAreaElement) => {
+		setTrigger(detectTrigger(element.value, element.selectionStart ?? element.value.length));
+	};
+	useEffect(() => {
+		if (caret === undefined) return;
+		input.current?.setSelectionRange(caret, caret);
+		setCaret(undefined);
+	}, [caret]);
+
+	const fileQuery = trigger?.kind === "file" && !dismissed && workspaceId ? trigger.query : undefined;
+	useEffect(() => {
+		if (fileQuery === undefined || !workspaceId) return;
+		let cancelled = false;
+		setSearching(true);
+		const timer = setTimeout(() => {
+			workspaceApi
+				.search(token, workspaceId, fileQuery, 12)
+				.then((result) => {
+					if (cancelled) return;
+					setFiles(result.entries);
+					setSearchError(undefined);
+				})
+				.catch((error: unknown) => {
+					if (cancelled) return;
+					setFiles([]);
+					setSearchError(error instanceof Error ? error.message : String(error));
+				})
+				.finally(() => {
+					if (!cancelled) setSearching(false);
+				});
+		}, 110);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
+	}, [fileQuery, token, workspaceId]);
+
+	const items = useMemo(() => {
+		if (!trigger || dismissed) return [];
+		if (trigger.kind === "command") return commandItems(commands, trigger.query);
+		return fileItems(files);
+	}, [commands, dismissed, files, trigger]);
+	// Keyed on contents, not identity, so an unrelated re-render never drops the
+	// highlight back to the first row mid-selection.
+	const itemsKey = items.map((item) => item.id).join("\u0000");
+	useEffect(() => {
+		setActiveIndex(0);
+	}, [itemsKey]);
+	const menuOpen = trigger !== undefined && !dismissed && (trigger.kind === "command" ? items.length > 0 : workspaceId !== undefined);
+
+	const accept = (item: SuggestItem) => {
+		if (!trigger) return;
+		if (item.action) {
+			setText(text.slice(0, trigger.start) + text.slice(trigger.end));
+			setTrigger(undefined);
+			void Promise.resolve(item.action("")).catch((error: unknown) => {
+				setSendError(error instanceof Error ? error.message : String(error));
+			});
+			return;
+		}
+		const value = trigger.kind === "file" ? quoteMention(item.value) : item.value;
+		// Accepting a directory keeps the mention open so the next keystroke drills
+		// into it; a quoted path cannot stay open because the quote ends the token.
+		const drilling = trigger.kind === "file" && item.value.endsWith("/") && value === item.value;
+		const completion = applyCompletion(text, trigger, value, { trailing: !drilling });
+		setText(completion.text);
+		setCaret(completion.caret);
+		setTrigger(drilling ? { kind: "file", start: trigger.start, end: completion.caret, query: value } : undefined);
+		input.current?.focus();
+	};
+
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
 		const value = text.trim();
 		if ((!value && attachments.length === 0) || disabled || sending || uploading) return;
+		// A prompt that is nothing but a local command runs here instead of being
+		// sent to the runtime; anything after the name is passed as its argument.
+		const command = /^\/([A-Za-z0-9:._-]+)(?:\s+([\S\s]*))?$/.exec(value);
+		const local = command ? commands.find((entry) => entry.kind === "action" && entry.name === command[1]) : undefined;
+		if (local?.run) {
+			setSendError(undefined);
+			try {
+				await local.run(command?.[2]?.trim() ?? "");
+				setText("");
+				setTrigger(undefined);
+			} catch (error) {
+				setSendError(error instanceof Error ? error.message : String(error));
+			}
+			return;
+		}
 		setSending(true);
 		setSendError(undefined);
 		try {
@@ -643,40 +988,124 @@ function Composer({
 		}
 	};
 
+	const uploadFiles = async (incoming: File[]) => {
+		if (disabled || uploading || incoming.length === 0) return;
+		const remaining = Math.max(0, 8 - attachments.length);
+		const selected = incoming.slice(0, remaining);
+		if (selected.length === 0) {
+			setUploadError("每条消息最多添加 8 个附件");
+			return;
+		}
+		setUploading(true);
+		setUploadError(undefined);
+		try {
+			const results = await Promise.all(selected.map(async (file) => {
+				try {
+					return { ok: true as const, artifact: await onUpload(file) };
+				} catch (error) {
+					return { ok: false as const, file, error: error instanceof Error ? error.message : String(error) };
+				}
+			}));
+			const uploaded = results.flatMap((result) => result.ok ? [result.artifact] : []);
+			const errors = results.flatMap((result) => result.ok ? [] : [`${result.file.name}：${result.error}`]);
+			if (uploaded.length > 0) setAttachments((current) => [...current, ...uploaded].slice(0, 8));
+			if (incoming.length > selected.length) errors.push("每条消息最多添加 8 个附件");
+			setUploadError(errors.length > 0 ? errors.join("；") : undefined);
+		} finally {
+			setUploading(false);
+		}
+	};
+
 	return (
-		<form className="composer" onSubmit={submit}>
+		<form
+			className={`composer ${draggingFiles ? "dragging-files" : ""}`}
+			onSubmit={submit}
+			onDragEnter={(event) => {
+				if (disabled || !Array.from(event.dataTransfer.types).includes("Files")) return;
+				event.preventDefault();
+				dragDepth.current += 1;
+				setDraggingFiles(true);
+			}}
+			onDragOver={(event) => {
+				if (disabled || !Array.from(event.dataTransfer.types).includes("Files")) return;
+				event.preventDefault();
+				event.dataTransfer.dropEffect = attachments.length >= 8 || uploading ? "none" : "copy";
+			}}
+			onDragLeave={(event) => {
+				event.preventDefault();
+				dragDepth.current = Math.max(0, dragDepth.current - 1);
+				if (dragDepth.current === 0) setDraggingFiles(false);
+			}}
+			onDrop={(event) => {
+				const droppedFiles = [...event.dataTransfer.files];
+				if (droppedFiles.length === 0 && !Array.from(event.dataTransfer.types).includes("Files")) return;
+				event.preventDefault();
+				dragDepth.current = 0;
+				setDraggingFiles(false);
+				void uploadFiles(droppedFiles);
+			}}
+		>
+			{draggingFiles && <div className="composer-drop-zone" role="status"><Upload size={22} /><strong>松开即可添加文件</strong><span>支持任意文件，可一次添加多个</span></div>}
+			{menuOpen && trigger && (
+				<SuggestMenu
+					trigger={trigger}
+					items={items}
+					activeIndex={activeIndex}
+					loading={searching}
+					error={searchError}
+					onPick={accept}
+					onHover={setActiveIndex}
+				/>
+			)}
 			<input
 				className="visually-hidden"
 				ref={fileInput}
 				type="file"
 				aria-label="选择附件"
 				multiple
-				accept="image/png,image/jpeg,image/gif,image/webp,text/*,.md,.json,.yaml,.yml,.toml,.xml,.csv,.tsv,.js,.jsx,.ts,.tsx,.css,.html,.py,.go,.rs,.java,.c,.h,.cpp,.hpp,.cs,.php,.rb,.swift,.sh,.ps1,.sql,.graphql,.proto,.diff,.patch"
 				onChange={(event) => {
-					const files = [...(event.target.files ?? [])].slice(0, Math.max(0, 8 - attachments.length));
+					const files = [...(event.target.files ?? [])];
 					event.target.value = "";
-					if (files.length === 0) return;
-					setUploading(true);
-					setUploadError(undefined);
-					void (async () => {
-						try {
-							const uploaded: ArtifactRef[] = [];
-							for (const file of files) uploaded.push(await onUpload(file));
-							setAttachments((current) => [...current, ...uploaded]);
-						} catch (error) {
-							setUploadError(error instanceof Error ? error.message : String(error));
-						} finally {
-							setUploading(false);
-						}
-					})();
+					void uploadFiles(files);
 				}}
 			/>
 			<textarea
 				aria-label="消息"
-				placeholder={active ? "为当前任务补充指令" : "给 Wuming 发送任务或问题"}
+				ref={input}
+				placeholder={active ? "为当前任务补充指令" : "给 Wuming 发送任务或问题（@ 引用文件，/ 快捷命令）"}
 				value={text}
-				onChange={(event) => setText(event.target.value)}
+				aria-expanded={menuOpen}
+				onChange={(event) => {
+					setText(event.target.value);
+					setDismissed(false);
+					syncTrigger(event.target);
+				}}
+				onClick={(event) => syncTrigger(event.currentTarget)}
+				onBlur={() => setTrigger(undefined)}
+				onKeyUp={(event) => {
+					if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncTrigger(event.currentTarget);
+				}}
 				onKeyDown={(event) => {
+					if (menuOpen && items.length > 0) {
+						if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+							event.preventDefault();
+							setActiveIndex((current) => cycleIndex(current, event.key === "ArrowDown" ? 1 : -1, items.length));
+							return;
+						}
+						if (event.key === "Enter" || event.key === "Tab") {
+							const item = items[activeIndex] ?? items[0];
+							if (item) {
+								event.preventDefault();
+								accept(item);
+								return;
+							}
+						}
+					}
+					if (menuOpen && event.key === "Escape") {
+						event.preventDefault();
+						setDismissed(true);
+						return;
+					}
 					if (event.key === "Enter" && !event.shiftKey) {
 						event.preventDefault();
 						event.currentTarget.form?.requestSubmit();
@@ -701,7 +1130,9 @@ function Composer({
 			<div className="composer-actions">
 				<div className="composer-left">
 					<button type="button" className="icon-button" title="添加附件" disabled={disabled || uploading || attachments.length >= 8} onClick={() => fileInput.current?.click()}><Paperclip size={17} /></button>
+					{!active && <PermissionPicker value={permission} disabled={permissionDisabled} onChange={onSelectPermission} />}
 					{uploading && <span className="uploading-label">正在上传...</span>}
+					{!uploading && contextUsage && <ContextPill usage={contextUsage} />}
 					{active && (
 						<div className="segmented" aria-label="排队方式">
 							<button type="button" className={queueMode === "steer" ? "active" : ""} onClick={() => setQueueMode("steer")}>立即补充</button>
@@ -866,16 +1297,7 @@ function gitStatusLabel(entry: GitStatusEntry): string {
 function DiffContent({ diff }: { diff: GitDiff }) {
 	const lines = diff.content.split("\n");
 	if (lines.length > 10_000) return <pre className="diff-plain">{diff.content}</pre>;
-	return (
-		<pre className="diff-view">
-			{lines.map((line, index) => {
-				const kind = line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ")
-					? "header"
-					: line.startsWith("@@") ? "hunk" : line.startsWith("+") ? "add" : line.startsWith("-") ? "delete" : "context";
-				return <span className={`diff-line ${kind}`} key={index}>{line || " "}</span>;
-			})}
-		</pre>
-	);
+	return <UnifiedDiff patch={diff.content} />;
 }
 
 function ChangesView({ token, workspaceId }: { token: string; workspaceId: string }) {
@@ -1010,6 +1432,7 @@ const TOOL_CATEGORY_LABELS: Record<ToolStatus["category"], string> = {
 	filesystem: "文件",
 	process: "进程",
 	network: "网络",
+	agent: "编排",
 };
 
 const TOOL_STATUS_LABELS: Record<ToolStatus["status"], string> = {
@@ -1185,11 +1608,24 @@ function SubagentsView({
 }
 
 const GOAL_ACTIVE_STATUSES: readonly GoalSummary["status"][] = ["queued", "running", "awaiting_approval", "cancelling"];
+const GOAL_REVIEW_ROUND_CHOICES: readonly number[] = [1, 2, 3, 4, 5];
 
-function goalActivityLabel(status: GoalSummary["status"]): string {
-	if (status === "queued") return "等待开始";
-	if (status === "cancelling") return "正在停止";
-	if (status === "awaiting_approval") return "等待批准工具调用";
+const GOAL_REVIEW_PHASE_LABELS: Record<NonNullable<GoalSummary["reviewPhase"]>, string> = {
+	pending: "尚未开始",
+	executing: "正在执行",
+	reviewing: "正在评审",
+	passed: "评审通过",
+	failed: "评审未通过",
+	cancelled: "已取消",
+};
+
+/** The review phase is finer grained than the goal status: a goal being reviewed still reports "running". */
+function goalActivityLabel(goal: GoalSummary): string {
+	if (goal.status === "cancelling") return "正在停止";
+	if (goal.status === "awaiting_approval") return "等待批准工具调用";
+	if (goal.status === "queued") return "等待开始";
+	if (goal.reviewPhase === "reviewing") return goal.round === undefined ? "正在评审结果" : `正在评审第 ${goal.round} 轮结果`;
+	if (goal.reviewPhase === "executing" && goal.round !== undefined) return `正在执行第 ${goal.round} 轮`;
 	return "正在执行";
 }
 
@@ -1206,7 +1642,7 @@ function GoalsView({
 	goals: GoalSummary[];
 	disabled: boolean;
 	archived: boolean;
-	onCreate: (input: { objective: string; title?: string }) => Promise<GoalSummary>;
+	onCreate: (input: { objective: string; title?: string; successCriteria?: string; maxRounds?: number }) => Promise<GoalSummary>;
 	onStart: (goalId: string) => Promise<GoalSummary>;
 	onCancel: (goalId: string) => Promise<GoalSummary>;
 	onRespondApproval: (sessionId: string, approvalId: string, decision: "approve" | "deny") => Promise<void>;
@@ -1215,6 +1651,9 @@ function GoalsView({
 	const [selectedId, setSelectedId] = useState<string>();
 	const [title, setTitle] = useState("");
 	const [objective, setObjective] = useState("");
+	const [reviewEnabled, setReviewEnabled] = useState(false);
+	const [successCriteria, setSuccessCriteria] = useState("");
+	const [maxRounds, setMaxRounds] = useState(3);
 	const [creating, setCreating] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
 	const [action, setAction] = useState<{ goalId: string; kind: "start" | "cancel" }>();
@@ -1231,14 +1670,21 @@ function GoalsView({
 		if (creating || disabled) return;
 		const normalizedObjective = objective.trim();
 		if (!normalizedObjective) return setFormError("请填写目标描述");
+		const normalizedCriteria = successCriteria.trim();
+		if (reviewEnabled && !normalizedCriteria) return setFormError("启用评审循环时请填写成功标准");
 		setCreating(true);
 		setFormError(undefined);
 		try {
-			const created = await onCreate({ objective: normalizedObjective, ...(title.trim() ? { title: title.trim() } : {}) });
+			const created = await onCreate({
+				objective: normalizedObjective,
+				...(title.trim() ? { title: title.trim() } : {}),
+				...(reviewEnabled ? { successCriteria: normalizedCriteria, maxRounds } : {}),
+			});
 			setSelectedId(created.id);
 			setActionError(undefined);
 			setTitle("");
 			setObjective("");
+			setSuccessCriteria("");
 		} catch (cause) {
 			setFormError(cause instanceof Error ? cause.message : String(cause));
 		} finally {
@@ -1273,7 +1719,15 @@ function GoalsView({
 				<form className="subagent-create goal-create" onSubmit={(event) => void submit(event)}>
 					<label><span>目标</span><textarea rows={4} maxLength={20_000} required placeholder="交付内容与完成条件" value={objective} readOnly={disabled} onChange={(event) => setObjective(event.target.value)} /></label>
 					<label><span>名称</span><input maxLength={500} placeholder="自动生成" value={title} readOnly={disabled} onChange={(event) => setTitle(event.target.value)} /></label>
-					<button className="subagent-create-button" type="submit" disabled={disabled || creating || !objective.trim()}>{creating ? <RefreshCw className="spin" size={15} /> : <Plus size={15} />}{creating ? "正在创建..." : "创建目标"}</button>
+					<label className="goal-review-toggle">
+						<input type="checkbox" checked={reviewEnabled} disabled={disabled} onChange={(event) => setReviewEnabled(event.target.checked)} />
+						<span>启用评审循环</span>
+					</label>
+					{reviewEnabled && <>
+						<label><span>成功标准</span><textarea rows={3} maxLength={4000} required placeholder="评审判定通过的条件" value={successCriteria} readOnly={disabled} onChange={(event) => setSuccessCriteria(event.target.value)} /></label>
+						<label className="goal-rounds"><span>最大轮次</span><select aria-label="最大轮次" value={maxRounds} disabled={disabled} onChange={(event) => setMaxRounds(Number(event.target.value))}>{GOAL_REVIEW_ROUND_CHOICES.map((round) => <option value={round} key={round}>{round} 轮</option>)}</select></label>
+					</>}
+					<button className="subagent-create-button" type="submit" disabled={disabled || creating || !objective.trim() || (reviewEnabled && !successCriteria.trim())}>{creating ? <RefreshCw className="spin" size={15} /> : <Plus size={15} />}{creating ? "正在创建..." : "创建目标"}</button>
 				</form>
 				{archived && <div className="goal-readonly"><Archive size={14} />已归档会话为只读状态，无法创建或控制目标</div>}
 				{formError && <div className="workbench-error"><CircleAlert size={14} />{formError}</div>}
@@ -1306,6 +1760,28 @@ function GoalsView({
 						{actionError && <div className="workbench-error"><CircleAlert size={14} />{actionError}</div>}
 						<section className="subagent-section"><h2>目标</h2><p>{selected.objective}</p></section>
 						{selected.status === "pending" && <div className="goal-pending"><Hourglass size={15} /><span>目标已创建但尚未启动，点击“启动”开始后台执行。</span></div>}
+						{selected.successCriteria && <section className="subagent-section"><h2>成功标准</h2><p>{selected.successCriteria}</p></section>}
+						{selected.reviewPhase !== undefined && <section className="subagent-section goal-review-section">
+							<h2>评审循环</h2>
+							<div className="goal-review-meta">
+								<span className={`goal-review-phase phase-${selected.reviewPhase}`}><i />{GOAL_REVIEW_PHASE_LABELS[selected.reviewPhase]}</span>
+								{selected.maxRounds !== undefined && <span>{(selected.round ?? 0) >= 1 ? `第 ${selected.round}/${selected.maxRounds} 轮` : `最多 ${selected.maxRounds} 轮`}</span>}
+							</div>
+							{selected.reviewHistory !== undefined && selected.reviewHistory.length > 0
+								? <ol className="goal-review-history" aria-label="评审记录">
+									{selected.reviewHistory.map((record) => (
+										<li className={`goal-review-record verdict-${record.verdict}`} key={record.round}>
+											<div className="goal-review-record-heading">
+												<strong>第 {record.round} 轮</strong>
+												<span className="goal-review-verdict">{record.verdict === "pass" ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}{record.verdict === "pass" ? "通过" : "未通过"}</span>
+												<small>{formatRunTime(record.reviewedAt)}</small>
+											</div>
+											<p>{record.feedback || "评审未给出说明。"}</p>
+										</li>
+									))}
+								</ol>
+								: <p className="goal-review-empty">尚无评审记录。</p>}
+						</section>}
 						<section className="subagent-section goal-usage-section">
 							<h2>用量</h2>
 							<dl className="goal-usage">
@@ -1320,7 +1796,7 @@ function GoalsView({
 						{selected.pendingApprovals.map((approval) => <ApprovalPanel key={approval.id} approval={approval} onRespond={(decision) => onRespondApproval(approval.sessionId, approval.id, decision)} />)}
 						{selected.result !== undefined && <section className="subagent-section"><h2>结果</h2><pre>{selected.result || "目标已完成，但没有文本结果。"}</pre></section>}
 						{selected.error && <section className="subagent-error"><CircleAlert size={15} /><span>{selected.error}</span></section>}
-						{active && selected.pendingApprovals.length === 0 && <div className="subagent-running"><Activity size={17} /><span>{goalActivityLabel(selected.status)}</span></div>}
+						{active && selected.pendingApprovals.length === 0 && <div className="subagent-running"><Activity size={17} /><span>{goalActivityLabel(selected)}</span></div>}
 					</div>
 				</> : <div className="workbench-empty"><Target size={24} /><span>创建一个目标</span></div>}
 			</div>
@@ -1392,7 +1868,7 @@ function BudgetEditor({ snapshot, onSave }: { snapshot: SessionSnapshot; onSave:
 	);
 }
 
-function RightRail({ snapshot, runs, onSetBudget, onClose }: { snapshot: SessionSnapshot | undefined; runs: RunSummary[]; onSetBudget: (budget: { costBudgetUsd?: number | null; tokenBudget?: number | null; budgetWarningThreshold?: number }) => Promise<void>; onClose: () => void }) {
+function RightRail({ snapshot, runs, contextUsage, onSetBudget, onClose }: { snapshot: SessionSnapshot | undefined; runs: RunSummary[]; contextUsage: ContextUsage | undefined; onSetBudget: (budget: { costBudgetUsd?: number | null; tokenBudget?: number | null; budgetWarningThreshold?: number }) => Promise<void>; onClose: () => void }) {
 	return (
 		<aside className="right-rail">
 			<div className="rail-section">
@@ -1404,6 +1880,7 @@ function RightRail({ snapshot, runs, onSetBudget, onClose }: { snapshot: Session
 				<div className="kv"><span>后续任务队列</span><strong>{snapshot?.queuedFollowUpCount ?? 0}</strong></div>
 			</div>
 			<div className="rail-section">
+				{contextUsage && <ContextMeter usage={contextUsage} />}
 				{snapshot ? <BudgetEditor snapshot={snapshot} onSave={onSetBudget} /> : <><h2>用量</h2><div className="run-empty">未选择会话</div></>}
 			</div>
 			<div className="rail-section">
@@ -1454,11 +1931,7 @@ function SessionNavigation({
 	sessions,
 	selectedSessionId,
 	workspaceId,
-	archived,
-	query,
 	disabled,
-	onQueryChange,
-	onCollectionChange,
 	onRefresh,
 	onSelect,
 	onRename,
@@ -1467,11 +1940,7 @@ function SessionNavigation({
 	sessions: SessionSummary[];
 	selectedSessionId?: string;
 	workspaceId?: string;
-	archived: boolean;
-	query: string;
 	disabled: boolean;
-	onQueryChange: (query: string) => void;
-	onCollectionChange: (archived: boolean) => Promise<void>;
 	onRefresh: (workspaceId: string, options: { query?: string; archived?: boolean }) => Promise<SessionSummary[]>;
 	onSelect: (sessionId: string) => void;
 	onRename: (sessionId: string, name: string) => Promise<void>;
@@ -1485,10 +1954,10 @@ function SessionNavigation({
 	useEffect(() => {
 		if (!workspaceId || disabled) return;
 		const timer = setTimeout(() => {
-			void onRefresh(workspaceId, { query, archived }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+			void onRefresh(workspaceId, { archived: false }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
 		}, 180);
 		return () => clearTimeout(timer);
-	}, [archived, disabled, onRefresh, query, workspaceId]);
+	}, [disabled, onRefresh, workspaceId]);
 
 	const submitRename = async (event: FormEvent) => {
 		event.preventDefault();
@@ -1507,148 +1976,759 @@ function SessionNavigation({
 
 	return (
 		<div className="session-browser">
-			<div className="session-browser-heading">
-				<span className="nav-label">{archived ? "已归档" : "会话"}</span>
-				<button
-					type="button"
-					className={`session-collection-toggle ${archived ? "pressed" : ""}`}
-					title={archived ? "显示活跃会话" : "显示已归档会话"}
-					disabled={disabled || !workspaceId}
-					onClick={() => {
-						setError(undefined);
-						void onCollectionChange(!archived).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-					}}
-				>
-					{archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-				</button>
-			</div>
-			<label className="session-search">
-				<Search size={14} />
-				<input aria-label="搜索会话" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索会话" />
-				{query && <button type="button" title="清空搜索" onClick={() => onQueryChange("")}><X size={13} /></button>}
-			</label>
-			<nav className="session-nav" aria-label={archived ? "已归档会话" : "会话"}>
+			<nav className="session-nav" aria-label="会话">
 				{sessions.map((session) => (
 					<div className={`session-entry ${selectedSessionId === session.id ? "selected" : ""}`} key={session.id}>
 						{renamingId === session.id ? (
 							<form className="session-rename" onSubmit={(event) => void submitRename(event)}>
-								<input aria-label="会话名称" autoFocus maxLength={500} value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} />
+								<input aria-label="会话名称" autoFocus maxLength={500} placeholder="输入会话标题" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} />
 								<button type="submit" title="保存名称" disabled={!nameDraft.trim() || busyId === session.id}><Check size={13} /></button>
 								<button type="button" title="取消重命名" onClick={() => setRenamingId(undefined)}><X size={13} /></button>
 							</form>
 						) : (
 							<>
 								<button className="session-open" type="button" onClick={() => onSelect(session.id)}>
-									<MessageSquareCode size={15} />
-									<span>{session.name || "未命名会话"}</span>
+									<span>{session.name || DEFAULT_SESSION_TITLE}</span>
 									<i className={`session-phase dot-${session.phase}`} />
 								</button>
 								<div className="session-actions">
-									<button type="button" title="重命名会话" disabled={session.phase !== "idle" || busyId === session.id} onClick={() => { setRenamingId(session.id); setNameDraft(session.name || "未命名会话"); }}><Pencil size={12} /></button>
+									<button type="button" title="重命名会话" disabled={session.phase !== "idle" || busyId === session.id} onClick={() => { setRenamingId(session.id); setNameDraft(session.name || ""); }}><Pencil size={12} /></button>
 									<button
 										type="button"
-										title={archived ? "恢复会话" : "归档会话"}
+										title="归档会话"
 										disabled={session.phase !== "idle" || busyId === session.id}
 										onClick={() => {
 											setBusyId(session.id);
 											setError(undefined);
-											void onArchive(session.id, !archived)
+											void onArchive(session.id, true)
 												.catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
 												.finally(() => setBusyId(undefined));
 										}}
 									>
-										{archived ? <ArchiveRestore size={12} /> : <Archive size={12} />}
+										<Archive size={12} />
 									</button>
 								</div>
 							</>
 						)}
 					</div>
 				))}
-				{sessions.length === 0 && <div className="session-list-empty">暂无{archived ? "已归档" : ""}会话</div>}
+				{sessions.length === 0 && <div className="session-list-empty">暂无会话</div>}
 			</nav>
 			{error && <div className="session-list-error"><CircleAlert size={13} />{error}</div>}
 		</div>
 	);
 }
 
+function ProjectNavigationItem({
+	workspace,
+	selected,
+	expanded,
+	disabled,
+	removeDisabled,
+	onToggle,
+	onNewSession,
+	onRename,
+	onRemove,
+	children,
+}: {
+	workspace: WorkspaceSummary;
+	selected: boolean;
+	expanded: boolean;
+	disabled: boolean;
+	removeDisabled: boolean;
+	onToggle: () => void;
+	onNewSession: () => Promise<void>;
+	onRename: (name: string) => Promise<unknown>;
+	onRemove: () => Promise<void>;
+	children?: ReactNode;
+}) {
+	const rootRef = useRef<HTMLDivElement>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
+	const [renaming, setRenaming] = useState(false);
+	const [nameDraft, setNameDraft] = useState(workspace.name);
+	const [removeOpen, setRemoveOpen] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string>();
+
+	useEffect(() => {
+		if (!menuOpen) return;
+		const closeOutside = (event: PointerEvent) => {
+			if (!rootRef.current?.contains(event.target as Node)) setMenuOpen(false);
+		};
+		const closeWithEscape = (event: KeyboardEvent) => {
+			if (event.key === "Escape") setMenuOpen(false);
+		};
+		document.addEventListener("pointerdown", closeOutside);
+		document.addEventListener("keydown", closeWithEscape);
+		return () => {
+			document.removeEventListener("pointerdown", closeOutside);
+			document.removeEventListener("keydown", closeWithEscape);
+		};
+	}, [menuOpen]);
+
+	const submitRename = async (event: FormEvent) => {
+		event.preventDefault();
+		if (!nameDraft.trim()) return;
+		setBusy(true);
+		setError(undefined);
+		try {
+			await onRename(nameDraft.trim());
+			setRenaming(false);
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : String(cause));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const runNewSession = async () => {
+		setMenuOpen(false);
+		setBusy(true);
+		setError(undefined);
+		try { await onNewSession(); }
+		catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+		finally { setBusy(false); }
+	};
+
+	const remove = async () => {
+		setBusy(true);
+		setError(undefined);
+		try {
+			await onRemove();
+			setRemoveOpen(false);
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : String(cause));
+			setBusy(false);
+		}
+	};
+
+	return <div ref={rootRef} className={`project-node ${expanded ? "expanded" : ""}`}>
+		<div className="project-row-wrap" onContextMenu={(event) => { event.preventDefault(); if (!disabled && !renaming) setMenuOpen(true); }}>
+			{renaming ? <form className="project-rename" onSubmit={(event) => void submitRename(event)}>
+				<Folder size={17} />
+				<input aria-label="项目名称" autoFocus maxLength={500} value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} />
+				<button type="submit" title="保存名称" disabled={busy || !nameDraft.trim()}><Check size={13} /></button>
+				<button type="button" title="取消重命名" disabled={busy} onClick={() => { setRenaming(false); setNameDraft(workspace.name); }}><X size={13} /></button>
+			</form> : <>
+				<button className={`project-row ${selected ? "selected" : ""}`} type="button" aria-expanded={expanded} onClick={onToggle}>
+					{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+					<Folder size={17} />
+					<span>{workspaceName(workspace.name)}</span>
+				</button>
+				<button className="project-more" type="button" aria-label={`${workspaceName(workspace.name)} 项目菜单`} aria-expanded={menuOpen} title="项目操作" disabled={disabled || busy} onClick={(event) => { event.stopPropagation(); setMenuOpen((open) => !open); }}><MoreHorizontal size={16} /></button>
+			</>}
+			{menuOpen && <div className="project-menu" role="menu">
+				<button type="button" role="menuitem" onClick={() => void runNewSession()}><Plus size={14} /><span>新建会话</span></button>
+				<button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setNameDraft(workspace.name); setRenaming(true); }}><Pencil size={14} /><span>重命名项目</span></button>
+				<div className="project-menu-separator" />
+				<button className="danger" type="button" role="menuitem" disabled={removeDisabled} title={removeDisabled ? "请先停止正在运行的会话" : undefined} onClick={() => { setMenuOpen(false); setRemoveOpen(true); }}><Trash2 size={14} /><span>从侧边栏移除</span></button>
+			</div>}
+		</div>
+		{error && <div className="project-action-error"><CircleAlert size={13} />{error}</div>}
+		{children}
+		{removeOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => !busy && setRemoveOpen(false)}>
+			<div className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby={`remove-project-${workspace.id}`} onMouseDown={(event) => event.stopPropagation()}>
+				<div className="confirm-dialog-icon"><Trash2 size={18} /></div>
+				<div><h2 id={`remove-project-${workspace.id}`}>移除“{workspaceName(workspace.name)}”？</h2><p>项目会从侧边栏移除，磁盘上的文件和历史会话不会被删除。</p></div>
+				{error && <div className="settings-error" role="alert">{error}</div>}
+				<div className="confirm-dialog-actions"><button type="button" disabled={busy} onClick={() => setRemoveOpen(false)}>取消</button><button className="danger" type="button" disabled={busy} onClick={() => void remove()}>{busy ? "正在移除..." : "移除"}</button></div>
+			</div>
+		</div>}
+	</div>;
+}
+
 export function App() {
 	const client = useWumingClient();
 	const [workbenchView, setWorkbenchView] = useState<"chat" | "agents" | "goals" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp">("chat");
 	const [mobileNav, setMobileNav] = useState(false);
+	const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true");
+	const [sidebarWidth, setSidebarWidth] = useState(storedSidebarWidth);
+	const [resizingSidebar, setResizingSidebar] = useState(false);
 	const [showRight, setShowRight] = useState(() => window.innerWidth > 1080);
-	const [settingsOpen, setSettingsOpen] = useState(false);
-	const [sessionQuery, setSessionQuery] = useState("");
-	const [showArchived, setShowArchived] = useState(false);
+	const [onboarding, setOnboarding] = useState(() => localStorage.getItem(ONBOARDING_STORAGE_KEY) !== "true");
+	const [settingsOpen, setSettingsOpen] = useState(() => localStorage.getItem(ONBOARDING_STORAGE_KEY) !== "true");
+	const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+	const [paletteOpen, setPaletteOpen] = useState(false);
+	const [shortcutsOpen, setShortcutsOpen] = useState(false);
+	const theme = useTheme();
+	const [collapsedProjectIds, setCollapsedProjectIds] = useState(() => new Set<string>());
 	const [tokenDraft, setTokenDraft] = useState(client.token);
-	const endRef = useRef<HTMLDivElement>(null);
+	const [connectSubmitted, setConnectSubmitted] = useState(false);
+	const [editingItemId, setEditingItemId] = useState<string>();
+	const [messageBusyId, setMessageBusyId] = useState<string>();
+	const [messageError, setMessageError] = useState<{ itemId: string; message: string }>();
+	const transcriptRef = useRef<HTMLDivElement>(null);
+	// The transcript follows new output only while the reader is at the tail.
+	// Scrolling up to re-read something has to survive the next delta.
+	const [following, setFollowing] = useState(true);
+	const [pendingTail, setPendingTail] = useState(false);
+	const seenTailRef = useRef(0);
+	const pinnedAtRef = useRef<number | undefined>(undefined);
 	const localGateway = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+	const onboardingRequiresModel = onboarding
+		&& client.connection === "connected"
+		&& client.capabilities.includes("model.custom")
+		&& !client.models.some((model) => model.authenticated);
+	const closeSettings = useCallback(() => {
+		if (onboarding && (client.connection !== "connected" || onboardingRequiresModel)) return;
+		if (onboarding) {
+			localStorage.setItem(ONBOARDING_STORAGE_KEY, "true");
+			setOnboarding(false);
+		}
+		setSettingsOpen(false);
+	}, [client.connection, onboarding, onboardingRequiresModel]);
+	const toggleSidebar = useCallback(() => {
+		setSidebarCollapsed((collapsed) => {
+			const next = !collapsed;
+			localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(next));
+			return next;
+		});
+	}, []);
+	const setAndStoreSidebarWidth = useCallback((width: number) => {
+		const next = clampSidebarWidth(width);
+		setSidebarWidth(next);
+		localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(next));
+	}, []);
+	const beginSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		const startX = event.clientX;
+		const startWidth = sidebarWidth;
+		let finalWidth = startWidth;
+		setResizingSidebar(true);
+		const move = (moveEvent: PointerEvent) => {
+			finalWidth = clampSidebarWidth(startWidth + moveEvent.clientX - startX);
+			setSidebarWidth(finalWidth);
+		};
+		const stop = () => {
+			localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(finalWidth));
+			setResizingSidebar(false);
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", stop);
+			window.removeEventListener("pointercancel", stop);
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", stop);
+		window.addEventListener("pointercancel", stop);
+	}, [sidebarWidth]);
+	const resizeSidebarWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+		const step = event.shiftKey ? 32 : 8;
+		const next = event.key === "ArrowLeft"
+			? sidebarWidth - step
+			: event.key === "ArrowRight"
+				? sidebarWidth + step
+				: event.key === "Home"
+					? MIN_SIDEBAR_WIDTH
+					: event.key === "End"
+						? MAX_SIDEBAR_WIDTH
+						: undefined;
+		if (next === undefined) return;
+		event.preventDefault();
+		setAndStoreSidebarWidth(next);
+	}, [setAndStoreSidebarWidth, sidebarWidth]);
+	const connectGateway = (event: FormEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		const password = tokenDraft.trim();
+		if (!password) return;
+		setConnectSubmitted(true);
+		client.setToken(password);
+	};
 	const active = ["turn", "awaiting_approval", "compaction", "retry"].includes(client.snapshot?.session.phase ?? "idle");
 	const selectedWorkspace = client.workspaces.find((workspace) => workspace.id === client.selectedWorkspaceId) ?? client.workspaces[0];
-	const composerModels = client.models.filter((model) => model.custom === true);
+	const implicitWorkspace = useMemo(() => client.workspaces.find((workspace) => isImplicitWorkspace(workspace)), [client.workspaces]);
+	const projectWorkspaces = useMemo(() => client.workspaces.filter((workspace) => !isImplicitWorkspace(workspace)), [client.workspaces]);
+	const selectedProject = isImplicitWorkspace(selectedWorkspace) ? undefined : selectedWorkspace;
+	// Custom models are always usable; built-ins only once the gateway reports
+	// working credentials for them.
+	const composerModels = client.models.filter((model) => model.custom === true || model.authenticated);
 	const selectedModel = composerModels.find((model) =>
 		model.model.provider === client.selectedModel?.provider && model.model.id === client.selectedModel.id,
 	) ?? composerModels[0];
-	const showThinkingActivity = client.snapshot !== undefined
-		&& ["turn", "retry", "compaction"].includes(client.snapshot.session.phase)
-		&& Object.keys(client.liveAssistants).length === 0
-		&& Object.keys(client.liveTools).length === 0;
+	// Context occupancy is judged against the model the session actually runs on,
+	// which can differ from the one queued in the composer.
+	const sessionModel = client.models.find((model) =>
+		model.model.provider === client.snapshot?.model.provider && model.model.id === client.snapshot.model.id,
+	);
+	const contextUsage = estimateContext(client.snapshot, sessionModel?.contextWindow);
+	const transcript = client.snapshot?.transcript;
+	const reasoningPhase = client.snapshot !== undefined
+		&& ["turn", "retry", "compaction"].includes(client.snapshot.session.phase);
+	const liveAssistantItems = Object.values(client.liveAssistants).filter((item) => item.thinking.trim() !== "" || item.text.trim() !== "");
+	const liveAssistantLength = liveAssistantItems.reduce((length, item) => length + item.thinking.length + item.text.length, 0);
+	const showThinkingActivity = reasoningPhase && liveAssistantItems.length === 0;
+	const activeTurnStart = reasoningPhase ? latestUserItemIndex(transcript ?? []) : Number.MAX_SAFE_INTEGER;
+	// Tool calls appear twice in a snapshot: as a part of the assistant message
+	// that requested them and as a tool item once they start. Cards render from
+	// the item, so the inline part is suppressed and only lends its arguments.
+	const toolCalls = useMemo(() => {
+		const rendered = new Set<string>();
+		const inputs = new Map<string, unknown>();
+		for (const item of transcript ?? []) {
+			if (item.type === "tool") {
+				rendered.add(item.toolCallId);
+				inputs.set(item.toolCallId, item.input);
+				continue;
+			}
+			if (item.type !== "assistant") continue;
+			for (const part of item.content) {
+				if (part.type === "tool_call" && !inputs.has(part.toolCallId)) inputs.set(part.toolCallId, part.input);
+			}
+		}
+		return { rendered, inputs };
+	}, [transcript]);
+
+	// Message-level actions. Both branching actions need an idle, writable,
+	// connected session, so they share one gate and one explanation of it.
+	const branchDisabled = client.connection !== "connected" || active || client.snapshot?.session.archivedAt !== undefined;
+	const branchTitle = client.snapshot?.session.archivedAt !== undefined
+		? "已归档会话为只读状态"
+		: client.connection !== "connected"
+			? "未连接到网关"
+			: active
+				? "会话正在运行，结束后可分叉"
+				: "";
+	const runMessageAction = async (itemId: string, action: () => Promise<void>) => {
+		setMessageBusyId(itemId);
+		setMessageError(undefined);
+		try {
+			await action();
+			setEditingItemId(undefined);
+		} catch (cause) {
+			setMessageError({ itemId, message: cause instanceof Error ? cause.message : String(cause) });
+		} finally {
+			setMessageBusyId(undefined);
+		}
+	};
+	const resendMessage = (itemId: string, text: string) => void runMessageAction(itemId, async () => {
+		const anchor = anchorBefore(transcript ?? [], itemId);
+		// An anchorless fork copies the *entire* transcript, so the first message of
+		// a session has to be re-sent into a brand-new one instead.
+		if (anchor === undefined) await client.createSession();
+		else await client.forkSession(anchor);
+		await client.sendPrompt(text);
+	});
+	const messageActions = (item: TranscriptItem): MessageActionState => ({
+		editing: editingItemId === item.id,
+		busy: messageBusyId === item.id,
+		branchDisabled,
+		branchTitle,
+		error: messageError?.itemId === item.id ? messageError.message : undefined,
+		onFork: () => void runMessageAction(item.id, () => client.forkSession(item.id)),
+		onEditStart: () => {
+			setMessageError(undefined);
+			setEditingItemId(item.id);
+		},
+		onEditCancel: () => setEditingItemId(undefined),
+		onEditSubmit: (text) => resendMessage(item.id, text),
+	});
+
+	// Only chase the tail while the reader is parked at it: an unconditional
+	// scrollIntoView here used to drag the view back down on every streamed delta,
+	// which made it impossible to read earlier output during a running turn.
+	//
+	// The guard cannot rely on the scroll handler alone. Scroll events are
+	// delivered at frame time, so with deltas landing every few milliseconds a
+	// pin could fire in between and undo the reader's scroll before React ever
+	// heard about it. Comparing against the offset this effect last pinned makes
+	// the decision synchronous: a scrollTop that no longer matches means the
+	// reader moved, and appended content alone never moves it.
+	useEffect(() => {
+		const element = transcriptRef.current;
+		if (!element || !following) return;
+		const pinned = pinnedAtRef.current;
+		if (pinned !== undefined && Math.abs(element.scrollTop - pinned) > 1 && !isNearBottom(element)) {
+			setFollowing(false);
+			return;
+		}
+		element.scrollTop = element.scrollHeight;
+		pinnedAtRef.current = element.scrollTop;
+	}, [following, client.snapshot?.transcript.length, client.snapshot?.pendingApprovals.length, liveAssistantLength, showThinkingActivity]);
+
+	// How much output the tail holds. Item counts alone would miss a streaming
+	// reply, whose deltas grow one live item in place, so the live text counts too.
+	const tailSignal = useMemo(() => {
+		let signal = transcript?.length ?? 0;
+		signal += liveAssistantLength;
+		signal += client.snapshot?.pendingApprovals.length ?? 0;
+		return signal;
+	}, [transcript, client.snapshot?.pendingApprovals.length, liveAssistantLength]);
+
+	// Distinguishes "you scrolled up" from "you scrolled up and missed something",
+	// so the pill only claims new content when content actually arrived.
+	useEffect(() => {
+		if (following) {
+			seenTailRef.current = tailSignal;
+			setPendingTail(false);
+			return;
+		}
+		setPendingTail(tailSignal > seenTailRef.current);
+	}, [following, tailSignal]);
+
+	const jumpToLatest = () => {
+		const element = transcriptRef.current;
+		if (element) {
+			element.scrollTop = element.scrollHeight;
+			pinnedAtRef.current = element.scrollTop;
+		}
+		setFollowing(true);
+	};
+
+	// Item ids survive a fork, so an open editor would otherwise reappear on the
+	// copy of the message in whichever session is attached next.
+	useEffect(() => {
+		setEditingItemId(undefined);
+		setMessageError(undefined);
+		setFollowing(true);
+		pinnedAtRef.current = undefined;
+	}, [client.snapshot?.session.id]);
+
+	const sessionId = client.snapshot?.session.id;
+	const thinkingLevel = client.snapshot?.thinkingLevel;
+	const canCompact = client.capabilities.includes("session.compaction");
+	const demoRuntime = client.toolRuntime === "demo";
+	// Slash commands act on the shell and the session. They are memoised because
+	// the composer resets its highlighted row whenever the list identity changes.
+	const composerCommands = useMemo<ComposerCommand[]>(() => {
+		const panel = (
+			name: string,
+			title: string,
+			hint: string,
+			view: "chat" | "agents" | "goals" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp",
+			icon: ReactNode,
+		): ComposerCommand => ({ name, title, hint, kind: "action", icon, run: () => setWorkbenchView(view) });
+		const commands: ComposerCommand[] = [
+			{
+				name: "new",
+				title: "新建会话",
+				hint: "新建 会话 new session",
+				kind: "action",
+				icon: <Plus size={14} />,
+				run: async () => {
+					await client.createSession();
+				},
+			},
+			{
+				name: "fork",
+				title: "从当前会话分叉出副本",
+				hint: "分叉 复制 branch",
+				kind: "action",
+				icon: <GitBranch size={14} />,
+				run: () => client.forkSession(),
+			},
+			{
+				name: "rename",
+				title: "重命名当前会话",
+				hint: "重命名 改名",
+				kind: "action",
+				argumentHint: "<名称>",
+				icon: <Pencil size={14} />,
+				run: async (argument) => {
+					if (!sessionId) throw new Error("未选择会话");
+					if (!argument) throw new Error("请提供新的会话名称，例如 /rename 需求梳理");
+					await client.renameSession(sessionId, argument);
+				},
+			},
+			{
+				name: "archive",
+				title: "归档当前会话",
+				hint: "归档 结束",
+				kind: "action",
+				icon: <Archive size={14} />,
+				run: async () => {
+					if (!sessionId) throw new Error("未选择会话");
+					await client.archiveSession(sessionId, true);
+				},
+			},
+			{
+				name: "think",
+				title: `思考强度${thinkingLevel ? `（当前 ${thinkingLevel}）` : ""}`,
+				hint: "思考 推理 thinking",
+				kind: "action",
+				argumentHint: "<off|low|medium|high|max>",
+				icon: <BrainCircuit size={14} />,
+				run: async (argument) => {
+					const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+					const level = levels.find((candidate) => candidate === argument);
+					if (!level) throw new Error(`请提供思考强度：${levels.join(" / ")}`);
+					await client.setSessionThinking(level);
+				},
+			},
+			...(canCompact
+				? [{
+					name: "compact",
+					title: "压缩上下文，可附带保留要求",
+					hint: "压缩 精简 compact",
+					kind: "action" as const,
+					argumentHint: "[保留要求]",
+					icon: <Sparkles size={14} />,
+					run: (argument: string) => client.compactSession(argument || undefined).then(() => undefined),
+				}]
+				: []),
+			panel("files", "打开文件面板", "文件 目录", "files", <Folder size={14} />),
+			panel("changes", "打开更改面板", "更改 diff 变更", "changes", <GitCompareArrows size={14} />),
+			panel("terminal", "打开终端", "终端 命令行", "terminal", <TerminalSquare size={14} />),
+			panel("tools", "查看工具清单", "工具", "tools", <Wrench size={14} />),
+			panel("skills", "查看技能", "技能", "skills", <BookOpen size={14} />),
+			panel("mcp", "查看 MCP 服务", "mcp 服务", "mcp", <Plug size={14} />),
+			panel("agents", "查看子智能体", "智能体 子代理", "agents", <Bot size={14} />),
+			panel("goals", "查看目标", "目标", "goals", <Target size={14} />),
+			panel("chat", "回到对话", "对话 聊天", "chat", <MessageSquareCode size={14} />),
+		];
+		if (demoRuntime) {
+			for (const [name, title] of [
+				["demo-rich", "演示：完整工具卡片与富文本"],
+				["approval", "演示：触发一次工具批准"],
+				["long", "演示：长流式输出"],
+				["inject", "演示：注入一条记录"],
+				["retry-once", "演示：首次失败后自动重试"],
+			] as const) {
+				commands.push({ name, title, hint: "演示 demo", kind: "prompt", icon: <Play size={14} /> });
+			}
+		}
+		return commands;
+	}, [canCompact, client, demoRuntime, sessionId, thinkingLevel]);
+
+	// The palette is the mouse-and-keyboard twin of the slash registry: the same
+	// commands, plus the navigation that has no place in a prompt.
+	const paletteEntries = useMemo<PaletteEntry[]>(() => {
+		const entries: PaletteEntry[] = composerCommands.map((command) => ({
+			id: `command:${command.name}`,
+			group: "命令",
+			label: `/${command.name}`,
+			detail: command.title,
+			badge: command.kind === "prompt" ? "发送给运行时" : command.argumentHint ? "需要参数" : undefined,
+			icon: command.icon,
+			keywords: [command.hint ?? ""],
+			argumentHint: command.argumentHint,
+			run: command.kind === "prompt"
+				? () => client.sendPrompt(`/${command.name}`, [], "steer")
+				: (argument: string) => command.run?.(argument),
+		}));
+		for (const session of client.sessions) {
+			if (session.id === sessionId) continue;
+			entries.push({
+				id: `session:${session.id}`,
+				group: "会话",
+				label: session.name || DEFAULT_SESSION_TITLE,
+				detail: statusLabel(session.phase),
+				badge: session.archivedAt === undefined ? undefined : "已归档",
+				icon: <MessageSquareCode size={14} />,
+				keywords: [session.id],
+				run: () => client.attachSession(session.id).then(() => undefined),
+			});
+		}
+		if (projectWorkspaces.length > 0) {
+			for (const workspace of projectWorkspaces) {
+				if (workspace.id === selectedWorkspace?.id) continue;
+				entries.push({
+					id: `workspace:${workspace.id}`,
+					group: "工作区",
+					label: workspaceName(workspace.name),
+					detail: "切换工作区",
+					icon: <Folder size={14} />,
+					run: () => client.selectWorkspace(workspace.id),
+				});
+			}
+		}
+		entries.push(
+			{
+				id: "shell:sidebar",
+				group: "外壳",
+				label: sidebarCollapsed ? "展开侧边栏" : "收起侧边栏",
+				detail: `${modifierLabel()} B`,
+				icon: sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />,
+				keywords: ["左侧栏 sidebar"],
+				run: toggleSidebar,
+			},
+			{
+				id: "shell:rail",
+				group: "外壳",
+				label: showRight ? "隐藏运行面板" : "显示运行面板",
+				detail: `${modifierLabel()} Shift B`,
+				icon: <PanelRight size={14} />,
+				keywords: ["运行面板 rail"],
+				run: () => setShowRight((value) => !value),
+			},
+			{
+				id: "shell:shortcuts",
+				group: "外壳",
+				label: "查看快捷键",
+				detail: `${modifierLabel()} /`,
+				icon: <Command size={14} />,
+				keywords: ["快捷键 shortcuts"],
+				run: () => setShortcutsOpen(true),
+			},
+			{
+				id: "shell:theme",
+				group: "外壳",
+				label: theme.resolved === "dark" ? "切换到浅色主题" : "切换到深色主题",
+				detail: `当前：${themeLabel(theme.choice)}`,
+				icon: theme.resolved === "dark" ? <Sun size={14} /> : <MoonStar size={14} />,
+				keywords: ["主题 theme 深色 dark 浅色 light"],
+				run: () => theme.toggle(),
+			},
+			{
+				id: "shell:theme-system",
+				group: "外壳",
+				label: "主题跟随系统",
+				detail: "由操作系统决定深浅",
+				icon: <MoonStar size={14} />,
+				keywords: ["主题 theme system 系统"],
+				run: () => theme.setChoice("system"),
+			},
+			{
+				id: "shell:settings",
+				group: "外壳",
+				label: "打开设置",
+				detail: "网关连接与模型",
+				icon: <Settings size={14} />,
+				keywords: ["设置 settings"],
+				run: () => setSettingsOpen(true),
+			},
+		);
+		return entries;
+	}, [client, composerCommands, projectWorkspaces, selectedWorkspace?.id, sessionId, showRight, sidebarCollapsed, theme, toggleSidebar]);
 
 	useEffect(() => {
-		endRef.current?.scrollIntoView({ block: "end" });
-	}, [client.snapshot?.transcript.length, client.liveAssistants, client.liveTools, showThinkingActivity]);
+		const onKeyDown = (event: KeyboardEvent) => {
+			// A component that already handled the chord marks it, so the composer's
+			// own Escape and Enter bindings keep priority over the shell's.
+			if (event.defaultPrevented) return;
+			const chord = event.metaKey || event.ctrlKey;
+			const key = event.key.toLowerCase();
+			if (chord && key === "k") {
+				event.preventDefault();
+				setPaletteOpen((open) => !open);
+				return;
+			}
+			if (chord && key === "b") {
+				event.preventDefault();
+				if (event.shiftKey) setShowRight((value) => !value);
+				else toggleSidebar();
+				return;
+			}
+			if (chord && key === "/") {
+				event.preventDefault();
+				setShortcutsOpen((open) => !open);
+				return;
+			}
+			if (event.key !== "Escape") return;
+			// Overlays unwind from the top; with nothing stacked, Escape is the
+			// fastest way to stop a running turn.
+			if (projectDialogOpen) setProjectDialogOpen(false);
+			else if (paletteOpen) setPaletteOpen(false);
+			else if (shortcutsOpen) setShortcutsOpen(false);
+			else if (settingsOpen) closeSettings();
+			else if (mobileNav) setMobileNav(false);
+			else if (active) void client.abortTurn().catch(() => undefined);
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [active, client, closeSettings, mobileNav, paletteOpen, projectDialogOpen, settingsOpen, shortcutsOpen, toggleSidebar]);
 
 	return (
-		<div className={`app-shell ${showRight && workbenchView === "chat" ? "with-right" : ""}`}>
+		<div
+			className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${resizingSidebar ? "resizing-sidebar" : ""} ${showRight && workbenchView === "chat" ? "with-right" : ""}`}
+			style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+		>
 			<aside className={`sidebar ${mobileNav ? "mobile-open" : ""}`}>
 				<div className="brand-row">
 					<div className="brand-mark">W</div>
 					<strong>Wuming</strong>
+					<button className="icon-button desktop-sidebar-toggle" type="button" title={`收起侧边栏（${modifierLabel()} B）`} aria-label="收起侧边栏" onClick={toggleSidebar}><PanelLeftClose size={18} /></button>
 					<button className="icon-button mobile-close" title="关闭导航" onClick={() => setMobileNav(false)}><X size={18} /></button>
 				</div>
-				<label className="workspace-select">
-					<span>工作区</span>
-					<select
-						aria-label="工作区"
-						value={selectedWorkspace?.id ?? ""}
-						disabled={client.connection !== "connected" || client.workspaces.length === 0}
-						onChange={(event) => void client.selectWorkspace(event.target.value)}
-					>
-						{client.workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspaceName(workspace.name)}</option>)}
-					</select>
-					<ChevronDown size={15} />
-				</label>
-				<button className="new-session" onClick={() => { setSessionQuery(""); setShowArchived(false); void client.createSession(); }} disabled={client.connection !== "connected" || !client.models.length}>
-					<Plus size={16} /> 新建会话
-				</button>
-				<SessionNavigation
-					sessions={client.sessions}
-					{...(client.snapshot ? { selectedSessionId: client.snapshot.session.id } : {})}
-					{...(selectedWorkspace ? { workspaceId: selectedWorkspace.id } : {})}
-					archived={showArchived}
-					query={sessionQuery}
-					disabled={client.connection !== "connected"}
-					onQueryChange={setSessionQuery}
-					onCollectionChange={async (archived) => {
-						if (!selectedWorkspace) return;
-						setShowArchived(archived);
-						await client.browseSessions(selectedWorkspace.id, { query: sessionQuery, archived });
-					}}
-					onRefresh={client.refreshSessions}
-					onSelect={(sessionId) => { void client.attachSession(sessionId); setMobileNav(false); }}
-					onRename={client.renameSession}
-					onArchive={client.archiveSession}
-				/>
+				<section className="project-section">
+					<div className="project-section-heading">
+						<span className="nav-label">项目</span>
+						<div className="project-heading-actions">
+							<button type="button" title="新建会话" onClick={() => void client.createSession()} disabled={client.connection !== "connected" || !client.models.length || !selectedWorkspace}><Plus size={15} /></button>
+							<button type="button" title="打开项目" disabled={client.connection !== "connected"} onClick={() => setProjectDialogOpen(true)}><FolderOpen size={16} /></button>
+						</div>
+					</div>
+					<nav className="project-tree" aria-label="项目">
+						{implicitWorkspace && isImplicitWorkspace(selectedWorkspace) && (
+							<div className="projectless-conversations">
+								<SessionNavigation
+									sessions={client.sessions}
+									{...(client.snapshot ? { selectedSessionId: client.snapshot.session.id } : {})}
+									workspaceId={implicitWorkspace.id}
+									disabled={client.connection !== "connected"}
+									onRefresh={client.refreshSessions}
+									onSelect={(sessionId) => { void client.attachSession(sessionId); setMobileNav(false); }}
+									onRename={client.renameSession}
+									onArchive={client.archiveSession}
+								/>
+							</div>
+						)}
+						{projectWorkspaces.map((workspace) => {
+							const selected = workspace.id === selectedWorkspace?.id;
+							const expanded = selected && !collapsedProjectIds.has(workspace.id);
+							return <ProjectNavigationItem
+								key={workspace.id}
+								workspace={workspace}
+								selected={selected}
+								expanded={expanded}
+								disabled={client.connection !== "connected"}
+								removeDisabled={selected && active}
+								onToggle={() => {
+										setCollapsedProjectIds((current) => {
+											const next = new Set(current);
+											if (selected && expanded) next.add(workspace.id);
+											else next.delete(workspace.id);
+											return next;
+										});
+										if (!selected) void client.selectWorkspace(workspace.id);
+								}}
+								onNewSession={() => client.createSessionInWorkspace(workspace.id)}
+								onRename={(name) => client.renameProject(workspace.id, name)}
+								onRemove={() => client.removeProject(workspace.id)}
+							>
+								{expanded && <div className="project-conversations">
+									<SessionNavigation
+										sessions={client.sessions}
+										{...(client.snapshot ? { selectedSessionId: client.snapshot.session.id } : {})}
+										workspaceId={workspace.id}
+										disabled={client.connection !== "connected"}
+										onRefresh={client.refreshSessions}
+										onSelect={(sessionId) => { void client.attachSession(sessionId); setMobileNav(false); }}
+										onRename={client.renameSession}
+										onArchive={client.archiveSession}
+									/>
+								</div>}
+							</ProjectNavigationItem>;
+						})}
+						{client.workspaces.length === 0 && <div className="project-tree-empty">暂无项目</div>}
+					</nav>
+				</section>
 				<div className="sidebar-footer">
 					<button onClick={() => { setMobileNav(false); setSettingsOpen(true); }}><Settings size={16} /> 设置</button>
 					<div className={`connection ${client.connection}`}><i />{statusLabel(client.connection)}</div>
 				</div>
 			</aside>
+			{!sidebarCollapsed && <div
+				className="sidebar-resizer"
+				role="separator"
+				aria-label="调整侧边栏宽度"
+				aria-orientation="vertical"
+				aria-valuemin={MIN_SIDEBAR_WIDTH}
+				aria-valuemax={MAX_SIDEBAR_WIDTH}
+				aria-valuenow={sidebarWidth}
+				tabIndex={0}
+				onPointerDown={beginSidebarResize}
+				onKeyDown={resizeSidebarWithKeyboard}
+				onDoubleClick={() => setAndStoreSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
+			/>}
 
 			<main className="workspace-main">
 				<header className="topbar">
 					<div className="topbar-title">
 						<button className="icon-button mobile-menu" title="打开导航" onClick={() => setMobileNav(true)}><Menu size={19} /></button>
-							<div><h1>{client.snapshot?.session.name || "新会话"}</h1><span>{client.snapshot?.session.archivedAt ? "已归档 · " : ""}{selectedWorkspace ? workspaceName(selectedWorkspace.name) : "本地工作区"}</span></div>
+						{sidebarCollapsed && <button className="icon-button desktop-sidebar-toggle sidebar-open-button" type="button" title={`展开侧边栏（${modifierLabel()} B）`} aria-label="展开侧边栏" onClick={toggleSidebar}><PanelLeftOpen size={18} /></button>}
+							<div>
+								<h1>{client.snapshot?.session.name || DEFAULT_SESSION_TITLE}</h1>
+								{(client.snapshot?.session.archivedAt || selectedProject) && <span>{client.snapshot?.session.archivedAt ? "已归档" : ""}{client.snapshot?.session.archivedAt && selectedProject ? " · " : ""}{selectedProject ? workspaceName(selectedProject.name) : ""}</span>}
+							</div>
 					</div>
 					<div className="workbench-tabs" role="tablist" aria-label="工作区视图">
 						<button role="tab" aria-selected={workbenchView === "chat"} className={workbenchView === "chat" ? "active" : ""} title="对话" onClick={() => setWorkbenchView("chat")}><MessageSquareCode size={15} /><span>对话</span></button>
@@ -1662,6 +2742,13 @@ export function App() {
 						<button role="tab" aria-selected={workbenchView === "mcp"} className={workbenchView === "mcp" ? "active" : ""} title="MCP" onClick={() => setWorkbenchView("mcp")}><Plug size={15} /><span>MCP</span></button>
 					</div>
 					<div className="topbar-actions">
+						<button
+							className="icon-button"
+							type="button"
+							title={`命令面板（${modifierLabel()} K）`}
+							aria-label="命令面板"
+							onClick={() => setPaletteOpen(true)}
+						><Command size={17} /></button>
 						{workbenchView === "chat" && client.snapshot && client.capabilities.includes("session.compaction") && <button
 							className="icon-button"
 							title="整理上下文"
@@ -1675,11 +2762,65 @@ export function App() {
 							onClick={() => void client.forkSession()}
 						><GitBranch size={17} /></button>}
 						{workbenchView === "chat" && <button className={`icon-button ${showRight ? "pressed" : ""}`} title="显示或隐藏运行面板" onClick={() => setShowRight((value) => !value)}><PanelRight size={18} /></button>}
+						<button
+							className="icon-button"
+							type="button"
+							title={`切换深浅主题（当前：${themeLabel(theme.choice)}）`}
+							aria-label="切换深浅主题"
+							onClick={() => theme.toggle()}
+						>{theme.resolved === "dark" ? <Sun size={17} /> : <MoonStar size={17} />}</button>
 					</div>
 				</header>
 
 				{workbenchView === "chat" && <section className="conversation">
-					<div className="transcript">
+					<div
+						className="transcript"
+						ref={transcriptRef}
+						onScroll={() => {
+							const element = transcriptRef.current;
+							if (element) setFollowing(isNearBottom(element));
+						}}
+					>
+						{!client.snapshot && (
+							<div className="empty-state">
+								<div className="empty-icon"><Sparkles size={24} /></div>
+								<h2>开始一个新任务</h2>
+								<p>直接描述要完成的事情，需要代码上下文时再打开文件或文件夹。</p>
+							</div>
+						)}
+						{client.snapshot && client.snapshot.transcript.length === 0 && Object.keys(client.liveAssistants).length === 0 && Object.keys(client.liveTools).length === 0 && (
+							<div className="empty-state">
+								<div className="empty-icon"><Sparkles size={24} /></div>
+								<h2>开始一个新任务</h2>
+								<p>描述你想完成的事情，Wuming 会读代码、改文件并自己验证。</p>
+								<ul className="empty-hints">
+									<li><code>@</code><span>引用工作区文件</span></li>
+									<li><code>/</code><span>调用快捷命令</span></li>
+									<li><kbd>{modifierLabel()}</kbd><kbd>K</kbd><span>命令面板</span></li>
+									<li><kbd>Shift</kbd><kbd>Enter</kbd><span>换行</span></li>
+								</ul>
+							</div>
+						)}
+						{client.snapshot?.transcript.map((item, index) => {
+							const activeTurnTrace = reasoningPhase && index > activeTurnStart;
+							if (activeTurnTrace && item.type === "tool") return null;
+							return <TranscriptItemView
+								item={item}
+								key={item.id}
+								now={Date.now()}
+								onDownload={client.downloadArtifact}
+								renderedToolCalls={toolCalls.rendered}
+								actions={item.type === "tool" ? undefined : messageActions(item)}
+								hideToolCalls={activeTurnTrace && item.type === "assistant"}
+							/>;
+						})}
+						{liveAssistantItems.map((item) => <LiveAssistantView item={item} key={item.id} />)}
+						{!reasoningPhase && Object.values(client.liveTools).map((tool) => <LiveToolView
+							tool={tool}
+							input={toolCalls.inputs.get(tool.toolCallId)}
+							awaitingApproval={client.snapshot?.pendingApprovals.some((approval) => approval.toolCallId === tool.toolCallId) ?? false}
+							key={tool.toolCallId}
+						/>)}
 						{client.snapshot?.pendingApprovals.map((approval) => (
 							<ApprovalPanel
 								key={approval.id}
@@ -1687,27 +2828,37 @@ export function App() {
 								onRespond={(decision) => client.respondApproval(approval.sessionId, approval.id, decision)}
 							/>
 						))}
-						{!client.snapshot && (
-							<div className="empty-state">
-								<div className="empty-icon"><MessageSquareCode size={24} /></div>
-								<h2>{client.sessions.length ? "请选择一个会话" : "可以开始新会话了"}</h2>
-							</div>
-						)}
-						{client.snapshot?.transcript.map((item) => <TranscriptItemView item={item} key={item.id} onDownload={client.downloadArtifact} />)}
-						{Object.values(client.liveAssistants).map((item) => <LiveAssistantView item={item} key={item.id} />)}
-						{Object.values(client.liveTools).map((tool) => <LiveToolView tool={tool} key={tool.toolCallId} />)}
 						{showThinkingActivity && <ThinkingActivity phase={client.snapshot!.session.phase} />}
 						{client.error && <div className="global-error"><CircleAlert size={16} />{client.error}</div>}
-						<div ref={endRef} />
 					</div>
 					<div className="composer-wrap">
+						{client.snapshot && !following && (
+							<button
+								className={`jump-latest${pendingTail ? " live" : ""}`}
+								type="button"
+								onClick={jumpToLatest}
+								aria-label={pendingTail ? "回到底部，有新内容" : "回到底部"}
+							>
+								{pendingTail ? <span className="jump-dot" aria-hidden="true" /> : <ArrowDown size={14} />}
+								{pendingTail ? "有新内容" : "回到底部"}
+							</button>
+						)}
 						<Composer
 							key={client.snapshot?.session.id ?? "no-session"}
-							disabled={!client.snapshot || client.snapshot.session.archivedAt !== undefined || client.connection !== "connected"}
+							disabled={client.snapshot?.session.archivedAt !== undefined || client.connection !== "connected" || !selectedWorkspace || !selectedModel}
 							active={active}
 							models={composerModels}
 							selectedModel={selectedModel}
 							modelSelectionDisabled={client.connection !== "connected" || active || client.snapshot?.session.archivedAt !== undefined}
+							token={client.token}
+							workspaceId={selectedWorkspace?.id}
+							commands={composerCommands}
+							contextUsage={contextUsage}
+							permission={{
+								sandboxMode: client.snapshot?.sandboxMode ?? "workspace_write",
+								approvalPolicy: client.snapshot?.approvalPolicy ?? "on_risk",
+							}}
+							permissionDisabled={!client.snapshot || client.connection !== "connected" || active || client.snapshot.session.archivedAt !== undefined}
 							onSelectModel={(model) => {
 								client.selectModel(model);
 								if (client.snapshot?.session.phase === "idle" &&
@@ -1715,7 +2866,13 @@ export function App() {
 									void client.setSessionModel(model);
 								}
 							}}
-							onSend={client.sendPrompt}
+							onSelectPermission={(value) => client.setSessionPolicy(value.sandboxMode, value.approvalPolicy)}
+							onSend={async (text, artifacts, queueMode) => {
+								// Sending is an explicit request to watch the answer arrive.
+								jumpToLatest();
+								if (!client.snapshot) await client.createSession();
+								await client.sendPrompt(text, artifacts, queueMode);
+							}}
 							onAbort={client.abortTurn}
 							onUpload={client.uploadArtifact}
 						/>
@@ -1751,21 +2908,62 @@ export function App() {
 				{workbenchView === "mcp" && selectedWorkspace && <McpView servers={client.mcpServers} selectedServer={client.selectedMcpServer} onRefresh={() => client.refreshMcp(selectedWorkspace.id)} onSelect={(serverId) => client.getMcp(selectedWorkspace.id, serverId)} />}
 			</main>
 
-			{showRight && workbenchView === "chat" && <RightRail snapshot={client.snapshot} runs={client.runs} onSetBudget={client.setSessionBudget} onClose={() => setShowRight(false)} />}
+			{showRight && workbenchView === "chat" && <RightRail snapshot={client.snapshot} runs={client.runs} contextUsage={contextUsage} onSetBudget={client.setSessionBudget} onClose={() => setShowRight(false)} />}
 			{showRight && workbenchView === "chat" && <button className="right-rail-scrim" aria-label="关闭运行面板" onClick={() => setShowRight(false)} />}
 			{mobileNav && <button className="mobile-scrim" aria-label="关闭导航" onClick={() => setMobileNav(false)} />}
+			{paletteOpen && <CommandPalette entries={paletteEntries} onClose={() => setPaletteOpen(false)} />}
+			{shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+			{projectDialogOpen && <ProjectImportDialog local={localGateway} onOpenLocal={client.openLocalProject} onImport={client.importProject} onClose={() => setProjectDialogOpen(false)} />}
 
 			{settingsOpen && (
-				<div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
-					<div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
-						<div className="dialog-header"><h2 id="settings-title">设置</h2><button className="icon-button" title="关闭" onClick={() => setSettingsOpen(false)}><X size={18} /></button></div>
-						{localGateway ? <details className="gateway-settings"><summary>网关连接</summary><label>服务令牌<input type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} /></label><div className="dialog-actions"><button className="secondary-button" onClick={() => { client.setToken(tokenDraft); setSettingsOpen(false); }}>重新连接</button></div></details> : <><label>服务令牌<input type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} /></label><div className="dialog-actions"><button className="primary-button" onClick={() => { client.setToken(tokenDraft); setSettingsOpen(false); }}>重新连接</button></div></>}
-						{client.capabilities.includes("model.custom") && <CustomModelSettings models={client.models} onDiscover={client.discoverCustomModels} onListServices={client.listCustomModelServices} onRefreshService={client.refreshCustomModelService} onRemoveService={client.removeCustomModelService} onGet={client.getCustomModelSettings} onConfigure={async (configs) => {
-							const configured = await client.configureCustomModels(configs);
-							const selected = configured.at(-1);
-							if (selected && client.snapshot?.session.phase === "idle") await client.setSessionModel(selected.model);
-							return configured;
-						}} onTest={client.testCustomModel} onRemove={client.removeCustomModel} />}
+				<div className="modal-backdrop" role="presentation" onMouseDown={closeSettings}>
+					<div className={`settings-dialog ${onboarding ? "onboarding-dialog" : ""}`} role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
+						<div className="dialog-header">
+							<h2 id="settings-title">{onboarding ? "首次设置" : "设置"}</h2>
+							{(!onboarding || (client.connection === "connected" && !onboardingRequiresModel)) && <button className="icon-button" title={onboarding ? "完成设置" : "关闭"} onClick={closeSettings}><X size={18} /></button>}
+						</div>
+						{onboarding && client.connection !== "connected" ? (
+							<GatewayPasswordForm draft={tokenDraft} status={client.connection} submitted={connectSubmitted} firstUse onChange={(value) => { setTokenDraft(value); setConnectSubmitted(false); }} onSubmit={connectGateway} />
+						) : (
+							<>
+								{onboarding && <div className="onboarding-success" role="status"><ShieldCheck size={18} /><div><strong>连接成功</strong><span>密码已保存在这台设备上。接下来可配置大模型，完成后关闭此窗口。</span></div></div>}
+								<div className="theme-setting">
+									<div>
+										<span className="settings-section-title">外观</span>
+										<p className="settings-hint">深浅主题会记在本机；选择“跟随系统”时随操作系统实时切换。</p>
+									</div>
+									<div className="segmented" role="group" aria-label="主题">
+										{(["system", "light", "dark"] as ThemeChoice[]).map((choice) => (
+											<button
+												key={choice}
+												type="button"
+												className={theme.choice === choice ? "active" : ""}
+												aria-pressed={theme.choice === choice}
+												onClick={() => theme.setChoice(choice)}
+											>{themeLabel(choice)}</button>
+										))}
+									</div>
+								</div>
+								{onboarding && <div className="onboarding-model-setting">
+									<div><span className="settings-section-title">大模型</span><p className="settings-hint">选择新会话默认使用的模型。</p></div>
+									<select
+										aria-label="默认模型"
+										value={client.selectedModel ? JSON.stringify(client.selectedModel) : ""}
+										onChange={(event) => client.selectModel(JSON.parse(event.target.value) as ModelRef)}
+									>
+										{!client.models.some((model) => model.authenticated) && <option value="">请先添加并验证模型</option>}
+										{client.models.filter((model) => model.authenticated).map((model) => <option key={`${model.model.provider}:${model.model.id}`} value={JSON.stringify(model.model)}>{model.name}</option>)}
+									</select>
+								</div>}
+								{localGateway ? <details className="gateway-settings"><summary>网关连接</summary><GatewayPasswordForm draft={tokenDraft} status={client.connection} submitted={connectSubmitted} onChange={(value) => { setTokenDraft(value); setConnectSubmitted(false); }} onSubmit={connectGateway} /></details> : <GatewayPasswordForm draft={tokenDraft} status={client.connection} submitted={connectSubmitted} onChange={(value) => { setTokenDraft(value); setConnectSubmitted(false); }} onSubmit={connectGateway} />}
+								{client.capabilities.includes("model.custom") && <CustomModelSettings models={client.models} onDiscover={client.discoverCustomModels} onListServices={client.listCustomModelServices} onRefreshService={client.refreshCustomModelService} onRemoveService={client.removeCustomModelService} onGet={client.getCustomModelSettings} onConfigure={async (configs) => {
+									const configured = await client.configureCustomModels(configs);
+									const selected = configured.at(-1);
+									if (selected && client.snapshot?.session.phase === "idle") await client.setSessionModel(selected.model);
+									return configured;
+								}} onTest={client.testCustomModel} onRemove={client.removeCustomModel} />}
+							</>
+						)}
 					</div>
 				</div>
 			)}

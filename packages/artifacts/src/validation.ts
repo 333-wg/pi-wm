@@ -1,13 +1,21 @@
-import { extname } from "node:path";
 import { ArtifactError } from "./errors.js";
 
 const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-const TEXT_EXTENSIONS = new Set([
-	".txt", ".md", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".xml", ".csv", ".tsv",
-	".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".css", ".html", ".htm", ".py", ".go",
-	".rs", ".java", ".kt", ".kts", ".c", ".h", ".cpp", ".hpp", ".cs", ".php", ".rb",
-	".swift", ".sh", ".bash", ".zsh", ".ps1", ".sql", ".graphql", ".gql", ".proto", ".ini",
-	".conf", ".env", ".log", ".diff", ".patch",
+const FILE_MIMES = new Map([
+	[".doc", "application/msword"],
+	[".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+	[".docm", "application/vnd.ms-word.document.macroenabled.12"],
+	[".epub", "application/epub+zip"],
+	[".odp", "application/vnd.oasis.opendocument.presentation"],
+	[".ods", "application/vnd.oasis.opendocument.spreadsheet"],
+	[".odt", "application/vnd.oasis.opendocument.text"],
+	[".pdf", "application/pdf"],
+	[".ppt", "application/vnd.ms-powerpoint"],
+	[".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+	[".rtf", "application/rtf"],
+	[".xls", "application/vnd.ms-excel"],
+	[".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+	[".zip", "application/zip"],
 ]);
 const TEXT_APPLICATION_MIMES = new Set([
 	"application/json",
@@ -21,6 +29,7 @@ const TEXT_APPLICATION_MIMES = new Set([
 ]);
 
 export interface ArtifactValidationOptions {
+	maxFileBytes?: number;
 	maxImageBytes?: number;
 	maxTextBytes?: number;
 	maxImagePixels?: number;
@@ -29,7 +38,7 @@ export interface ArtifactValidationOptions {
 export interface ValidatedArtifact {
 	name: string;
 	mimeType: string;
-	kind: "image" | "text";
+	kind: "binary" | "image" | "text";
 	width?: number;
 	height?: number;
 }
@@ -117,7 +126,13 @@ function imageDimensions(mimeType: string, content: Buffer): { width: number; he
 
 function normalizedSuppliedMime(input: string | undefined): string | undefined {
 	const value = input?.split(";", 1)[0]?.trim().toLowerCase();
-	return value && value !== "application/octet-stream" ? value : undefined;
+	return value && /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(value) ? value : undefined;
+}
+
+function inferredMimeType(name: string, supplied: string | undefined): string {
+	if (supplied && supplied !== "application/octet-stream") return supplied;
+	const index = name.lastIndexOf(".");
+	return FILE_MIMES.get(index >= 0 ? name.slice(index).toLowerCase() : "") ?? "application/octet-stream";
 }
 
 export function validateArtifact(
@@ -125,8 +140,9 @@ export function validateArtifact(
 	options: ArtifactValidationOptions = {},
 ): ValidatedArtifact {
 	const name = safeName(input.name);
-	if (input.content.length === 0) throw new ArtifactError("invalid", "Artifact content is empty");
+	if (input.content.length > (options.maxFileBytes ?? 10 * 1024 * 1024)) throw new ArtifactError("too_large", "File exceeds the upload limit");
 	const supplied = normalizedSuppliedMime(input.suppliedMimeType);
+	if (input.content.length === 0) return { name, mimeType: inferredMimeType(name, supplied), kind: "binary" };
 	const detectedImage = imageType(input.content);
 	if (detectedImage) {
 		if (supplied && supplied !== detectedImage) throw new ArtifactError("invalid", `Content is ${detectedImage}, not ${supplied}`);
@@ -139,16 +155,13 @@ export function validateArtifact(
 		return { name, mimeType: detectedImage, kind: "image", ...dimensions };
 	}
 	if (supplied && IMAGE_MIMES.has(supplied)) throw new ArtifactError("invalid", `Content does not match ${supplied}`);
-	const extension = extname(name).toLowerCase();
-	const textMime = supplied?.startsWith("text/") || (supplied ? TEXT_APPLICATION_MIMES.has(supplied) : false);
-	if (!textMime && !TEXT_EXTENSIONS.has(extension)) throw new ArtifactError("invalid", "Unsupported artifact type");
-	if (input.content.length > (options.maxTextBytes ?? 2 * 1024 * 1024)) throw new ArtifactError("too_large", "Text artifact exceeds the upload limit");
 	let decoded: string;
 	try {
 		decoded = new TextDecoder("utf-8", { fatal: true }).decode(input.content);
 	} catch {
-		throw new ArtifactError("invalid", "Text artifact is not valid UTF-8");
+		return { name, mimeType: inferredMimeType(name, supplied), kind: "binary" };
 	}
-	if (decoded.includes("\0")) throw new ArtifactError("invalid", "Text artifact contains NUL bytes");
+	if (decoded.includes("\0")) return { name, mimeType: inferredMimeType(name, supplied), kind: "binary" };
+	if (input.content.length > (options.maxTextBytes ?? 2 * 1024 * 1024)) throw new ArtifactError("too_large", "Text artifact exceeds the upload limit");
 	return { name, mimeType: supplied && (supplied.startsWith("text/") || TEXT_APPLICATION_MIMES.has(supplied)) ? supplied : "text/plain", kind: "text" };
 }

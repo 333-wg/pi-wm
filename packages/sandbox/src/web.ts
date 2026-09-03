@@ -50,6 +50,25 @@ interface RawResponse {
 	truncated: boolean;
 }
 
+function waitForAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		let settled = false;
+		const finish = (action: () => void) => {
+			if (settled) return;
+			settled = true;
+			signal.removeEventListener("abort", abort);
+			action();
+		};
+		const abort = () => finish(() => reject(signal.reason ?? new Error("Web request aborted")));
+		if (signal.aborted) abort();
+		else signal.addEventListener("abort", abort, { once: true });
+		pending.then(
+			(value) => finish(() => resolve(value)),
+			(error) => finish(() => reject(error)),
+		);
+	});
+}
+
 function hostnameOf(url: URL): string {
 	return url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
 }
@@ -114,8 +133,14 @@ function readableContent(body: Buffer, contentType: string): string {
 	return decoded;
 }
 
-function supportsText(contentType: string): boolean {
-	return /^(text\/|application\/(json|xml|xhtml\+xml)|[^;]+\+(json|xml))(?:;|$)/i.test(contentType);
+export function isSupportedTextContentType(contentType: string): boolean {
+	const mimeType = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+	return mimeType.startsWith("text/") ||
+		mimeType === "application/json" ||
+		mimeType === "application/xml" ||
+		mimeType === "application/xhtml+xml" ||
+		mimeType.endsWith("+json") ||
+		mimeType.endsWith("+xml");
 }
 
 function parseSearchItems(value: unknown, provider: "brave" | "searxng", count: number): WebSearchResult["items"] {
@@ -217,7 +242,7 @@ export class SafeWebClient implements WebSandbox {
 			...(options.signal ? { signal: options.signal } : {}),
 		});
 		const contentType = String(response.headers["content-type"] ?? "text/plain").toLowerCase();
-		if (!supportsText(contentType)) throw new SandboxError("content_unsupported", `Unsupported response content type: ${contentType}`);
+		if (!isSupportedTextContentType(contentType)) throw new SandboxError("content_unsupported", `Unsupported response content type: ${contentType}`);
 		return {
 			requestedUrl: requested.toString(),
 			finalUrl: response.url,
@@ -274,24 +299,14 @@ export class SafeWebClient implements WebSandbox {
 		return { provider: this.#search.provider, items: parseSearchItems(payload, this.#search.provider, count) };
 	}
 
-	async #request(url: URL, options: { maxBytes: number; headers?: Record<string, string>; redirectOrigin?: string; signal?: AbortSignal }, redirects = 0): Promise<RawResponse> {
+	async #request(
+		url: URL,
+		options: { maxBytes: number; headers?: Record<string, string>; redirectOrigin?: string; signal?: AbortSignal },
+		redirects = 0,
+		deadline = Date.now() + this.#timeoutMs,
+	): Promise<RawResponse> {
 		validateWebUrl(url.toString());
 		const hostname = hostnameOf(url);
-		let addresses: LookupAddress[];
-		try {
-			addresses = isIP(hostname) ? [{ address: hostname, family: isIP(hostname) }] : await this.#resolver(hostname);
-		} catch (error) {
-			throw new SandboxError("network_failed", `DNS lookup failed for ${hostname}: ${error instanceof Error ? error.message : String(error)}`);
-		}
-		const allowSyntheticResolution = this.#allowProxyDnsAddresses || url.protocol === "https:";
-		if (addresses.length === 0 || addresses.some((entry) => !isAllowedWebResolution(entry.address, allowSyntheticResolution))) {
-			throw new SandboxError("network_denied", `Host ${hostname} did not resolve exclusively to public addresses`);
-		}
-		const selected = addresses[0]!;
-		const lookup: LookupFunction = (_hostname, lookupOptions, callback) => {
-			if (lookupOptions.all) callback(null, addresses);
-			else callback(null, selected.address, selected.family);
-		};
 		const controller = new AbortController();
 		let timedOut = false;
 		const externalAbort = () => controller.abort(options.signal?.reason);
@@ -300,8 +315,26 @@ export class SafeWebClient implements WebSandbox {
 		const timer = setTimeout(() => {
 			timedOut = true;
 			controller.abort(new SandboxError("network_timeout", `Web request exceeded ${this.#timeoutMs}ms`));
-		}, this.#timeoutMs);
+		}, Math.max(0, deadline - Date.now()));
 		try {
+			let addresses: LookupAddress[];
+			try {
+				addresses = isIP(hostname)
+					? [{ address: hostname, family: isIP(hostname) }]
+					: await waitForAbort(this.#resolver(hostname), controller.signal);
+			} catch (error) {
+				if (controller.signal.aborted) throw controller.signal.reason ?? error;
+				throw new SandboxError("network_failed", `DNS lookup failed for ${hostname}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			const allowSyntheticResolution = this.#allowProxyDnsAddresses || url.protocol === "https:";
+			if (addresses.length === 0 || addresses.some((entry) => !isAllowedWebResolution(entry.address, allowSyntheticResolution))) {
+				throw new SandboxError("network_denied", `Host ${hostname} did not resolve exclusively to public addresses`);
+			}
+			const selected = addresses[0]!;
+			const lookup: LookupFunction = (_hostname, lookupOptions, callback) => {
+				if (lookupOptions.all) callback(null, addresses);
+				else callback(null, selected.address, selected.family);
+			};
 			const response = await new Promise<RawResponse>((resolve, reject) => {
 				const request = (url.protocol === "https:" ? httpsRequest : httpRequest)({
 					protocol: url.protocol,
@@ -361,7 +394,7 @@ export class SafeWebClient implements WebSandbox {
 				if (options.redirectOrigin && next.origin !== options.redirectOrigin) {
 					throw new SandboxError("network_denied", "Search provider attempted a cross-origin redirect");
 				}
-				return this.#request(next, options, redirects + 1);
+				return this.#request(next, options, redirects + 1, deadline);
 			}
 			return response;
 		} catch (error) {

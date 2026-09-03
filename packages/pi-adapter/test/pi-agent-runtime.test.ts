@@ -336,6 +336,25 @@ describe("PiAgentRuntime", () => {
 		]);
 	});
 
+	it("recreates the Pi session when its security policy changes", async () => {
+		const sessions = [new FakePiSession(), new FakePiSession()];
+		let factoryCalls = 0;
+		const runtime = new PiAgentRuntime({
+			createSession: async () => sessions[factoryCalls++]!,
+		});
+		const run = (current: SessionSnapshot) => runtime.executeTurn({
+			operation: operation([{ type: "text", text: "run" }]),
+			snapshot: current,
+			signal: new AbortController().signal,
+			onProgress: () => {},
+		});
+		await run(snapshot);
+		await run({ ...snapshot, sandboxMode: "unrestricted", approvalPolicy: "never" });
+		expect(factoryCalls).toBe(2);
+		expect(sessions[0]?.disposed).toBe(true);
+		expect(sessions[1]?.prompts).toHaveLength(1);
+	});
+
 	it("includes validated UTF-8 artifacts in the model prompt", async () => {
 		const session = new FakePiSession();
 		const runtime = new PiAgentRuntime({
@@ -357,6 +376,48 @@ describe("PiAgentRuntime", () => {
 		expect(session.prompts[0]?.text).toContain("Review this file");
 		expect(session.prompts[0]?.text).toContain('<attached_file name="value.ts" mime_type="text/plain">');
 		expect(session.prompts[0]?.text).toContain("export const value = 42;");
+	});
+
+	it("includes extracted document text in the model prompt", async () => {
+		const session = new FakePiSession();
+		const runtime = new PiAgentRuntime({
+			createSession: async () => session,
+			resolveArtifact: async () => ({
+				data: "UEsDBA==",
+				mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+				extractedText: "Quarterly result: 42",
+			}),
+		});
+		await runtime.executeTurn({
+			operation: operation([
+				{ type: "text", text: "Summarize this document" },
+				{ type: "artifact", artifact: { id: "doc-1", name: "report.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 1024 } },
+			]),
+			snapshot,
+			signal: new AbortController().signal,
+			onProgress: () => {},
+		});
+		expect(session.prompts[0]?.text).toContain('name="report.docx"');
+		expect(session.prompts[0]?.text).toContain('extracted="true"');
+		expect(session.prompts[0]?.text).toContain("Quarterly result: 42");
+	});
+
+	it("keeps unsupported binary attachments in the prompt without failing the turn", async () => {
+		const session = new FakePiSession();
+		const runtime = new PiAgentRuntime({
+			createSession: async () => session,
+			resolveArtifact: async () => ({ data: "AAEC", mimeType: "application/octet-stream", binary: true }),
+		});
+		await runtime.executeTurn({
+			operation: operation([
+				{ type: "artifact", artifact: { id: "binary-1", name: "archive.bin", mimeType: "application/octet-stream", size: 3 } },
+			]),
+			snapshot,
+			signal: new AbortController().signal,
+			onProgress: () => {},
+		});
+		expect(session.prompts[0]?.text).toContain('binary="true"');
+		expect(session.prompts[0]?.text).toContain("uploaded successfully");
 	});
 
 	it("propagates abort to the active Pi session", async () => {

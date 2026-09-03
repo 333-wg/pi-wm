@@ -4,6 +4,7 @@ import type { ArtifactRef, SessionSnapshot } from "@wuming/protocol";
 
 export interface PiSessionLike {
 	readonly isStreaming: boolean;
+	prepareForPrompt?(): void;
 	getSystemPrompt?(): string;
 	setSystemPrompt?(prompt: string): void;
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;
@@ -37,6 +38,9 @@ export interface PiProviderRegistration {
 export interface ArtifactContent {
 	data: string;
 	mimeType: string;
+	binary?: boolean;
+	extractedText?: string;
+	extractionNotice?: string;
 }
 
 export type ArtifactResolver = (artifact: ArtifactRef, snapshot: SessionSnapshot) => Promise<ArtifactContent>;

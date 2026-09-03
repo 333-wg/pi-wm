@@ -30,14 +30,19 @@ content with an authenticated `GET /api/artifacts/:artifactId`. Downloads use
 - Supported images are PNG, JPEG, GIF, and WebP. Wuming checks signatures,
   container termination, dimensions, MIME agreement, byte limits, and pixel
   limits before storage.
-- Supported text and source files must have an allowed text MIME type or source
-  extension and must decode as UTF-8 without NUL bytes.
+- Text and source files are detected by content rather than an extension
+  whitelist. They must decode as UTF-8 without NUL bytes, so uncommon source
+  extensions and extensionless configuration files work normally.
+- Other binary files are accepted and stored with a normalized MIME type.
+  DOCX and text-based PDF attachments are extracted server-side before being
+  added to the Pi prompt. Unknown binary formats remain attached with metadata
+  instead of failing the turn.
 - Reads re-hash stored bytes so object corruption is detected before delivery.
 
-Defaults are 10 MiB per image, 2 MiB per text file, 40 million image pixels,
-and 10 MiB at the HTTP request boundary. They can be changed with
-`WUMING_MAX_IMAGE_BYTES`, `WUMING_MAX_TEXT_ARTIFACT_BYTES`,
-`WUMING_MAX_IMAGE_PIXELS`, and `WUMING_MAX_ARTIFACT_BYTES`.
+Defaults are 10 MiB per file, 2 MiB per directly embedded text file, 40 million
+image pixels, and 200,000 extracted document characters. They can be changed
+with `WUMING_MAX_TEXT_ARTIFACT_BYTES`, `WUMING_MAX_IMAGE_PIXELS`,
+`WUMING_MAX_EXTRACTED_TEXT_CHARS`, and `WUMING_MAX_ARTIFACT_BYTES`.
 
 Image validation intentionally establishes a narrow ingestion boundary; it is
 not a malware scanner or a full media decoder. Deployments accepting untrusted
@@ -46,9 +51,11 @@ making artifacts available to other consumers.
 
 ## Model input
 
-The Pi adapter converts validated image artifacts to Pi image content. Validated
-text/source artifacts are embedded in the model prompt with a filename header.
-The browser only sends immutable references, never server filesystem paths.
+The Pi adapter converts validated image artifacts to Pi image content. Text and
+extracted document content are embedded in the model prompt with a filename
+header. Other binary files contribute attachment metadata rather than causing a
+prompt failure. The browser only sends immutable references, never server
+filesystem paths.
 
 ## Tool output spilling
 

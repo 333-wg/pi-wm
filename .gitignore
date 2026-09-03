@@ -10,3 +10,4 @@ test-results/
 !.env.example
 .wuming-data/
 .wuming-pi-agent/
+.fuse_hidden*

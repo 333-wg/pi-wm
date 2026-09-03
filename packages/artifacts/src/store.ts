@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { ArtifactRef, SessionSnapshot } from "@wuming/protocol";
 import { DatabaseSync } from "node:sqlite";
 import { ArtifactError } from "./errors.js";
+import { extractArtifact } from "./extraction.js";
 import { validateArtifact, type ArtifactValidationOptions } from "./validation.js";
 
 interface ArtifactRow {
@@ -14,7 +15,7 @@ interface ArtifactRow {
 	mime_type: string;
 	size: number;
 	sha256: string;
-	kind: "image" | "text";
+	kind: "binary" | "image" | "text";
 	created_at: number;
 }
 
@@ -23,13 +24,14 @@ export interface ArtifactRecord {
 	workspaceId: string;
 	ownerId: string;
 	sha256: string;
-	kind: "image" | "text";
+	kind: "binary" | "image" | "text";
 	createdAt: number;
 }
 
 export interface ArtifactStoreOptions extends ArtifactValidationOptions {
 	idFactory?: () => string;
 	clock?: () => number;
+	maxExtractedTextChars?: number;
 }
 
 function record(row: ArtifactRow): ArtifactRecord {
@@ -53,6 +55,7 @@ export class ArtifactStore implements Disposable {
 	readonly #idFactory: () => string;
 	readonly #clock: () => number;
 	readonly #validation: ArtifactValidationOptions;
+	readonly #maxExtractedTextChars: number;
 
 	private constructor(databasePath: string, objectRoot: string, options: ArtifactStoreOptions) {
 		this.#db = new DatabaseSync(databasePath);
@@ -74,7 +77,9 @@ export class ArtifactStore implements Disposable {
 		this.#objectRoot = objectRoot;
 		this.#idFactory = options.idFactory ?? randomUUID;
 		this.#clock = options.clock ?? Date.now;
+		this.#maxExtractedTextChars = options.maxExtractedTextChars ?? 200_000;
 		this.#validation = {
+			...(options.maxFileBytes === undefined ? {} : { maxFileBytes: options.maxFileBytes }),
 			...(options.maxImageBytes === undefined ? {} : { maxImageBytes: options.maxImageBytes }),
 			...(options.maxTextBytes === undefined ? {} : { maxTextBytes: options.maxTextBytes }),
 			...(options.maxImagePixels === undefined ? {} : { maxImagePixels: options.maxImagePixels }),
@@ -160,10 +165,19 @@ export class ArtifactStore implements Disposable {
 		return { record: stored, content };
 	}
 
-	async resolve(ref: ArtifactRef, snapshot: SessionSnapshot): Promise<{ data: string; mimeType: string }> {
+	async resolve(ref: ArtifactRef, snapshot: SessionSnapshot): Promise<{ data: string; mimeType: string; binary?: boolean; extractedText?: string; extractionNotice?: string }> {
 		this.assertSessionReference(ref, snapshot);
 		const { record: stored, content } = await this.read(ref.id);
-		return { data: content.toString("base64"), mimeType: stored.ref.mimeType };
+		const extraction = stored.kind === "binary"
+			? await extractArtifact({ name: stored.ref.name, mimeType: stored.ref.mimeType, content }, this.#maxExtractedTextChars)
+			: {};
+		return {
+			data: content.toString("base64"),
+			mimeType: stored.ref.mimeType,
+			...(stored.kind === "binary" ? { binary: true } : {}),
+			...(extraction.text === undefined ? {} : { extractedText: extraction.text }),
+			...(extraction.notice === undefined ? {} : { extractionNotice: extraction.notice }),
+		};
 	}
 
 	#objectPath(sha256: string): string {

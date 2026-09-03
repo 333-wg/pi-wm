@@ -5,6 +5,6 @@ export * from "./path-policy.js";
 export * from "./tools.js";
 export * from "./types.js";
 export * from "./web.js";
-export * from "./weather.js";
 export * from "./workspace-files.js";
 export * from "./workspace-inspector.js";
+export * from "./workspace-search.js";

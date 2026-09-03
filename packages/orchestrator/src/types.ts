@@ -14,6 +14,14 @@ export interface TurnOperationPayload {
 	userItemId: string;
 	content: UserContentPart[];
 	skills?: string[];
+	/**
+	 * Set on a subagent turn whose result is handed back to the parent model as a
+	 * tool result rather than appended to the parent transcript by the durable
+	 * publish path. The parent still absorbs the child's usage, but only once the
+	 * parent turn is no longer running: folding it in mid-turn would race the
+	 * parent's own cumulative usage and lose one of the two.
+	 */
+	deliverInline?: boolean;
 }
 
 export type OperationPayload = TurnOperationPayload;

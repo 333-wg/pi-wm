@@ -154,13 +154,22 @@ describe("sandbox tool output artifacts", () => {
 				async fetch(url: string) { return { requestedUrl: url, finalUrl: url, status: 200, contentType: "text/plain", content: "ok", truncated: false }; },
 				async search() { return { provider: "test", items: [] }; },
 			},
+			search: {
+				async list() { return { path: ".", entries: [], truncated: false }; },
+				async glob(pattern: string) { return { pattern, paths: [], truncated: false, filesVisited: 0 }; },
+				async grep(pattern: string) {
+					return { pattern, matches: [], counts: [], filesSearched: 0, filesMatched: 0, totalMatches: 0, truncated: false, skippedLarge: 0, skippedBinary: 0 };
+				},
+			},
 		};
+		// Search is read-only, so it stays available even in a read_only session.
 		expect(createSandboxTools({ snapshot, approvals, executor }).map((tool) => tool.name)).toEqual([
-			"read_file", "web_fetch", "web_search", "weather", "write_file", "edit", "exec", "run_python",
+			"read_file", "grep", "glob", "ls", "web_fetch", "web_search", "write_file", "edit", "exec", "run_python",
 		]);
 		expect(createSandboxTools({ snapshot: { ...snapshot, sandboxMode: "read_only" }, approvals, executor }).map((tool) => tool.name)).toEqual([
-			"read_file", "web_fetch", "web_search", "weather",
+			"read_file", "grep", "glob", "ls", "web_fetch", "web_search",
 		]);
+		expect(createSandboxTools({ snapshot, approvals, executor }).find((tool) => tool.name === "web_search")?.description).toContain("weather");
 	});
 
 	it("returns failed command output without replaying a valid nonzero exit", async () => {

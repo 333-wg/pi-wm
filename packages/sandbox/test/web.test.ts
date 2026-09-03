@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedWebResolution, isPublicWebAddress, parseBingItems, parseDuckDuckGoItems, SafeWebClient, validateWebUrl } from "../src/index.js";
+import { isAllowedWebResolution, isPublicWebAddress, isSupportedTextContentType, parseBingItems, parseDuckDuckGoItems, SafeWebClient, validateWebUrl } from "../src/index.js";
 
 describe("safe web access", () => {
 	it("accepts only public HTTP(S) URLs on their standard ports", () => {
@@ -25,9 +25,40 @@ describe("safe web access", () => {
 		expect(isPublicWebAddress("2606:4700:4700::1111")).toBe(true);
 	});
 
+	it("accepts textual MIME types with parameters and rejects binary content", () => {
+		for (const contentType of [
+			"text/html; charset=utf-8",
+			"text/plain",
+			"application/json",
+			"application/xhtml+xml; charset=UTF-8",
+			"application/problem+json",
+			"application/atom+xml",
+		]) expect(isSupportedTextContentType(contentType)).toBe(true);
+
+		for (const contentType of ["application/octet-stream", "image/png", "textual/html", ""]) {
+			expect(isSupportedTextContentType(contentType)).toBe(false);
+		}
+	});
+
 	it("rejects a public-looking hostname when DNS resolves to a private address", async () => {
 		const client = new SafeWebClient({ resolver: async () => [{ address: "127.0.0.1", family: 4 }] });
 		await expect(client.fetch("https://example.com")).rejects.toMatchObject({ code: "network_denied" });
+	});
+
+	it("applies the web deadline while DNS resolution is pending", async () => {
+		const client = new SafeWebClient({
+			timeoutMs: 20,
+			resolver: () => new Promise(() => {}),
+		});
+		await expect(client.fetch("https://example.com")).rejects.toMatchObject({ code: "network_timeout" });
+	});
+
+	it("cancels while DNS resolution is pending", async () => {
+		const controller = new AbortController();
+		const client = new SafeWebClient({ resolver: () => new Promise(() => {}) });
+		const pending = client.fetch("https://example.com", { signal: controller.signal });
+		controller.abort(new Error("cancelled by test"));
+		await expect(pending).rejects.toThrow("cancelled by test");
 	});
 
 	it("allows synthetic proxy DNS only after an explicit opt-in", () => {

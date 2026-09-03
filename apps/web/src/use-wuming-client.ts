@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+	ApprovalPolicy,
 	Command,
 	CommandResult,
 	Capability,
@@ -11,6 +12,7 @@ import type {
 	ModelMetadata,
 	ModelRef,
 	RunSummary,
+	SandboxMode,
 	ServerMessage,
 	SessionSnapshot,
 	SessionSummary,
@@ -24,6 +26,8 @@ import type {
 	SubagentSummary,
 	ToolStatus,
 } from "@wuming/protocol";
+import { workspaceApi } from "./workspace-api.js";
+import { isImplicitWorkspace } from "./lib/workspaces.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -128,7 +132,7 @@ function upsertTranscript(snapshot: SessionSnapshot, item: SessionSnapshot["tran
 }
 
 export function useWumingClient() {
-	const [token, setTokenState] = useState(() => localStorage.getItem("wuming.token") ?? "dev-token");
+	const [token, setTokenState] = useState(() => localStorage.getItem("wuming.token") ?? "");
 	const [reconnectAttempt, setReconnectAttempt] = useState(0);
 	const [state, setState] = useState<ClientState>(initialState);
 	const pending = useRef(
@@ -247,10 +251,10 @@ export function useWumingClient() {
 	}, [state.snapshot]);
 
 	const setToken = useCallback((value: string) => {
-		localStorage.setItem("wuming.token", value);
 		localStorage.removeItem("wuming.cursor");
 		cursorRef.current = undefined;
 		setTokenState(value);
+		setReconnectAttempt((attempt) => attempt + 1);
 	}, []);
 
 	const refreshSessions = useCallback(async (workspaceId: string, options: SessionListOptions = sessionListRef.current) => {
@@ -313,6 +317,12 @@ export function useWumingClient() {
 	useEffect(() => {
 		let disposed = false;
 		let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+		if (!token) {
+			requestRef.current = undefined;
+			capabilitiesRef.current = [];
+			setState((current) => ({ ...current, connection: "disconnected", capabilities: [], error: undefined }));
+			return;
+		}
 		setState((current) => ({ ...current, connection: "connecting", error: undefined }));
 		const scheme = location.protocol === "https:" ? "wss" : "ws";
 		const ws = new WebSocket(`${scheme}://${location.host}/api/ws`, ["wuming.v1", bearerProtocol(token)]);
@@ -325,22 +335,29 @@ export function useWumingClient() {
 				ws.send(JSON.stringify({ type: "request", requestId, idempotencyKey, command }));
 			});
 		requestRef.current = request;
+		let resyncGeneration = 0;
 
 		const resync = async (sessionId: string) => {
+			const generation = ++resyncGeneration;
 			try {
 				const result = await request({ type: "session.snapshot.get", sessionId });
-				if (result.type === "session.snapshot") {
+				if (generation !== resyncGeneration || result.type !== "session.snapshot") return;
+				setState((current) => {
+					const snapshot = current.snapshot;
+					if (snapshot?.session.id !== sessionId || snapshot.revision > result.snapshot.revision) return current;
 					snapshotRef.current = result.snapshot;
-					setState((current) => ({ ...current, snapshot: result.snapshot, liveAssistants: {}, liveTools: {} }));
-					void refreshRuns(sessionId);
-				}
+					return { ...current, snapshot: result.snapshot, liveAssistants: {}, liveTools: {} };
+				});
+				void refreshRuns(sessionId);
 			} catch (error) {
+				if (generation !== resyncGeneration) return;
 				setState((current) => ({ ...current, error: error instanceof Error ? error.message : String(error) }));
 			}
 		};
 
 		const applyMessage = (message: ServerMessage) => {
 			if (message.type === "hello") {
+				localStorage.setItem("wuming.token", token);
 				capabilitiesRef.current = message.capabilities;
 				setState((current) => ({ ...current, connection: "connected", capabilities: message.capabilities, error: undefined }));
 				void (async () => {
@@ -386,7 +403,9 @@ export function useWumingClient() {
 						setState((current) => ({ ...current, sessions }));
 						const storedSessionId = localStorage.getItem(sessionSelectionKey(workspace.id));
 						const session = sessions.find((candidate) => candidate.id === storedSessionId) ?? sessions[0];
-						if (session) await attachSession(session.id);
+						// The fallback workspace represents a projectless draft. Start on
+						// a clean composer there instead of reopening an old conversation.
+						if (session && !isImplicitWorkspace(workspace)) await attachSession(session.id);
 					} catch (error) {
 						setState((current) => ({
 							...current,
@@ -473,8 +492,15 @@ export function useWumingClient() {
 			localStorage.setItem("wuming.cursor", message.cursor);
 			if (event.type === "session.snapshot") {
 				if (event.snapshot.session.id === snapshotRef.current?.session.id) {
-					snapshotRef.current = event.snapshot;
-					setState((current) => ({ ...current, snapshot: event.snapshot }));
+					setState((current) => {
+						if (current.snapshot && current.snapshot.revision > event.snapshot.revision) return current;
+						snapshotRef.current = event.snapshot;
+						return {
+							...current,
+							snapshot: event.snapshot,
+							...(event.snapshot.session.phase === "idle" ? { liveAssistants: {}, liveTools: {} } : {}),
+						};
+					});
 					void refreshSessions(event.snapshot.session.workspaceId);
 				}
 				return;
@@ -584,8 +610,7 @@ export function useWumingClient() {
 		return () => clearInterval(timer);
 	}, [hasActiveGoals, refreshGoals, state.capabilities, state.connection, state.snapshot?.session.id]);
 
-	const selectWorkspace = useCallback(async (workspaceId: string) => {
-		if (!state.workspaces.some((workspace) => workspace.id === workspaceId)) throw new Error("工作区不可用");
+	const openWorkspace = useCallback(async (workspaceId: string) => {
 		const previousSession = snapshotRef.current;
 		if (previousSession && previousSession.session.workspaceId !== workspaceId) {
 			await requestRef.current?.({ type: "session.detach", sessionId: previousSession.session.id }).catch(() => undefined);
@@ -617,7 +642,12 @@ export function useWumingClient() {
 		const storedSessionId = localStorage.getItem(sessionSelectionKey(workspaceId));
 		const session = sessions.find((candidate) => candidate.id === storedSessionId) ?? sessions[0];
 		if (session) await attachSession(session.id);
-	}, [attachSession, refreshSessions, refreshSkills, refreshTools, refreshMcp, state.capabilities, state.workspaces]);
+	}, [attachSession, refreshSessions, refreshSkills, refreshTools, refreshMcp, state.capabilities]);
+
+	const selectWorkspace = useCallback(async (workspaceId: string) => {
+		if (!state.workspaces.some((workspace) => workspace.id === workspaceId)) throw new Error("工作区不可用");
+		await openWorkspace(workspaceId);
+	}, [openWorkspace, state.workspaces]);
 
 	const getSkill = useCallback(async (workspaceId: string, skillId: string) => {
 		const result = await requestRef.current?.({ type: "skill.get", workspaceId, skillId });
@@ -653,15 +683,18 @@ export function useWumingClient() {
 		setState((current) => ({ ...current, selectedModel: available.model }));
 	}, [state.models]);
 
-	const createSession = useCallback(async () => {
-		const workspace = state.workspaces.find((candidate) => candidate.id === state.selectedWorkspaceId) ?? state.workspaces[0];
+	const createSessionInWorkspace = useCallback(async (workspaceId: string) => {
+		const currentSession = snapshotRef.current;
+		if (currentSession && currentSession.session.workspaceId !== workspaceId) {
+			await requestRef.current?.({ type: "session.detach", sessionId: currentSession.session.id }).catch(() => undefined);
+		}
 		const model = state.models.find((candidate) => candidate.authenticated && sameModel(state.selectedModel, candidate.model))
 			?? state.models.find((candidate) => candidate.authenticated)
 			?? state.models[0];
-		if (!workspace || !model) throw new Error("工作区或模型不可用");
+		if (!model) throw new Error("模型不可用");
 		const result = await requestRef.current?.({
 			type: "session.create",
-			workspaceId: workspace.id,
+			workspaceId,
 			model: model.model,
 			thinkingLevel: model.reasoning ? "medium" : "off",
 			sandboxMode: "workspace_write",
@@ -670,10 +703,10 @@ export function useWumingClient() {
 		if (result?.type === "session.created") {
 			sessionListRef.current = { archived: false };
 			snapshotRef.current = result.snapshot;
-			localStorage.setItem(sessionSelectionKey(workspace.id), result.snapshot.session.id);
+			localStorage.setItem(sessionSelectionKey(workspaceId), result.snapshot.session.id);
 			setState((current) => ({
 				...current,
-				selectedWorkspaceId: workspace.id,
+				selectedWorkspaceId: workspaceId,
 				snapshot: result.snapshot,
 				runs: [],
 				subagents: [],
@@ -681,9 +714,94 @@ export function useWumingClient() {
 				liveAssistants: {},
 				liveTools: {},
 			}));
-			await refreshSessions(workspace.id, { archived: false });
+			await refreshSessions(workspaceId, { archived: false });
 		}
-	}, [refreshSessions, state.models, state.selectedModel, state.selectedWorkspaceId, state.workspaces]);
+	}, [refreshSessions, state.models, state.selectedModel]);
+
+	const createSession = useCallback(async () => {
+		const workspace = state.workspaces.find((candidate) => candidate.id === state.selectedWorkspaceId) ?? state.workspaces[0];
+		if (!workspace) throw new Error("工作区不可用");
+		await createSessionInWorkspace(workspace.id);
+	}, [createSessionInWorkspace, state.selectedWorkspaceId, state.workspaces]);
+
+	const importProject = useCallback(async (
+		name: string,
+		files: Array<{ file: File; path: string }>,
+		onProgress?: (uploaded: number, total: number) => void,
+	) => {
+		if (files.length === 0) throw new Error("没有可导入的文件");
+		const { project: draft } = await workspaceApi.createProject(token, name);
+		let uploaded = 0;
+		for (let index = 0; index < files.length; index += 4) {
+			const batch = files.slice(index, index + 4);
+			await Promise.all(batch.map(async (entry) => {
+				await workspaceApi.uploadProjectFile(token, draft.id, entry.path, entry.file);
+				uploaded += 1;
+				onProgress?.(uploaded, files.length);
+			}));
+		}
+		const { project } = await workspaceApi.completeProject(token, draft.id);
+		const result = await requestRef.current?.({ type: "workspace.list" });
+		const workspaces = result?.type === "workspace.list" ? result.workspaces : [...state.workspaces, project];
+		setState((current) => ({ ...current, workspaces }));
+		await openWorkspace(project.id);
+		if (state.models.length > 0) await createSessionInWorkspace(project.id);
+		return project;
+	}, [createSessionInWorkspace, openWorkspace, state.models.length, state.workspaces, token]);
+
+	const openLocalProject = useCallback(async (kind: "file" | "directory") => {
+		const { project } = await workspaceApi.pickProject(token, kind);
+		const result = await requestRef.current?.({ type: "workspace.list" });
+		const workspaces = result?.type === "workspace.list" ? result.workspaces : [...state.workspaces, project];
+		setState((current) => ({ ...current, workspaces }));
+		await openWorkspace(project.id);
+		if (state.models.length > 0) await createSessionInWorkspace(project.id);
+		return project;
+	}, [createSessionInWorkspace, openWorkspace, state.models.length, state.workspaces, token]);
+
+	const renameProject = useCallback(async (projectId: string, name: string) => {
+		const normalizedName = name.trim();
+		if (!normalizedName) throw new Error("项目名称不能为空");
+		const { project } = await workspaceApi.renameProject(token, projectId, normalizedName);
+		setState((current) => ({
+			...current,
+			workspaces: current.workspaces.map((workspace) => workspace.id === project.id ? project : workspace),
+		}));
+		return project;
+	}, [token]);
+
+	const removeProject = useCallback(async (projectId: string) => {
+		const selected = state.selectedWorkspaceId === projectId;
+		const currentSession = snapshotRef.current;
+		if (selected && currentSession) {
+			if (currentSession.session.phase !== "idle") throw new Error("请先停止正在运行的会话");
+		}
+		await workspaceApi.removeProject(token, projectId);
+		if (selected) snapshotRef.current = undefined;
+		const result = await requestRef.current?.({ type: "workspace.list" });
+		const workspaces = result?.type === "workspace.list"
+			? result.workspaces
+			: state.workspaces.filter((workspace) => workspace.id !== projectId);
+		setState((current) => ({ ...current, workspaces }));
+		if (!selected) return;
+		const next = workspaces.find((workspace) => !isImplicitWorkspace(workspace)) ?? workspaces[0];
+		if (next) {
+			await openWorkspace(next.id);
+			return;
+		}
+		localStorage.removeItem("wuming.workspaceId");
+		setState((current) => ({
+			...current,
+			selectedWorkspaceId: undefined,
+			sessions: [],
+			snapshot: undefined,
+			runs: [],
+			subagents: [],
+			goals: [],
+			liveAssistants: {},
+			liveTools: {},
+		}));
+	}, [openWorkspace, state.selectedWorkspaceId, state.workspaces, token]);
 
 	const forkSession = useCallback(async (fromItemId?: string) => {
 		const snapshot = snapshotRef.current;
@@ -738,6 +856,15 @@ export function useWumingClient() {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
 		const result = await requestRef.current?.({ type: "session.thinking.set", sessionId: snapshot.session.id, thinkingLevel });
+		if (result?.type !== "session.configured") return;
+		snapshotRef.current = result.snapshot;
+		setState((current) => ({ ...current, snapshot: result.snapshot }));
+	}, []);
+
+	const setSessionPolicy = useCallback(async (sandboxMode: SandboxMode, approvalPolicy: ApprovalPolicy) => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		const result = await requestRef.current?.({ type: "session.policy.set", sessionId: snapshot.session.id, sandboxMode, approvalPolicy });
 		if (result?.type !== "session.configured") return;
 		snapshotRef.current = result.snapshot;
 		setState((current) => ({ ...current, snapshot: result.snapshot }));
@@ -879,15 +1006,20 @@ export function useWumingClient() {
 		return result.subagent;
 	}, []);
 
-	const createGoal = useCallback(async (input: { objective: string; title?: string }) => {
+	const createGoal = useCallback(async (input: { objective: string; title?: string; successCriteria?: string; maxRounds?: number }) => {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
 		if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
+		// The orchestrator rejects review rounds without success criteria, so both fields travel together.
+		const review = input.successCriteria
+			? { successCriteria: input.successCriteria, ...(input.maxRounds === undefined ? {} : { maxRounds: input.maxRounds }) }
+			: {};
 		const result = await requestRef.current?.({
 			type: "goal.create",
 			sessionId: snapshot.session.id,
 			objective: input.objective,
 			...(input.title ? { title: input.title } : {}),
+			...review,
 		});
 		if (result?.type !== "goal.created") throw new Error("目标创建失败");
 		setState((current) => ({ ...current, goals: [result.goal, ...current.goals.filter((goal) => goal.id !== result.goal.id)] }));
@@ -945,11 +1077,17 @@ export function useWumingClient() {
 		removeCustomModel,
 		testCustomModel,
 		getMcp,
+		importProject,
+		openLocalProject,
+		renameProject,
+		removeProject,
+		createSessionInWorkspace,
 		createSession,
 		forkSession,
 		compactSession,
 		setSessionModel,
 		setSessionThinking,
+		setSessionPolicy,
 		setSessionBudget,
 		attachSession,
 		renameSession,

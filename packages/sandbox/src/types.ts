@@ -1,3 +1,10 @@
+import type {
+	WorkspaceGlobResult,
+	WorkspaceGrepOptions,
+	WorkspaceGrepResult,
+	WorkspaceListing,
+} from "./workspace-search.js";
+
 export interface ReadTextOptions {
 	offset?: number;
 	limit?: number;
@@ -37,6 +44,11 @@ export interface ProcessResult {
 }
 
 export interface ProcessSandbox {
+	/**
+	 * Whether commands can reach the network. The model is told, because it
+	 * decides between installing a dependency and working with what is present.
+	 */
+	readonly networkAccess?: boolean;
 	exec(
 		command: string,
 		options?: {
@@ -82,8 +94,22 @@ export interface WebSandbox {
 	search?(query: string, options?: WebSearchOptions): Promise<WebSearchResult>;
 }
 
+/**
+ * Read-only navigation over the workspace tree. Structurally satisfied by
+ * {@link WorkspaceSearcher}; declared separately so a deployment can substitute
+ * its own implementation (a remote index, a language server) without depending
+ * on the filesystem one.
+ */
+export interface WorkspaceSearchSandbox {
+	list(path?: string, depth?: number): Promise<WorkspaceListing>;
+	glob(pattern: string, options?: { path?: string; limit?: number }): Promise<WorkspaceGlobResult>;
+	grep(pattern: string, options?: WorkspaceGrepOptions): Promise<WorkspaceGrepResult>;
+}
+
 export interface SandboxExecutor {
 	files: WorkspaceFiles;
 	process?: ProcessSandbox;
 	web?: WebSandbox;
+	search?: WorkspaceSearchSandbox;
 }
+

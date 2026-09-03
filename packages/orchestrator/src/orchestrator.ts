@@ -17,6 +17,7 @@ import type {
 	UserContentPart,
 } from "@wuming/protocol";
 import { OrchestratorError } from "./errors.js";
+import { appendForkTitle, isAutomaticSessionTitle, suggestSessionTitle, suggestSessionTitleFromTranscript, wasLegacyForkTitle } from "./session-title.js";
 import { SqliteOrchestratorStore } from "./store.js";
 import type { AgentRuntime, DurableGoal, DurableOperation, RuntimeTurnResult, StructuredLogger, TurnMode, WriterLease } from "./types.js";
 
@@ -84,6 +85,14 @@ export interface SetSessionThinkingInput {
 	thinkingLevel: ThinkingLevel;
 }
 
+export interface SetSessionPolicyInput {
+	principalId: string;
+	idempotencyKey: string;
+	sessionId: string;
+	sandboxMode: SandboxMode;
+	approvalPolicy: ApprovalPolicy;
+}
+
 export interface SetSessionBudgetInput {
 	principalId: string;
 	idempotencyKey: string;
@@ -108,6 +117,12 @@ export interface CreateSubagentInput {
 	name?: string;
 	costBudgetUsd?: number;
 	tokenBudget?: number;
+	/**
+	 * The caller waits for this subagent and returns its result itself — used by the
+	 * model-facing `subagent` tool, where the child's answer becomes the tool result
+	 * in the parent's own context instead of a separate parent transcript item.
+	 */
+	deliverInline?: boolean;
 }
 
 export interface CancelSubagentInput {
@@ -502,8 +517,8 @@ export class SessionOrchestrator {
 				if (!parentSessionId) continue;
 				const operation = this.store.listOperations(child.session.id, 1)[0];
 				if (!operation || operation.status === "queued" || operation.status === "running") continue;
-				const itemId = `subagent:${child.session.id}`;
-				if (this.store.loadSnapshot(parentSessionId)?.transcript.some((item) => item.id === itemId)) continue;
+				const parent = this.store.loadSnapshot(parentSessionId);
+				if (!parent || !this.#subagentPublishPending(parent, child, operation)) continue;
 				await this.publishSubagentResult(parentSessionId, child.session.id);
 				published += 1;
 			}
@@ -595,12 +610,47 @@ export class SessionOrchestrator {
 		});
 	}
 
+	async backfillSessionNames(workspaceId: string): Promise<number> {
+		const candidates = [
+			...this.store.listSnapshots(workspaceId, { archived: false, limit: 200 }),
+			...this.store.listSnapshots(workspaceId, { archived: true, limit: 200 }),
+		];
+		let renamed = 0;
+		for (const candidate of candidates) {
+			if (!isAutomaticSessionTitle(candidate.session.name)) continue;
+			const changed = await this.#serializeCommand(candidate.session.id, () => {
+				const current = this.store.loadSnapshot(candidate.session.id);
+				if (!current || !isAutomaticSessionTitle(current.session.name)) return false;
+				const suggested = suggestSessionTitleFromTranscript(current.transcript);
+				if (!suggested) return false;
+				const name = wasLegacyForkTitle(current.session.name) ? appendForkTitle(suggested) : suggested;
+				const event: SessionEvent = {
+					type: "session.renamed",
+					eventId: this.#idFactory(),
+					sessionId: current.session.id,
+					revision: current.revision + 1,
+					timestamp: current.session.updatedAt,
+					name,
+				};
+				this.store.commitMutation({
+					sessionId: current.session.id,
+					expectedRevision: current.revision,
+					events: [event],
+					snapshot: reduceSessionEvent(current, event),
+				});
+				return true;
+			});
+			if (changed) renamed += 1;
+		}
+		return renamed;
+	}
+
 	async createSubagent(input: CreateSubagentInput): Promise<Extract<CommandResult, { type: "subagent.created" }>> {
 		return this.#serializeCommand(`subagent:create:${input.sessionId}:${input.idempotencyKey}`, () => {
 			const now = this.#clock();
 			const task = input.task.trim();
 			if (!task) throw new OrchestratorError("conflict", "Subagent task cannot be empty");
-			const hash = commandHash({ type: "subagent.create", sessionId: input.sessionId, task, name: input.name, costBudgetUsd: input.costBudgetUsd, tokenBudget: input.tokenBudget });
+			const hash = commandHash({ type: "subagent.create", sessionId: input.sessionId, task, name: input.name, costBudgetUsd: input.costBudgetUsd, tokenBudget: input.tokenBudget, deliverInline: input.deliverInline });
 			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
 			if (existing) return existing as Extract<CommandResult, { type: "subagent.created" }>;
 			const parent = this.store.loadSnapshot(input.sessionId);
@@ -612,6 +662,7 @@ export class SessionOrchestrator {
 				...(input.name === undefined ? {} : { name: input.name }),
 				...(input.costBudgetUsd === undefined ? {} : { costBudgetUsd: input.costBudgetUsd }),
 				...(input.tokenBudget === undefined ? {} : { tokenBudget: input.tokenBudget }),
+				...(input.deliverInline === undefined ? {} : { deliverInline: input.deliverInline }),
 			}, now);
 			const result = { type: "subagent.created", subagent: prepared.summary } as const;
 			const committed = this.store.commitMutation({
@@ -628,7 +679,7 @@ export class SessionOrchestrator {
 
 	#prepareSubagent(
 		parent: SessionSnapshot,
-		input: { task: string; name?: string; costBudgetUsd?: number; tokenBudget?: number },
+		input: { task: string; name?: string; costBudgetUsd?: number; tokenBudget?: number; deliverInline?: boolean },
 		now: number,
 	): { events: SessionEvent[]; snapshot: SessionSnapshot; operation: DurableOperation; summary: SubagentSummary } {
 		const remainingCost = parent.costBudgetUsd === undefined ? undefined : Math.max(0, parent.costBudgetUsd - parent.usage.costUsd);
@@ -676,7 +727,13 @@ export class SessionOrchestrator {
 			sessionId,
 			type: "turn",
 			status: "queued",
-			payload: { type: "turn", mode: "prompt", userItemId, content: [{ type: "text", text: input.task }] },
+			payload: {
+				type: "turn",
+				mode: "prompt",
+				userItemId,
+				content: [{ type: "text", text: input.task }],
+				...(input.deliverInline === undefined ? {} : { deliverInline: input.deliverInline }),
+			},
 			attempt: 0,
 			createdAt: now,
 			updatedAt: now,
@@ -1095,33 +1152,34 @@ export class SessionOrchestrator {
 			const operation = this.store.listOperations(subagentId, 1)[0];
 			if (!operation) throw new OrchestratorError("not_found", `Subagent ${subagentId} has no operation`);
 			const summary = summarizeSubagent(child, operation);
-			if (operation.status === "queued" || operation.status === "running") return summary;
-			const itemId = `subagent:${subagentId}`;
-			if (parent.transcript.some((item) => item.id === itemId)) return summary;
+			if (!this.#subagentPublishPending(parent, child, operation)) return summary;
+			const inline = operation.payload.deliverInline === true;
 			const now = this.#clock();
 			const text = summary.result ?? summary.error ?? (summary.status === "cancelled" ? "Subagent was cancelled." : `Subagent finished with status ${summary.status}.`);
 			const events: SessionEvent[] = [];
 			let snapshot = parent;
-			const itemEvent: SessionEvent = {
-				type: "session.item.upserted",
-				eventId: this.#idFactory(),
-				sessionId: parentSessionId,
-				revision: snapshot.revision + 1,
-				timestamp: now,
-				item: {
-					id: itemId,
-					type: "tool",
-					createdAt: now,
-					toolCallId: subagentId,
-					toolName: "subagent",
-					status: summary.status === "completed" ? "complete" : summary.status === "cancelled" ? "aborted" : "error",
-					input: { subagentId, task: summary.task },
-					content: [{ type: "text", text: text.slice(0, 200_000) }],
-					isError: summary.status !== "completed",
-				},
-			};
-			events.push(itemEvent);
-			snapshot = reduceSessionEvent(snapshot, itemEvent);
+			if (!inline) {
+				const itemEvent: SessionEvent = {
+					type: "session.item.upserted",
+					eventId: this.#idFactory(),
+					sessionId: parentSessionId,
+					revision: snapshot.revision + 1,
+					timestamp: now,
+					item: {
+						id: `subagent:${subagentId}`,
+						type: "tool",
+						createdAt: now,
+						toolCallId: subagentId,
+						toolName: "subagent",
+						status: summary.status === "completed" ? "complete" : summary.status === "cancelled" ? "aborted" : "error",
+						input: { subagentId, task: summary.task },
+						content: [{ type: "text", text: text.slice(0, 200_000) }],
+						isError: summary.status !== "completed",
+					},
+				};
+				events.push(itemEvent);
+				snapshot = reduceSessionEvent(snapshot, itemEvent);
+			}
 			if (hasUsage(child.usage)) {
 				const usage = addUsage(snapshot.usage, child.usage);
 				const replaced: SessionEvent = { type: "session.usage.replaced", eventId: this.#idFactory(), sessionId: parentSessionId, revision: snapshot.revision + 1, timestamp: now, usage };
@@ -1134,6 +1192,51 @@ export class SessionOrchestrator {
 			this.store.commitMutation({ sessionId: parentSessionId, expectedRevision: parent.revision, events, snapshot });
 			return summary;
 		});
+	}
+
+	/**
+	 * Whether publishing this subagent to its parent would still change anything.
+	 *
+	 * A subagent created by the browser is published as a parent transcript item, so
+	 * that item's presence is the marker. A subagent the model created inside its own
+	 * turn already returned its answer as that tool call's result: publishing only
+	 * folds in the child's usage, the parent's per-turn usage entry is the marker, and
+	 * it has to wait for the parent turn to finish. Adding to the parent aggregate
+	 * mid-turn would race the runtime's own cumulative usage for that turn and lose
+	 * one of the two.
+	 */
+	#subagentPublishPending(parent: SessionSnapshot, child: SessionSnapshot, operation: DurableOperation): boolean {
+		if (operation.status === "queued" || operation.status === "running") return false;
+		if (operation.payload.deliverInline !== true) {
+			return !parent.transcript.some((item) => item.id === `subagent:${child.session.id}`);
+		}
+		if (parent.session.phase !== "idle" || !hasUsage(child.usage)) return false;
+		return !(parent.usageByTurn ?? []).some((turn) => turn.turnId === child.session.id);
+	}
+
+	/**
+	 * Fold in the usage of subagents the model ran during a turn that has now ended.
+	 * Their results were already delivered as tool results; this is what keeps the
+	 * parent's cost and token budgets honest across delegated work.
+	 */
+	async #settleInlineSubagents(parentSessionId: string): Promise<void> {
+		const parent = this.store.loadSnapshot(parentSessionId);
+		if (!parent) return;
+		for (const child of this.store.listChildSnapshots(parentSessionId, 100)) {
+			const operation = this.store.listOperations(child.session.id, 1)[0];
+			if (!operation || operation.payload.deliverInline !== true) continue;
+			if (!this.#subagentPublishPending(parent, child, operation)) continue;
+			await this.publishSubagentResult(parentSessionId, child.session.id);
+		}
+	}
+
+	/** The parent-scoped view of one subagent, for callers acting on the parent's behalf. */
+	subagentSummary(parentSessionId: string, subagentId: string): SubagentSummary {
+		const child = this.store.loadSnapshot(subagentId);
+		if (!child || child.session.parentSessionId !== parentSessionId) throw new OrchestratorError("not_found", `Subagent ${subagentId} does not exist`);
+		const summary = this.#loadSubagentSummary(subagentId);
+		if (!summary) throw new OrchestratorError("not_found", `Subagent ${subagentId} has no operation`);
+		return summary;
 	}
 
 	async forkSession(input: ForkSessionInput): Promise<Extract<CommandResult, { type: "session.forked" }>> {
@@ -1152,7 +1255,10 @@ export class SessionOrchestrator {
 				throw new OrchestratorError("not_found", `Transcript item ${input.fromItemId} does not exist`);
 			}
 			const sessionId = this.#idFactory();
-			const sourceName = current.session.name ?? "Session";
+			const sourceName = !isAutomaticSessionTitle(current.session.name)
+				? current.session.name
+				: suggestSessionTitleFromTranscript(current.transcript);
+			const forkName = sourceName ? appendForkTitle(sourceName) : undefined;
 			const event: SessionEvent = {
 				type: "session.created",
 				eventId: this.#idFactory(),
@@ -1162,7 +1268,7 @@ export class SessionOrchestrator {
 				session: {
 					id: sessionId,
 					workspaceId: current.session.workspaceId,
-					name: `${sourceName} (fork)`.slice(0, 500),
+					...(forkName === undefined ? {} : { name: forkName }),
 					phase: "idle",
 					createdAt: now,
 					updatedAt: now,
@@ -1227,6 +1333,34 @@ export class SessionOrchestrator {
 				revision: current.revision + 1,
 				timestamp: now,
 				model: input.model,
+			};
+			const snapshot = reduceSessionEvent(current, event);
+			const result = { type: "session.configured", snapshot } as const;
+			const committed = this.store.commitMutation({ sessionId: input.sessionId, expectedRevision: current.revision, events: [event], snapshot, idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs } });
+			return committed.result as Extract<CommandResult, { type: "session.configured" }>;
+		});
+	}
+
+	async setSessionPolicy(input: SetSessionPolicyInput): Promise<Extract<CommandResult, { type: "session.configured" }>> {
+		return this.#serializeCommand(input.sessionId, () => {
+			const now = this.#clock();
+			const hash = commandHash({ type: "session.policy.set", sessionId: input.sessionId, sandboxMode: input.sandboxMode, approvalPolicy: input.approvalPolicy });
+			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
+			if (existing) return existing as Extract<CommandResult, { type: "session.configured" }>;
+			const current = this.store.loadSnapshot(input.sessionId);
+			if (!current) throw new OrchestratorError("not_found", `Session ${input.sessionId} does not exist`);
+			if (current.session.phase !== "idle") throw new OrchestratorError("conflict", "Only an idle session can change permissions");
+			if (current.sandboxMode === input.sandboxMode && current.approvalPolicy === input.approvalPolicy) {
+				throw new OrchestratorError("conflict", "Session already uses those permissions");
+			}
+			const event: SessionEvent = {
+				type: "session.policy.changed",
+				eventId: this.#idFactory(),
+				sessionId: input.sessionId,
+				revision: current.revision + 1,
+				timestamp: now,
+				sandboxMode: input.sandboxMode,
+				approvalPolicy: input.approvalPolicy,
 			};
 			const snapshot = reduceSessionEvent(current, event);
 			const result = { type: "session.configured", snapshot } as const;
@@ -1496,6 +1630,22 @@ export class SessionOrchestrator {
 				snapshot = reduceSessionEvent(snapshot, queueEvent);
 			}
 
+			if (isAutomaticSessionTitle(current.session.name)) {
+				const suggested = suggestSessionTitleFromTranscript(current.transcript) ?? suggestSessionTitle(input.content);
+				if (suggested) {
+					const titleEvent: SessionEvent = {
+						type: "session.renamed",
+						eventId: this.#idFactory(),
+						sessionId: input.sessionId,
+						revision: snapshot.revision + 1,
+						timestamp: now,
+						name: wasLegacyForkTitle(current.session.name) ? appendForkTitle(suggested) : suggested,
+					};
+					events.push(titleEvent);
+					snapshot = reduceSessionEvent(snapshot, titleEvent);
+				}
+			}
+
 			const operation: DurableOperation = {
 				id: this.#idFactory(),
 				sessionId: input.sessionId,
@@ -1590,6 +1740,8 @@ export class SessionOrchestrator {
 		const snapshot = this.store.loadSnapshot(sessionId);
 		if (snapshot?.session.parentSessionId) {
 			await this.publishSubagentResult(snapshot.session.parentSessionId, sessionId);
+		} else if (snapshot) {
+			await this.#settleInlineSubagents(sessionId);
 		}
 		this.#logger.log("debug", "orchestrator.drain.finished", { sessionId, workerId, completed, durationMs: Math.max(0, this.#clock() - startedAt), ...trace });
 		return completed;

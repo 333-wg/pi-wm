@@ -335,6 +335,14 @@ export const WorkspaceDirectorySchema = StrictObject({
 });
 export type WorkspaceDirectory = Static<typeof WorkspaceDirectorySchema>;
 
+export const WorkspaceSearchSchema = StrictObject({
+	query: Type.String({ maxLength: 400 }),
+	entries: Type.Array(WorkspaceEntrySchema),
+	/** True when the walk stopped early, so better matches may exist. */
+	truncated: Type.Boolean(),
+});
+export type WorkspaceSearch = Static<typeof WorkspaceSearchSchema>;
+
 export const WorkspaceFileViewSchema = StrictObject({
 	path: Type.String({ minLength: 1, maxLength: 4000 }),
 	content: Type.String(),
@@ -391,6 +399,7 @@ export const ToolStatusSchema = StrictObject({
 		Type.Literal("filesystem"),
 		Type.Literal("process"),
 		Type.Literal("network"),
+		Type.Literal("agent"),
 	]),
 	status: Type.Union([
 		Type.Literal("ready"),
@@ -657,6 +666,7 @@ export const CommandSchema = Type.Union([
 	StrictObject({ type: Type.Literal("session.fork"), sessionId: Id, fromItemId: Type.Optional(Id) }),
 	StrictObject({ type: Type.Literal("session.compact"), sessionId: Id, instructions: Type.Optional(Type.String({ maxLength: 4000 })) }),
 	StrictObject({ type: Type.Literal("session.model.set"), sessionId: Id, model: ModelRefSchema }),
+	StrictObject({ type: Type.Literal("session.policy.set"), sessionId: Id, sandboxMode: SandboxModeSchema, approvalPolicy: ApprovalPolicySchema }),
 	StrictObject({
 		type: Type.Literal("session.thinking.set"),
 		sessionId: Id,

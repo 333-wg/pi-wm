@@ -88,9 +88,42 @@ export interface DockerProcessSandboxOptions {
 	pidsLimit?: number;
 	tmpfsSize?: string;
 	user?: string;
+	/**
+	 * Docker network for the container. `none` keeps the sandbox offline, which is
+	 * the default because a build that reaches the network can exfiltrate the
+	 * workspace. A deployment that needs dependency installation sets `bridge`.
+	 */
+	network?: string;
+	/** `host` shares the host's network namespace, so it needs a second opt-in. */
+	allowHostNetwork?: boolean;
+	/** Writable HOME. The container root is read-only, so tools need one. */
+	home?: string;
+	homeSize?: string;
+	/** Docker volume mounted at `home`, so package caches survive between commands. */
+	homeVolume?: string;
+	/** Extra container environment. HOME and TMPDIR are set unless overridden. */
+	env?: Readonly<Record<string, string>>;
+}
+
+/** Docker size suffixes; anything else could inject further mount options. */
+const sizePattern = /^\d+(?:\.\d+)?[bkmg]?$/i;
+const networkPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+const environmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function checkedSize(value: string, label: string): string {
+	if (!sizePattern.test(value)) throw new SandboxError("process_unavailable", `Docker ${label} must be a size such as 512m or 2g`);
+	return value;
+}
+
+function checkedMountPath(value: string, label: string): string {
+	if (!value.startsWith("/") || value.includes(",") || value.includes("\0") || value === "/" || value === "/workspace") {
+		throw new SandboxError("process_unavailable", `Docker ${label} must be an absolute container path outside /workspace and contain no commas`);
+	}
+	return value;
 }
 
 export class DockerProcessSandbox implements ProcessSandbox {
+	readonly networkAccess: boolean;
 	readonly #workspaceRoot: string;
 	readonly #image: string;
 	readonly #dockerExecutable: string;
@@ -103,6 +136,11 @@ export class DockerProcessSandbox implements ProcessSandbox {
 	readonly #pidsLimit: number;
 	readonly #tmpfsSize: string;
 	readonly #user: string | undefined;
+	readonly #network: string;
+	readonly #home: string;
+	readonly #homeSize: string;
+	readonly #homeVolume: string | undefined;
+	readonly #environment: ReadonlyArray<string>;
 
 	constructor(options: DockerProcessSandboxOptions) {
 		if (!options.allowMutableImage && !options.image.includes("@sha256:")) {
@@ -115,14 +153,43 @@ export class DockerProcessSandbox implements ProcessSandbox {
 		this.#image = options.image;
 		this.#dockerExecutable = options.dockerExecutable ?? "docker";
 		this.#runner = options.runner ?? new NodeCommandRunner();
-		this.#defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
-		this.#maxTimeoutMs = options.maxTimeoutMs ?? 20 * 60_000;
+		// A real `npm ci` or cold cargo build does not finish in two minutes.
+		this.#defaultTimeoutMs = options.defaultTimeoutMs ?? 300_000;
+		this.#maxTimeoutMs = options.maxTimeoutMs ?? 30 * 60_000;
 		this.#maxOutputBytes = options.maxOutputBytes ?? 1024 * 1024;
-		this.#cpus = options.cpus ?? 1;
-		this.#memory = options.memory ?? "768m";
-		this.#pidsLimit = options.pidsLimit ?? 256;
-		this.#tmpfsSize = options.tmpfsSize ?? "64m";
+		this.#cpus = options.cpus ?? 2;
+		this.#memory = checkedSize(options.memory ?? "2g", "memory");
+		this.#pidsLimit = options.pidsLimit ?? 512;
+		this.#tmpfsSize = checkedSize(options.tmpfsSize ?? "512m", "tmpfs size");
 		this.#user = options.user;
+		this.#network = this.#checkedNetwork(options);
+		this.networkAccess = this.#network !== "none";
+		this.#home = checkedMountPath(options.home ?? "/home/agent", "home");
+		this.#homeSize = checkedSize(options.homeSize ?? "512m", "home size");
+		if (options.homeVolume?.includes(",")) {
+			throw new SandboxError("process_unavailable", "Docker cache volume names containing commas are not supported");
+		}
+		this.#homeVolume = options.homeVolume;
+		this.#environment = this.#checkedEnvironment(options.env);
+	}
+
+	#checkedNetwork(options: DockerProcessSandboxOptions): string {
+		const network = options.network ?? "none";
+		if (!networkPattern.test(network)) throw new SandboxError("process_unavailable", `Unsupported Docker network name: ${network}`);
+		if (network === "host" && !options.allowHostNetwork) {
+			throw new SandboxError("process_unavailable", "Docker host networking removes the network boundary and must be enabled explicitly");
+		}
+		return network;
+	}
+
+	/** Docker takes `--env KEY=VALUE` as one argv entry, so only the name needs shape checks. */
+	#checkedEnvironment(env: DockerProcessSandboxOptions["env"]): string[] {
+		const merged: Record<string, string> = { HOME: this.#home, TMPDIR: "/tmp", ...env };
+		return Object.entries(merged).flatMap(([name, value]) => {
+			if (!environmentNamePattern.test(name)) throw new SandboxError("process_unavailable", `Unsupported container environment name: ${name}`);
+			if (value.includes("\0")) throw new SandboxError("process_unavailable", `Container environment ${name} must not contain NUL`);
+			return ["--env", `${name}=${value}`];
+		});
 	}
 
 	async exec(
@@ -145,12 +212,16 @@ export class DockerProcessSandbox implements ProcessSandbox {
 		const args = [
 			"run",
 			"--rm",
+			// PID 1 must reap the build's children and forward the kill signal.
+			"--init",
 			"--name",
 			name,
+			"--label",
+			"wuming.sandbox=1",
 			"--workdir",
 			"/workspace",
 			"--network",
-			"none",
+			this.#network,
 			"--cpus",
 			String(this.#cpus),
 			"--memory",
@@ -162,10 +233,15 @@ export class DockerProcessSandbox implements ProcessSandbox {
 			"--security-opt",
 			"no-new-privileges",
 			"--read-only",
+			// mode=1777 so a non-root --user can still write to both mounts.
 			"--tmpfs",
-			`/tmp:rw,noexec,nosuid,size=${this.#tmpfsSize}`,
+			`/tmp:rw,noexec,nosuid,mode=1777,size=${this.#tmpfsSize}`,
+			...(this.#homeVolume
+				? ["--mount", `type=volume,source=${this.#homeVolume},target=${this.#home}`]
+				: ["--tmpfs", `${this.#home}:rw,noexec,nosuid,mode=1777,size=${this.#homeSize}`]),
 			"--mount",
 			`type=bind,source=${this.#workspaceRoot},target=/workspace`,
+			...this.#environment,
 			...(this.#user ? ["--user", this.#user] : []),
 			this.#image,
 			"/bin/sh",
