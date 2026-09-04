@@ -510,6 +510,8 @@ test("runs a goal through a bounded review loop", async ({ page }) => {
 	await page.getByRole("combobox", { name: "最大轮次" }).selectOption("2");
 	await page.getByRole("button", { name: "创建目标" }).click();
 	await expect(page.getByText("等待中", { exact: true }).last()).toBeVisible();
+	await expect(page.getByRole("checkbox", { name: "启用评审循环" })).not.toBeChecked();
+	await expect(page.getByRole("textbox", { name: "成功标准" })).toBeHidden();
 	await expect(page.getByText("尚未开始", { exact: true })).toBeVisible();
 	await expect(page.getByText("最多 2 轮", { exact: true })).toBeVisible();
 	await expect(page.getByText("The result must mention the E2E goal")).toBeVisible();
