@@ -116,6 +116,12 @@ describe("buildWumingSystemPrompt guidelines", () => {
 	it("always states how to batch calls, even with no tools", () => {
 		expect(section(build([]), "tool_guidelines")).toContain("Make independent tool calls in the same batch");
 	});
+
+	it("uses the plan tool for substantial work without forcing it on simple tasks", () => {
+		const guidelines = section(build([tool("update_plan", "Track a multi-step plan")]), "tool_guidelines");
+		expect(guidelines).toContain("create a short plan after the initial inspection");
+		expect(guidelines).toContain("Skip a plan for a simple question or one-step edit");
+	});
 });
 
 describe("buildWumingSystemPrompt environment", () => {
@@ -148,6 +154,13 @@ describe("buildWumingSystemPrompt environment", () => {
 		expect(prompt).not.toMatch(/\bpi\b/i);
 		expect(prompt).not.toContain("pi.dev");
 		expect(prompt).not.toContain(".pi/");
+	});
+
+	it("asks for concise, localized progress rather than hidden chain-of-thought", () => {
+		const prompt = build(fullToolset);
+		expect(prompt).toContain("brief progress updates at meaningful transitions");
+		expect(prompt).toContain("not private chain-of-thought");
+		expect(prompt).toContain("must use the user's language");
 	});
 });
 
