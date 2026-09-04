@@ -1,8 +1,11 @@
 // Line diffing shared by the transcript edit cards and the Changes view.
 //
 // Edit blocks are small, so a straightforward LCS table gives minimal, readable
-// diffs without a dependency. Oversized inputs degrade to a whole-block
-// replacement instead of allocating a quadratic table.
+// diffs without a dependency. Identical lines at the top and bottom are trimmed
+// before the table is built, which is what keeps a one-line change inside a long
+// file readable: only the differing middle is quadratic, and that middle is
+// almost always tiny even when the file is not. A middle that is still oversized
+// degrades to a whole-block replacement rather than allocating the table.
 
 export type DiffKind = "add" | "del" | "context";
 
@@ -22,13 +25,46 @@ export type DiffRow = DiffLine | DiffGap;
 
 const MAX_CELLS = 250_000;
 
+/**
+ * How many lines at the start and at the end are identical in both versions.
+ *
+ * Such lines can never be part of a change, so keeping them out of the table is
+ * both cheaper and — because the size guard then only measures the middle — the
+ * difference between a real diff and "the whole block was replaced".
+ */
+function commonEdges(a: readonly string[], b: readonly string[]): { head: number; tail: number } {
+	const shortest = Math.min(a.length, b.length);
+	let head = 0;
+	while (head < shortest && a[head] === b[head]) head += 1;
+	// The head already claimed its lines; a tail that walked back past them would
+	// report the same line twice, which a run of repeated lines hits immediately.
+	let tail = 0;
+	while (tail < shortest - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
+	return { head, tail };
+}
+
 export function diffLines(before: string, after: string): DiffLine[] {
 	const a = before.length > 0 ? before.split("\n") : [];
 	const b = after.length > 0 ? after.split("\n") : [];
+	const { head, tail } = commonEdges(a, b);
+	const lines: DiffLine[] = [];
+	for (let index = 0; index < head; index += 1) {
+		lines.push({ kind: "context", text: a[index] as string, oldNumber: index + 1, newNumber: index + 1 });
+	}
+	for (const line of diffMiddle(a.slice(head, a.length - tail), b.slice(head, b.length - tail), head)) lines.push(line);
+	for (let index = 0; index < tail; index += 1) {
+		const oldIndex = a.length - tail + index;
+		lines.push({ kind: "context", text: a[oldIndex] as string, oldNumber: oldIndex + 1, newNumber: b.length - tail + index + 1 });
+	}
+	return lines;
+}
+
+/** Diffs whatever the identical edges left behind; `offset` is how many lines they took. */
+function diffMiddle(a: readonly string[], b: readonly string[], offset: number): DiffLine[] {
 	if (a.length * b.length > MAX_CELLS) {
 		return [
-			...a.map((text, index) => ({ kind: "del" as const, text, oldNumber: index + 1 })),
-			...b.map((text, index) => ({ kind: "add" as const, text, newNumber: index + 1 })),
+			...a.map((text, index) => ({ kind: "del" as const, text, oldNumber: offset + index + 1 })),
+			...b.map((text, index) => ({ kind: "add" as const, text, newNumber: offset + index + 1 })),
 		];
 	}
 	const table: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
@@ -39,12 +75,12 @@ export function diffLines(before: string, after: string): DiffLine[] {
 			row[j] = a[i] === b[j] ? (nextRow[j + 1] as number) + 1 : Math.max(nextRow[j] as number, row[j + 1] as number);
 		}
 	}
-	const lines: DiffLine[] = [];
+	const rows: DiffLine[] = [];
 	let i = 0;
 	let j = 0;
 	while (i < a.length && j < b.length) {
 		if (a[i] === b[j]) {
-			lines.push({ kind: "context", text: a[i] as string, oldNumber: i + 1, newNumber: j + 1 });
+			rows.push({ kind: "context", text: a[i] as string, oldNumber: offset + i + 1, newNumber: offset + j + 1 });
 			i += 1;
 			j += 1;
 			continue;
@@ -52,22 +88,22 @@ export function diffLines(before: string, after: string): DiffLine[] {
 		const down = (table[i + 1] as number[])[j] as number;
 		const right = (table[i] as number[])[j + 1] as number;
 		if (down >= right) {
-			lines.push({ kind: "del", text: a[i] as string, oldNumber: i + 1 });
+			rows.push({ kind: "del", text: a[i] as string, oldNumber: offset + i + 1 });
 			i += 1;
 		} else {
-			lines.push({ kind: "add", text: b[j] as string, newNumber: j + 1 });
+			rows.push({ kind: "add", text: b[j] as string, newNumber: offset + j + 1 });
 			j += 1;
 		}
 	}
 	while (i < a.length) {
-		lines.push({ kind: "del", text: a[i] as string, oldNumber: i + 1 });
+		rows.push({ kind: "del", text: a[i] as string, oldNumber: offset + i + 1 });
 		i += 1;
 	}
 	while (j < b.length) {
-		lines.push({ kind: "add", text: b[j] as string, newNumber: j + 1 });
+		rows.push({ kind: "add", text: b[j] as string, newNumber: offset + j + 1 });
 		j += 1;
 	}
-	return lines;
+	return rows;
 }
 
 export function collapseContext(lines: DiffLine[], context = 3): DiffRow[] {
