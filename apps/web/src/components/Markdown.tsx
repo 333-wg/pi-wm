@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode, useMemo } from "react";
+import { Fragment, memo, type ReactNode, useMemo } from "react";
 import { type BlockNode, type InlineNode, parseMarkdown } from "../lib/markdown";
 import { CodeBlock } from "./CodeBlock";
 
@@ -118,11 +118,21 @@ function Blocks({ nodes }: { nodes: BlockNode[] }) {
 	);
 }
 
-export function Markdown({ text, className = "prose" }: { text: string; className?: string }) {
+/**
+ * Rendered prose, memoised on the text it came from.
+ *
+ * Streaming a turn re-renders `App` on every delta, which walks the whole
+ * transcript again. The `useMemo` below keeps that from re-*parsing* every
+ * message, but without `memo` React still rebuilds the element tree for every
+ * block and inline node of every finished message, dozens of times a second,
+ * only to reconcile it against an identical tree. Both props are plain values,
+ * so the default shallow comparison is exactly right: same text, same output.
+ */
+export const Markdown = memo(function Markdown({ text, className = "prose" }: { text: string; className?: string }) {
 	const blocks = useMemo(() => parseMarkdown(text), [text]);
 	return (
 		<div className={className}>
 			<Blocks nodes={blocks} />
 		</div>
 	);
-}
+});

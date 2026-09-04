@@ -1,8 +1,18 @@
 import { Check, Copy } from "lucide-react";
-import { Fragment, useCallback, useMemo, useState } from "react";
+import { Fragment, memo, useCallback, useMemo, useState } from "react";
 import { highlight, resolveLanguage } from "../lib/highlight";
 
-export function CodeBlock({
+/**
+ * A highlighted code block, memoised on the code it shows.
+ *
+ * This is the heaviest leaf in the transcript: one element per token, so a
+ * hundred-line block is well over a thousand elements. It is also the leaf most
+ * often asked to re-render for nothing — the block a model has already finished
+ * keeps the same text while the message below it is still streaming, and every
+ * tool card re-renders with its row. Both of the props that decide the output
+ * are strings, so the default shallow comparison holds whenever the code does.
+ */
+export const CodeBlock = memo(function CodeBlock({
 	code,
 	lang = "",
 	streaming = false,
@@ -52,4 +62,4 @@ export function CodeBlock({
 			</pre>
 		</div>
 	);
-}
+});

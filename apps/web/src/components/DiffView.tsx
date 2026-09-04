@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import {
 	collapseContext,
 	countChanges,
@@ -41,7 +41,14 @@ export function DiffStat({ added, removed }: { added: number; removed: number })
 	);
 }
 
-export function EditDiff({
+/**
+ * The two diff views are memoised for the same reason as `CodeBlock`: they
+ * expand to four elements per line, they live inside tool cards that re-render
+ * with the transcript, and the file they describe stopped changing the moment
+ * the edit finished. Every prop is a plain value, so a shallow comparison is
+ * enough to know the rows would come out identical.
+ */
+export const EditDiff = memo(function EditDiff({
 	before,
 	after,
 	context = 3,
@@ -54,13 +61,13 @@ export function EditDiff({
 }) {
 	const rows = useMemo(() => collapseContext(diffLines(before, after), context), [before, after, context]);
 	return <DiffRows rows={rows} numbered={numbered} />;
-}
+});
 
 export function editDiffStat(before: string, after: string): { added: number; removed: number } {
 	return countChanges(diffLines(before, after));
 }
 
-export function UnifiedDiff({ patch }: { patch: string }) {
+export const UnifiedDiff = memo(function UnifiedDiff({ patch }: { patch: string }) {
 	const parsed = useMemo(() => parseUnifiedDiff(patch), [patch]);
 	if (parsed.binary) return <p className="empty-hint">二进制文件差异无法显示。</p>;
 	if (parsed.hunks.length === 0) return <p className="empty-hint">没有可显示的差异。</p>;
@@ -74,4 +81,4 @@ export function UnifiedDiff({ patch }: { patch: string }) {
 			))}
 		</div>
 	);
-}
+});
