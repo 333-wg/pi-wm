@@ -4,6 +4,7 @@ import {
 	ArrowLeft,
 	BookOpen,
 	Archive,
+	ArchiveRestore,
 	Bot,
 	Check,
 	BrainCircuit,
@@ -2007,7 +2008,7 @@ function SessionNavigation({
 	selectedSessionId,
 	workspaceId,
 	disabled,
-	onRefresh,
+	onBrowse,
 	onSelect,
 	onRename,
 	onArchive,
@@ -2016,23 +2017,41 @@ function SessionNavigation({
 	selectedSessionId?: string;
 	workspaceId?: string;
 	disabled: boolean;
-	onRefresh: (workspaceId: string, options: { query?: string; archived?: boolean }) => Promise<SessionSummary[]>;
+	onBrowse: (workspaceId: string, options: { query?: string; archived?: boolean }) => Promise<SessionSummary[]>;
 	onSelect: (sessionId: string) => void;
 	onRename: (sessionId: string, name: string) => Promise<void>;
 	onArchive: (sessionId: string, archived: boolean) => Promise<void>;
 }) {
+	const [archived, setArchived] = useState(false);
 	const [renamingId, setRenamingId] = useState<string>();
 	const [nameDraft, setNameDraft] = useState("");
 	const [busyId, setBusyId] = useState<string>();
+	const [browsing, setBrowsing] = useState(false);
 	const [error, setError] = useState<string>();
 
 	useEffect(() => {
 		if (!workspaceId || disabled) return;
+		setArchived(false);
 		const timer = setTimeout(() => {
-			void onRefresh(workspaceId, { archived: false }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+			void onBrowse(workspaceId, { archived: false }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
 		}, 180);
 		return () => clearTimeout(timer);
-	}, [disabled, onRefresh, workspaceId]);
+	}, [disabled, onBrowse, workspaceId]);
+
+	const switchArchiveView = async (nextArchived: boolean) => {
+		if (!workspaceId || browsing) return;
+		setBrowsing(true);
+		setError(undefined);
+		try {
+			await onBrowse(workspaceId, { archived: nextArchived });
+			setArchived(nextArchived);
+			setRenamingId(undefined);
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : String(cause));
+		} finally {
+			setBrowsing(false);
+		}
+	};
 
 	const submitRename = async (event: FormEvent) => {
 		event.preventDefault();
@@ -2051,10 +2070,11 @@ function SessionNavigation({
 
 	return (
 		<div className="session-browser">
+			{archived && <div className="session-view-label"><Archive size={12} /><span>归档聊天</span></div>}
 			<nav className="session-nav" aria-label="会话">
 				{sessions.map((session) => (
 					<div className={`session-entry ${selectedSessionId === session.id ? "selected" : ""}`} key={session.id}>
-						{renamingId === session.id ? (
+						{!archived && renamingId === session.id ? (
 							<form className="session-rename" onSubmit={(event) => void submitRename(event)}>
 								<input aria-label="会话名称" autoFocus maxLength={500} placeholder="输入会话标题" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} />
 								<button type="submit" title="保存名称" disabled={!nameDraft.trim() || busyId === session.id}><Check size={13} /></button>
@@ -2066,29 +2086,57 @@ function SessionNavigation({
 									<span>{session.name || DEFAULT_SESSION_TITLE}</span>
 									<i className={`session-phase dot-${session.phase}`} />
 								</button>
-								<div className="session-actions">
-									<button type="button" title="重命名会话" disabled={session.phase !== "idle" || busyId === session.id} onClick={() => { setRenamingId(session.id); setNameDraft(session.name || ""); }}><Pencil size={12} /></button>
-									<button
-										type="button"
-										title="归档会话"
-										disabled={session.phase !== "idle" || busyId === session.id}
-										onClick={() => {
-											setBusyId(session.id);
-											setError(undefined);
-											void onArchive(session.id, true)
-												.catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
-												.finally(() => setBusyId(undefined));
-										}}
-									>
-										<Archive size={12} />
-									</button>
+								<div className={`session-actions ${archived ? "restore-only" : ""}`}>
+									{archived ? (
+										<button
+											type="button"
+											title="恢复聊天"
+											aria-label="恢复聊天"
+											disabled={session.phase !== "idle" || busyId === session.id}
+											onClick={() => {
+												setBusyId(session.id);
+												setError(undefined);
+												void onArchive(session.id, false)
+													.catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+													.finally(() => setBusyId(undefined));
+											}}
+										>
+											<ArchiveRestore size={12} />
+										</button>
+									) : <>
+										<button type="button" title="重命名会话" disabled={session.phase !== "idle" || busyId === session.id} onClick={() => { setRenamingId(session.id); setNameDraft(session.name || ""); }}><Pencil size={12} /></button>
+										<button
+											type="button"
+											title="归档聊天"
+											aria-label="归档聊天"
+											disabled={session.phase !== "idle" || busyId === session.id}
+											onClick={() => {
+												setBusyId(session.id);
+												setError(undefined);
+												void onArchive(session.id, true)
+													.catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+													.finally(() => setBusyId(undefined));
+											}}
+										>
+											<Archive size={12} />
+										</button>
+									</>}
 								</div>
 							</>
 						)}
 					</div>
 				))}
-				{sessions.length === 0 && <div className="session-list-empty">暂无会话</div>}
+				{sessions.length === 0 && <div className="session-list-empty">{archived ? "暂无归档聊天" : "暂无聊天"}</div>}
 			</nav>
+			<button
+				className="session-archive-switch"
+				type="button"
+				disabled={disabled || browsing || !workspaceId}
+				onClick={() => void switchArchiveView(!archived)}
+			>
+				{browsing ? <RefreshCw className="spin" size={12} /> : archived ? <ArrowLeft size={12} /> : <Archive size={12} />}
+				<span>{archived ? "返回聊天" : "查看归档聊天"}</span>
+			</button>
 			{error && <div className="session-list-error"><CircleAlert size={13} />{error}</div>}
 		</div>
 	);
@@ -2505,7 +2553,7 @@ export function App() {
 			},
 			{
 				name: "archive",
-				title: "归档当前会话",
+				title: "归档当前聊天",
 				hint: "归档 结束",
 				kind: "action",
 				icon: <Archive size={14} />,
@@ -2729,7 +2777,7 @@ export function App() {
 									{...(client.snapshot ? { selectedSessionId: client.snapshot.session.id } : {})}
 									workspaceId={implicitWorkspace.id}
 									disabled={client.connection !== "connected"}
-									onRefresh={client.refreshSessions}
+									onBrowse={client.browseSessions}
 									onSelect={(sessionId) => { void client.attachSession(sessionId); setMobileNav(false); }}
 									onRename={client.renameSession}
 									onArchive={client.archiveSession}
@@ -2765,7 +2813,7 @@ export function App() {
 										{...(client.snapshot ? { selectedSessionId: client.snapshot.session.id } : {})}
 										workspaceId={workspace.id}
 										disabled={client.connection !== "connected"}
-										onRefresh={client.refreshSessions}
+										onBrowse={client.browseSessions}
 										onSelect={(sessionId) => { void client.attachSession(sessionId); setMobileNav(false); }}
 										onRename={client.renameSession}
 										onArchive={client.archiveSession}

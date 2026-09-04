@@ -968,7 +968,7 @@ export function useWumingClient() {
 		const result = await requestRef.current?.({ type: "session.archive", sessionId, archived });
 		if (result?.type !== "session.archived") return;
 		const workspaceId = result.snapshot.session.workspaceId;
-		const sessions = await refreshSessions(workspaceId);
+		await refreshSessions(workspaceId);
 		if (snapshotRef.current?.session.id !== sessionId) return;
 		if ((result.snapshot.session.archivedAt !== undefined) === (sessionListRef.current.archived ?? false)) {
 			snapshotRef.current = result.snapshot;
@@ -979,8 +979,7 @@ export function useWumingClient() {
 		snapshotRef.current = undefined;
 		localStorage.removeItem(sessionSelectionKey(workspaceId));
 		setState((current) => ({ ...current, snapshot: undefined, runs: [], subagents: [], subagentDepth: 0, canCreateSubagent: true, goals: [], liveAssistants: {}, liveTools: {} }));
-		if (sessions[0]) await attachSession(sessions[0].id);
-	}, [attachSession, refreshSessions]);
+	}, [refreshSessions]);
 
 	const respondApproval = useCallback(async (sessionId: string, approvalId: string, decision: "approve" | "deny") => {
 		await requestRef.current?.({ type: "approval.respond", sessionId, approvalId, decision });

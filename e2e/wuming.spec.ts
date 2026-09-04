@@ -227,6 +227,33 @@ test("persists a completed turn across a browser reload", async ({ page }) => {
 	await expect(page.getByText(/Demo runtime received: Persist this E2E result/)).toBeVisible();
 });
 
+test("archives, browses, and restores a chat", async ({ page }) => {
+	await createSession(page);
+	const session = page.locator(".session-entry.selected");
+	await session.hover();
+	await session.getByRole("button", { name: "重命名会话" }).click();
+	await session.getByRole("textbox", { name: "会话名称" }).fill("归档交互 E2E");
+	await session.getByRole("button", { name: "保存名称" }).click();
+
+	const archive = session.getByRole("button", { name: "归档聊天" });
+	await expect(archive).toHaveAttribute("title", "归档聊天");
+	await archive.click();
+	await expect(page.getByRole("heading", { name: "开始一个新任务" })).toBeVisible();
+	await expect(page.getByRole("navigation", { name: "会话" }).getByRole("button", { name: "归档交互 E2E", exact: true })).toHaveCount(0);
+
+	await page.getByRole("button", { name: "查看归档聊天" }).click();
+	const archivedSession = page.getByRole("navigation", { name: "会话" }).locator(".session-entry", { hasText: "归档交互 E2E" });
+	await expect(archivedSession).toBeVisible();
+	await archivedSession.getByRole("button", { name: "归档交互 E2E", exact: true }).click();
+	await expect(page.getByText("已归档", { exact: true })).toBeVisible();
+	await archivedSession.hover();
+	await archivedSession.getByRole("button", { name: "恢复聊天" }).click();
+	await expect(archivedSession).toHaveCount(0);
+
+	await page.getByRole("button", { name: "返回聊天" }).click();
+	await expect(page.getByRole("navigation", { name: "会话" }).getByRole("button", { name: "归档交互 E2E", exact: true })).toBeVisible();
+});
+
 test("approves a tool and stops a long-running turn", async ({ page }) => {
 	await createSession(page);
 	await sendMessage(page, "/approval");
