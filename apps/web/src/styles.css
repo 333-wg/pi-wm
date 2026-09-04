@@ -661,11 +661,24 @@ button { color: inherit; }
 .metric strong { font: 650 18px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .metric span { color: var(--muted); font-size: 11px; }
 .budget-warning { margin-top: 8px; display: flex; align-items: center; gap: 5px; color: var(--amber); font-size: 11px; font-weight: 650; }
-.usage-breakdown { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
-.usage-breakdown-title { margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-.usage-breakdown-row { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; color: var(--muted); font-size: 10px; }
-.usage-breakdown-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-breakdown-row strong { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.usage-periods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 2px; padding: 9px 0 10px; border-bottom: 1px solid var(--line-soft); }
+.usage-periods > div { min-width: 0; display: grid; gap: 4px; }
+.usage-periods > div + div { padding-left: 13px; border-left: 1px solid var(--line-soft); }
+.usage-periods span { color: var(--muted); font-size: 10px; font-weight: 650; }
+.usage-periods strong { overflow: hidden; color: var(--ink); font: 680 20px/1.1 ui-monospace, SFMono-Regular, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.usage-periods small { color: var(--muted); font: 10px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.usage-trend { padding: 10px 0 9px; border-bottom: 1px solid var(--line-soft); }
+.usage-trend-heading { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 10px; font-weight: 650; }
+.usage-chart { height: 78px; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); align-items: end; gap: 5px; margin-top: 6px; }
+.usage-day { min-width: 0; display: grid; grid-template-rows: 56px 12px; gap: 4px; text-align: center; }
+.usage-bar-track { min-width: 0; display: flex; align-items: end; border-bottom: 1px solid var(--line); }
+.usage-bar-track span { width: 100%; min-height: 2px; height: var(--usage-bar); border-radius: 2px 2px 0 0; background: var(--green); opacity: .82; transition: height 180ms ease, opacity 120ms ease; }
+.usage-day:hover .usage-bar-track span { opacity: 1; }
+.usage-day small { overflow: hidden; color: var(--faint); font-size: 8px; line-height: 12px; text-overflow: clip; white-space: nowrap; }
+.usage-day:last-child small { color: var(--green); font-weight: 700; }
+.usage-session { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; color: var(--muted); font-size: 10px; }
+.usage-session strong { color: var(--text); font: 650 11px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
+.usage-session strong small { color: var(--muted); font: inherit; }
 
 .budget-form { margin-top: 10px; display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .budget-form label { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }

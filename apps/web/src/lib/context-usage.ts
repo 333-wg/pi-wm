@@ -33,5 +33,6 @@ export function contextLevel(ratio: number): "ok" | "warn" | "high" {
 }
 
 export function formatTokens(value: number): string {
+	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}m`;
 	return value >= 1000 ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value);
 }

@@ -774,6 +774,9 @@ export class GatewayServer implements AsyncDisposable {
 		switch (command.type) {
 			case "workspace.list":
 				return { type: "workspace.list", workspaces: connection.principal.workspaces };
+			case "usage.overview":
+				this.#requireWorkspace(connection, command.workspaceId);
+				return { type: "usage.overview", overview: this.#store.usageOverview(command.workspaceId, this.#clock(), command.days) };
 			case "tool.list": {
 				this.#requireWorkspace(connection, command.workspaceId);
 				if (!this.#tools) throw Object.assign(new Error("Tool catalog is unavailable"), { protocolCode: "not_implemented" });

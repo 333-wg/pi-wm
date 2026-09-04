@@ -4,6 +4,8 @@ import {
 	CommandResultSchema,
 	type SessionSnapshot,
 	SessionSnapshotSchema,
+	type Usage,
+	type UsageOverview,
 } from "@wuming/protocol";
 import { DatabaseSync } from "node:sqlite";
 import { Type } from "typebox";
@@ -166,6 +168,31 @@ export interface ListSnapshotsOptions {
 	query?: string;
 	archived?: boolean;
 	limit?: number;
+}
+
+const EMPTY_USAGE: Usage = {
+	inputTokens: 0,
+	outputTokens: 0,
+	cacheReadTokens: 0,
+	cacheWriteTokens: 0,
+	totalTokens: 0,
+	costUsd: 0,
+};
+
+function addUsage(left: Usage, right: Usage): Usage {
+	return {
+		inputTokens: left.inputTokens + right.inputTokens,
+		outputTokens: left.outputTokens + right.outputTokens,
+		cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
+		cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+		totalTokens: left.totalTokens + right.totalTokens,
+		costUsd: left.costUsd + right.costUsd,
+	};
+}
+
+function localDateKey(timestamp: number): string {
+	const date = new Date(timestamp);
+	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function parseChecked<T>(json: string, check: { Check(value: unknown): boolean }, label: string): T {
@@ -434,6 +461,44 @@ export class SqliteOrchestratorStore implements Disposable {
 		return rows.map((row) =>
 			parseChecked<SessionSnapshot>(row.snapshot_json, checkSnapshot, `Snapshot ${row.session_id}`),
 		);
+	}
+
+	usageOverview(workspaceId: string, now: number, requestedDays = 7): UsageOverview {
+		const days = Math.max(7, Math.min(31, Math.trunc(requestedDays)));
+		const current = new Date(now);
+		const todayStart = new Date(current.getFullYear(), current.getMonth(), current.getDate()).getTime();
+		const tomorrowStart = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1).getTime();
+		const monthStart = new Date(current.getFullYear(), current.getMonth(), 1).getTime();
+		const chartStart = new Date(current.getFullYear(), current.getMonth(), current.getDate() - days + 1).getTime();
+		const daily = Array.from({ length: days }, (_, index) => {
+			const timestamp = new Date(current.getFullYear(), current.getMonth(), current.getDate() - days + index + 1).getTime();
+			return { date: localDateKey(timestamp), usage: { ...EMPTY_USAGE }, turnCount: 0, requestCount: 0 };
+		});
+		const byDate = new Map(daily.map((entry) => [entry.date, entry]));
+		let today = { ...EMPTY_USAGE };
+		let month = { ...EMPTY_USAGE };
+		const rows = this.#db.prepare(`
+			SELECT e.event_json
+			FROM session_events e
+			JOIN session_snapshots s ON s.session_id = e.session_id
+			WHERE s.workspace_id = ?
+				AND s.parent_session_id IS NULL
+				AND e.created_at >= ?
+				AND e.created_at < ?
+			ORDER BY e.created_at
+		`).all(workspaceId, Math.min(monthStart, chartStart), tomorrowStart) as unknown as Array<{ event_json: string }>;
+		for (const row of rows) {
+			const event = parseChecked<SessionEvent>(row.event_json, checkEvent, "Usage event");
+			if (event.type !== "session.usage.recorded") continue;
+			if (event.timestamp >= monthStart) month = addUsage(month, event.usage);
+			if (event.timestamp >= todayStart) today = addUsage(today, event.usage);
+			const bucket = byDate.get(localDateKey(event.timestamp));
+			if (!bucket) continue;
+			bucket.usage = addUsage(bucket.usage, event.usage);
+			bucket.turnCount += 1;
+			bucket.requestCount += event.requests.length;
+		}
+		return { workspaceId, generatedAt: now, today, month, daily };
 	}
 
 	listChildSnapshots(parentSessionId: string, limit = 100): SessionSnapshot[] {

@@ -17,6 +17,7 @@ import type {
 	SessionSnapshot,
 	SessionSummary,
 	ThinkingLevel,
+	UsageOverview,
 	UserContentPart,
 	WorkspaceSummary,
 	Skill,
@@ -53,6 +54,7 @@ interface ClientState {
 	selectedWorkspaceId: string | undefined;
 	selectedModel: ModelRef | undefined;
 	sessions: SessionSummary[];
+	usageOverview: UsageOverview | undefined;
 	runs: RunSummary[];
 	snapshot: SessionSnapshot | undefined;
 	liveAssistants: Record<string, LiveAssistant>;
@@ -83,6 +85,7 @@ const initialState: ClientState = {
 	selectedWorkspaceId: undefined,
 	selectedModel: undefined,
 	sessions: [],
+	usageOverview: undefined,
 	runs: [],
 	snapshot: undefined,
 	liveAssistants: {},
@@ -269,6 +272,14 @@ export function useWumingClient() {
 		return result?.type === "session.list" ? result.sessions : [];
 	}, []);
 
+	const refreshUsageOverview = useCallback(async (workspaceId: string) => {
+		const result = await requestRef.current?.({ type: "usage.overview", workspaceId, days: 7 });
+		if (result?.type === "usage.overview") {
+			setState((current) => current.selectedWorkspaceId === undefined || current.selectedWorkspaceId === workspaceId ? { ...current, usageOverview: result.overview } : current);
+		}
+		return result?.type === "usage.overview" ? result.overview : undefined;
+	}, []);
+
 	const refreshRuns = useCallback(async (sessionId: string) => {
 		const result = await requestRef.current?.({ type: "session.run.list", sessionId, limit: 20 });
 		if (result?.type === "session.run.list" && snapshotRef.current?.session.id === sessionId) {
@@ -407,6 +418,7 @@ export function useWumingClient() {
 						});
 						const sessions = sessionResult.type === "session.list" ? sessionResult.sessions : [];
 						setState((current) => ({ ...current, sessions }));
+						await refreshUsageOverview(workspace.id);
 						const storedSessionId = localStorage.getItem(sessionSelectionKey(workspace.id));
 						const session = sessions.find((candidate) => candidate.id === storedSessionId) ?? sessions[0];
 						// The fallback workspace represents a projectless draft. Start on
@@ -508,6 +520,7 @@ export function useWumingClient() {
 						};
 					});
 					void refreshSessions(event.snapshot.session.workspaceId);
+					void refreshUsageOverview(event.snapshot.session.workspaceId);
 				}
 				return;
 			}
@@ -594,7 +607,7 @@ export function useWumingClient() {
 			if (requestRef.current === request) requestRef.current = undefined;
 			capabilitiesRef.current = [];
 		};
-	}, [attachSession, reconnectAttempt, refreshRuns, refreshSessions, refreshSkills, refreshTools, refreshMcp, token]);
+	}, [attachSession, reconnectAttempt, refreshRuns, refreshSessions, refreshSkills, refreshTools, refreshMcp, refreshUsageOverview, token]);
 
 	useEffect(() => {
 		const sessionId = state.snapshot?.session.id;
@@ -627,6 +640,7 @@ export function useWumingClient() {
 			...current,
 			selectedWorkspaceId: workspaceId,
 			sessions: [],
+			usageOverview: undefined,
 			runs: [],
 			snapshot: undefined,
 			liveAssistants: {},
@@ -647,10 +661,11 @@ export function useWumingClient() {
 		if (state.capabilities.includes("tools")) await refreshTools(workspaceId);
 		if (state.capabilities.includes("mcp")) await refreshMcp(workspaceId);
 		const sessions = await refreshSessions(workspaceId);
+		await refreshUsageOverview(workspaceId);
 		const storedSessionId = localStorage.getItem(sessionSelectionKey(workspaceId));
 		const session = sessions.find((candidate) => candidate.id === storedSessionId) ?? sessions[0];
 		if (session) await attachSession(session.id);
-	}, [attachSession, refreshSessions, refreshSkills, refreshTools, refreshMcp, state.capabilities]);
+	}, [attachSession, refreshSessions, refreshSkills, refreshTools, refreshMcp, refreshUsageOverview, state.capabilities]);
 
 	const selectWorkspace = useCallback(async (workspaceId: string) => {
 		if (!state.workspaces.some((workspace) => workspace.id === workspaceId)) throw new Error("工作区不可用");
@@ -1072,6 +1087,7 @@ export function useWumingClient() {
 		selectModel,
 		browseSessions,
 		refreshSessions,
+		refreshUsageOverview,
 		refreshRuns,
 		refreshSubagents,
 		refreshGoals,

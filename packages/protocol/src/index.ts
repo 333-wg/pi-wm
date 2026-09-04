@@ -168,6 +168,23 @@ export const UsageSchema = StrictObject({
 });
 export type Usage = Static<typeof UsageSchema>;
 
+export const DailyUsageSchema = StrictObject({
+	date: Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
+	usage: UsageSchema,
+	turnCount: Type.Integer({ minimum: 0 }),
+	requestCount: Type.Integer({ minimum: 0 }),
+});
+export type DailyUsage = Static<typeof DailyUsageSchema>;
+
+export const UsageOverviewSchema = StrictObject({
+	workspaceId: Id,
+	generatedAt: Timestamp,
+	today: UsageSchema,
+	month: UsageSchema,
+	daily: Type.Array(DailyUsageSchema, { minItems: 7, maxItems: 31 }),
+});
+export type UsageOverview = Static<typeof UsageOverviewSchema>;
+
 export const UsageToolSummarySchema = StrictObject({
 	toolName: Id,
 	callCount: Type.Integer({ minimum: 1 }),
@@ -623,6 +640,7 @@ export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
 const PromptContent = Type.Array(UserContentPartSchema, { minItems: 1, maxItems: 32 });
 export const CommandSchema = Type.Union([
 	StrictObject({ type: Type.Literal("workspace.list") }),
+	StrictObject({ type: Type.Literal("usage.overview"), workspaceId: Id, days: Type.Optional(Type.Integer({ minimum: 7, maximum: 31 })) }),
 	StrictObject({ type: Type.Literal("tool.list"), workspaceId: Id }),
 	StrictObject({ type: Type.Literal("skill.list"), workspaceId: Id }),
 	StrictObject({ type: Type.Literal("skill.get"), workspaceId: Id, skillId: Id }),
@@ -744,6 +762,7 @@ export const CommandResultSchema = Type.Union([
 	StrictObject({ type: Type.Literal("model.custom.removed"), model: ModelRefSchema }),
 	StrictObject({ type: Type.Literal("model.custom.tested"), model: ModelRefSchema, latencyMs: Type.Integer({ minimum: 0 }) }),
 	StrictObject({ type: Type.Literal("session.list"), sessions: Type.Array(SessionSummarySchema) }),
+	StrictObject({ type: Type.Literal("usage.overview"), overview: UsageOverviewSchema }),
 	StrictObject({ type: Type.Literal("session.created"), snapshot: SessionSnapshotSchema }),
 	StrictObject({ type: Type.Literal("session.attached"), snapshot: SessionSnapshotSchema }),
 	StrictObject({ type: Type.Literal("session.detached"), sessionId: Id }),

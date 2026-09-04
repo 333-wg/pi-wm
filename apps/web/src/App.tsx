@@ -81,6 +81,7 @@ import type {
 	SubagentSummary,
 	ThinkingLevel,
 	UsageToolSummary,
+	UsageOverview,
 	ToolStatus,
 } from "@wuming/protocol";
 import { type LiveAssistant, type LiveTool, useWumingClient } from "./use-wuming-client.js";
@@ -1880,7 +1881,7 @@ function GoalsView({
 	);
 }
 
-function BudgetEditor({ snapshot, onSave }: { snapshot: SessionSnapshot; onSave: (budget: { costBudgetUsd?: number | null; tokenBudget?: number | null; budgetWarningThreshold?: number }) => Promise<void> }) {
+function BudgetEditor({ snapshot, overview, onSave }: { snapshot: SessionSnapshot; overview: UsageOverview | undefined; onSave: (budget: { costBudgetUsd?: number | null; tokenBudget?: number | null; budgetWarningThreshold?: number }) => Promise<void> }) {
 	const [editing, setEditing] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string>();
@@ -1915,17 +1916,27 @@ function BudgetEditor({ snapshot, onSave }: { snapshot: SessionSnapshot; onSave:
 	};
 
 	const canEdit = snapshot.session.phase === "idle" && snapshot.session.archivedAt === undefined;
+	const maxDailyTokens = Math.max(1, ...(overview?.daily.map((entry) => entry.usage.totalTokens) ?? []));
 	return (
 		<>
 			<div className="rail-section-heading">
 				<h2>用量</h2>
 				{!editing && <button className="rail-icon-button" type="button" title="编辑会话限额" disabled={!canEdit} onClick={() => { setError(undefined); setEditing(true); }}><Pencil size={13} /></button>}
 			</div>
-			<div className="metric"><strong>{formatTokens(snapshot.usage.totalTokens)}</strong><span>Token</span></div>
-			<div className="metric"><strong>{formatMoney(snapshot.usage.costUsd)}</strong><span>费用</span></div>
-			{snapshot.usageByModel && snapshot.usageByModel.length > 0 && <div className="usage-breakdown"><div className="usage-breakdown-title">按模型</div>{snapshot.usageByModel.map((entry) => <div className="usage-breakdown-row" key={`${entry.model.provider}/${entry.model.id}`}><span>{entry.model.provider}/{entry.model.id}</span><strong>{formatTokens(entry.usage.totalTokens)} · {formatMoney(entry.usage.costUsd)}</strong></div>)}</div>}
-			{snapshot.usageByTool && snapshot.usageByTool.length > 0 && <div className="usage-breakdown"><div className="usage-breakdown-title">按工具</div>{snapshot.usageByTool.map((entry) => <div className="usage-breakdown-row" key={entry.toolName}><span>{formatToolObservation(entry)}</span><strong>{formatTokens(entry.usage.totalTokens)} · {formatMoney(entry.usage.costUsd)}</strong></div>)}</div>}
-			{snapshot.usageByTurn && snapshot.usageByTurn.length > 0 && <div className="usage-breakdown"><div className="usage-breakdown-title">按轮次</div>{snapshot.usageByTurn.slice(-5).reverse().map((entry) => <div className="usage-breakdown-row" key={entry.turnId}><span>{entry.mode === "prompt" ? "提问" : entry.mode} · {entry.requests.length} 次请求</span><strong>{formatTokens(entry.usage.totalTokens)} · {formatMoney(entry.usage.costUsd)}</strong></div>)}</div>}
+			<div className="usage-periods">
+				<div><span>今天</span><strong>{overview ? formatTokens(overview.today.totalTokens) : "--"}</strong><small>{overview ? formatMoney(overview.today.costUsd) : "正在统计"}</small></div>
+				<div><span>本月</span><strong>{overview ? formatTokens(overview.month.totalTokens) : "--"}</strong><small>{overview ? formatMoney(overview.month.costUsd) : "正在统计"}</small></div>
+			</div>
+			{overview && <div className="usage-trend">
+				<div className="usage-trend-heading"><span>近 7 天</span><span>Token</span></div>
+				<div className="usage-chart" role="img" aria-label="最近 7 天 Token 用量">
+					{overview.daily.map((entry, index) => <div className="usage-day" key={entry.date} title={`${entry.date} · ${formatTokens(entry.usage.totalTokens)} Token · ${formatMoney(entry.usage.costUsd)}`}>
+						<div className="usage-bar-track"><span style={{ "--usage-bar": `${Math.max(entry.usage.totalTokens > 0 ? 5 : 2, Math.round(entry.usage.totalTokens / maxDailyTokens * 100))}%` } as CSSProperties} /></div>
+						<small>{index === overview.daily.length - 1 ? "今天" : entry.date.slice(5).replace("-", "/")}</small>
+					</div>)}
+				</div>
+			</div>}
+			<div className="usage-session"><span>本次会话</span><strong>{formatTokens(snapshot.usage.totalTokens)} <small>· {formatMoney(snapshot.usage.costUsd)}</small></strong></div>
 			{snapshot.costBudgetUsd !== undefined && <div className="kv"><span>剩余费用</span><strong>{formatMoney(Math.max(0, snapshot.costBudgetUsd - snapshot.usage.costUsd))}</strong></div>}
 			{snapshot.tokenBudget !== undefined && <div className="kv"><span>剩余 Token</span><strong>{formatTokens(Math.max(0, snapshot.tokenBudget - snapshot.usage.totalTokens))}</strong></div>}
 			{((snapshot.costBudgetUsd !== undefined && snapshot.usage.costUsd / snapshot.costBudgetUsd >= (snapshot.budgetWarningThreshold ?? 0.8)) || (snapshot.tokenBudget !== undefined && snapshot.usage.totalTokens / snapshot.tokenBudget >= (snapshot.budgetWarningThreshold ?? 0.8))) && <div className="budget-warning"><CircleAlert size={13} />用量预警</div>}
@@ -1944,7 +1955,7 @@ function BudgetEditor({ snapshot, onSave }: { snapshot: SessionSnapshot; onSave:
 	);
 }
 
-function RightRail({ snapshot, runs, contextUsage, onSetBudget, onClose }: { snapshot: SessionSnapshot | undefined; runs: RunSummary[]; contextUsage: ContextUsage | undefined; onSetBudget: (budget: { costBudgetUsd?: number | null; tokenBudget?: number | null; budgetWarningThreshold?: number }) => Promise<void>; onClose: () => void }) {
+function RightRail({ snapshot, usageOverview, runs, contextUsage, onSetBudget, onClose }: { snapshot: SessionSnapshot | undefined; usageOverview: UsageOverview | undefined; runs: RunSummary[]; contextUsage: ContextUsage | undefined; onSetBudget: (budget: { costBudgetUsd?: number | null; tokenBudget?: number | null; budgetWarningThreshold?: number }) => Promise<void>; onClose: () => void }) {
 	return (
 		<aside className="right-rail">
 			<div className="rail-section">
@@ -1957,13 +1968,13 @@ function RightRail({ snapshot, runs, contextUsage, onSetBudget, onClose }: { sna
 			</div>
 			<div className="rail-section">
 				{contextUsage && <ContextMeter usage={contextUsage} />}
-				{snapshot ? <BudgetEditor snapshot={snapshot} onSave={onSetBudget} /> : <><h2>用量</h2><div className="run-empty">未选择会话</div></>}
+				{snapshot ? <BudgetEditor snapshot={snapshot} overview={usageOverview} onSave={onSetBudget} /> : <><h2>用量</h2><div className="run-empty">未选择会话</div></>}
 			</div>
 			<div className="rail-section">
 				<h2>最近运行</h2>
 				<div className="run-history">
 					{runs.length === 0 && <div className="run-empty">暂无运行记录</div>}
-					{runs.map((run) => (
+					{runs.slice(0, 3).map((run) => (
 						<div className="run-row" key={run.id} title={run.error}>
 							<div className="run-row-heading">
 								<span className={`run-dot run-${run.status}`} />
@@ -3035,7 +3046,7 @@ export function App() {
 				{workbenchView === "mcp" && selectedWorkspace && <McpView servers={client.mcpServers} selectedServer={client.selectedMcpServer} onRefresh={() => client.refreshMcp(selectedWorkspace.id)} onSelect={(serverId) => client.getMcp(selectedWorkspace.id, serverId)} />}
 			</main>
 
-			{showRight && workbenchView === "chat" && <RightRail snapshot={client.snapshot} runs={client.runs} contextUsage={contextUsage} onSetBudget={client.setSessionBudget} onClose={() => setShowRight(false)} />}
+			{showRight && workbenchView === "chat" && <RightRail snapshot={client.snapshot} usageOverview={client.usageOverview} runs={client.runs} contextUsage={contextUsage} onSetBudget={client.setSessionBudget} onClose={() => setShowRight(false)} />}
 			{showRight && workbenchView === "chat" && <button className="right-rail-scrim" aria-label="关闭运行面板" onClick={() => setShowRight(false)} />}
 			{mobileNav && <button className="mobile-scrim" aria-label="关闭导航" onClick={() => setMobileNav(false)} />}
 			{paletteOpen && <CommandPalette entries={paletteEntries} onClose={() => setPaletteOpen(false)} />}
