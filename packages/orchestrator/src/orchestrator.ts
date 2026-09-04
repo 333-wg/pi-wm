@@ -1896,6 +1896,17 @@ export class SessionOrchestrator {
 					const delayMs = this.#retryBaseDelayMs * 2 ** Math.max(0, operation.attempt - 1);
 					operation = { ...operation, retryHistory: [...(operation.retryHistory ?? []), { attempt: operation.attempt, maxAttempts: this.#maxRetries, delayMs, error: failure.message, timestamp: this.#clock() }].slice(-32) };
 					this.#commitRuntimeRetry(operation, lease, result.usage, result.tools, result.requests, failure.message, delayMs, failure.kind ?? "provider");
+					for (const listener of this.#progressListeners) listener({
+						type: "run.retrying",
+						sessionId: operation.sessionId,
+						operationId: operation.id,
+						attempt: operation.attempt,
+						nextAttempt,
+						maxAttempts: this.#maxRetries + 1,
+						delayMs,
+						failureKind: failure.kind ?? "provider",
+						error: failure.message,
+					});
 					this.#logger.log("warn", "orchestrator.runtime.retry", { sessionId: operation.sessionId, operationId: operation.id, attempt: operation.attempt, nextAttempt, delayMs, error: failure.message, ...trace });
 					await waitForWork(delayMs, abortController.signal);
 					if (abortController.signal.aborted) throw abortController.signal.reason;

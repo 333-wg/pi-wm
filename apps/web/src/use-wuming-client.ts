@@ -11,6 +11,7 @@ import type {
 	ArtifactRef,
 	ModelMetadata,
 	ModelRef,
+	RunFailureKind,
 	RunSummary,
 	SandboxMode,
 	ServerMessage,
@@ -35,6 +36,7 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "er
 
 export interface LiveAssistant {
 	id: string;
+	order: number;
 	text: string;
 	thinking: string;
 	toolCall: string;
@@ -43,8 +45,21 @@ export interface LiveAssistant {
 export interface LiveTool {
 	toolCallId: string;
 	toolName: string;
+	input: unknown;
+	order: number;
+	status: "running" | "complete" | "error";
 	preview: string;
 	truncated: boolean;
+}
+
+export interface LiveRetry {
+	operationId: string;
+	attempt: number;
+	nextAttempt: number;
+	maxAttempts: number;
+	delayMs: number;
+	failureKind: RunFailureKind;
+	error: string;
 }
 
 interface ClientState {
@@ -60,6 +75,7 @@ interface ClientState {
 	snapshot: SessionSnapshot | undefined;
 	liveAssistants: Record<string, LiveAssistant>;
 	liveTools: Record<string, LiveTool>;
+	liveRetry: LiveRetry | undefined;
 	skills: SkillSummary[];
 	selectedSkill: Skill | undefined;
 	mcpServers: McpServerSummary[];
@@ -91,6 +107,7 @@ const initialState: ClientState = {
 	snapshot: undefined,
 	liveAssistants: {},
 	liveTools: {},
+	liveRetry: undefined,
 	skills: [],
 	selectedSkill: undefined,
 	mcpServers: [],
@@ -140,6 +157,7 @@ function upsertTranscript(snapshot: SessionSnapshot, item: SessionSnapshot["tran
 }
 
 export function useWumingClient() {
+	const liveOrder = useRef(0);
 	const [token, setTokenState] = useState(() => localStorage.getItem("wuming.token") ?? "");
 	const [reconnectAttempt, setReconnectAttempt] = useState(0);
 	const [state, setState] = useState<ClientState>(initialState);
@@ -318,6 +336,7 @@ export function useWumingClient() {
 				snapshot: result.snapshot,
 				liveAssistants: {},
 				liveTools: {},
+				liveRetry: undefined,
 				subagents: [],
 				subagentDepth: 0,
 				canCreateSubagent: true,
@@ -364,7 +383,7 @@ export function useWumingClient() {
 					const snapshot = current.snapshot;
 					if (snapshot?.session.id !== sessionId || snapshot.revision > result.snapshot.revision) return current;
 					snapshotRef.current = result.snapshot;
-					return { ...current, snapshot: result.snapshot, liveAssistants: {}, liveTools: {} };
+					return { ...current, snapshot: result.snapshot, liveAssistants: {}, liveTools: {}, liveRetry: undefined };
 				});
 				void refreshRuns(sessionId);
 			} catch (error) {
@@ -450,10 +469,27 @@ export function useWumingClient() {
 			if (message.type === "progress") {
 				const event = message.event;
 				if (event.sessionId !== snapshotRef.current?.session.id) return;
-				if (event.type === "assistant.delta") {
+				if (event.type === "run.retrying") {
+					setState((current) => ({
+						...current,
+						liveAssistants: {},
+						liveTools: {},
+						liveRetry: {
+							operationId: event.operationId,
+							attempt: event.attempt,
+							nextAttempt: event.nextAttempt,
+							maxAttempts: event.maxAttempts,
+							delayMs: event.delayMs,
+							failureKind: event.failureKind,
+							error: event.error,
+						},
+					}));
+				} else if (event.type === "assistant.delta") {
+					const order = ++liveOrder.current;
 					setState((current) => {
 						const existing = current.liveAssistants[event.itemId] ?? {
 							id: event.itemId,
+							order,
 							text: "",
 							thinking: "",
 							toolCall: "",
@@ -461,6 +497,7 @@ export function useWumingClient() {
 						const field = event.kind === "text" ? "text" : event.kind === "thinking" ? "thinking" : "toolCall";
 						return {
 							...current,
+							liveRetry: undefined,
 							liveAssistants: {
 								...current.liveAssistants,
 								[event.itemId]: { ...existing, [field]: existing[field] + event.delta },
@@ -468,23 +505,32 @@ export function useWumingClient() {
 						};
 					});
 				} else if (event.type === "tool.started") {
+					const order = ++liveOrder.current;
 					setState((current) => ({
 						...current,
+						liveRetry: undefined,
 						liveTools: {
 							...current.liveTools,
 							[event.toolCallId]: {
 								toolCallId: event.toolCallId,
 								toolName: event.toolName,
+								input: event.input,
+								order,
+								status: "running",
 								preview: "",
 								truncated: false,
 							},
 						},
 					}));
-				} else {
+				} else if (event.type === "tool.progress") {
+					const order = ++liveOrder.current;
 					setState((current) => {
 						const existing = current.liveTools[event.toolCallId] ?? {
 							toolCallId: event.toolCallId,
 							toolName: "tool",
+							input: null,
+							order,
+							status: "running" as const,
 							preview: "",
 							truncated: false,
 						};
@@ -493,6 +539,31 @@ export function useWumingClient() {
 							liveTools: {
 								...current.liveTools,
 								[event.toolCallId]: { ...existing, preview: event.preview, truncated: event.truncated },
+							},
+						};
+					});
+				} else {
+					const order = ++liveOrder.current;
+					setState((current) => {
+						const existing = current.liveTools[event.toolCallId] ?? {
+							toolCallId: event.toolCallId,
+							toolName: "tool",
+							input: null,
+							order,
+							status: "running" as const,
+							preview: "",
+							truncated: false,
+						};
+						return {
+							...current,
+							liveTools: {
+								...current.liveTools,
+								[event.toolCallId]: {
+									...existing,
+									status: event.isError ? "error" : "complete",
+									preview: event.preview,
+									truncated: event.truncated,
+								},
 							},
 						};
 					});
@@ -517,7 +588,7 @@ export function useWumingClient() {
 						return {
 							...current,
 							snapshot: event.snapshot,
-							...(event.snapshot.session.phase === "idle" ? { liveAssistants: {}, liveTools: {} } : {}),
+							...(event.snapshot.session.phase === "idle" ? { liveAssistants: {}, liveTools: {}, liveRetry: undefined } : {}),
 						};
 					});
 					void refreshSessions(event.snapshot.session.workspaceId);
@@ -526,7 +597,7 @@ export function useWumingClient() {
 				return;
 			}
 			if (event.sessionId !== snapshotRef.current?.session.id) return;
-			if (event.type === "session.phase.changed" && event.phase === "idle") void refreshRuns(event.sessionId);
+			if (event.type === "session.phase.changed" && (event.phase === "idle" || event.phase === "retry")) void refreshRuns(event.sessionId);
 			setState((current) => {
 				const snapshot = current.snapshot;
 				if (!snapshot) return current;
@@ -547,7 +618,7 @@ export function useWumingClient() {
 					return {
 						...current,
 						snapshot: { ...snapshot, revision: event.revision, session: { ...snapshot.session, phase: event.phase } },
-						...(event.phase === "idle" ? { liveAssistants: {}, liveTools: {} } : {}),
+						...(event.phase === "idle" ? { liveAssistants: {}, liveTools: {}, liveRetry: undefined } : {}),
 					};
 				}
 				if (event.type === "approval.requested") {
@@ -646,6 +717,7 @@ export function useWumingClient() {
 			snapshot: undefined,
 			liveAssistants: {},
 			liveTools: {},
+			liveRetry: undefined,
 			error: undefined,
 			skills: [],
 			selectedSkill: undefined,
@@ -695,7 +767,7 @@ export function useWumingClient() {
 		if (current) await requestRef.current?.({ type: "session.detach", sessionId: current.session.id }).catch(() => undefined);
 		snapshotRef.current = undefined;
 		localStorage.removeItem(sessionSelectionKey(workspaceId));
-		setState((value) => ({ ...value, snapshot: undefined, runs: [], subagents: [], subagentDepth: 0, canCreateSubagent: true, goals: [], liveAssistants: {}, liveTools: {} }));
+		setState((value) => ({ ...value, snapshot: undefined, runs: [], subagents: [], subagentDepth: 0, canCreateSubagent: true, goals: [], liveAssistants: {}, liveTools: {}, liveRetry: undefined }));
 		if (sessions[0]) await attachSession(sessions[0].id);
 		return sessions;
 	}, [attachSession, refreshSessions]);
@@ -740,6 +812,7 @@ export function useWumingClient() {
 				goals: [],
 				liveAssistants: {},
 				liveTools: {},
+				liveRetry: undefined,
 			}));
 			await refreshSessions(workspaceId, { archived: false });
 		}
@@ -829,6 +902,7 @@ export function useWumingClient() {
 			goals: [],
 			liveAssistants: {},
 			liveTools: {},
+			liveRetry: undefined,
 		}));
 	}, [openWorkspace, state.selectedWorkspaceId, state.workspaces, token]);
 
@@ -856,6 +930,7 @@ export function useWumingClient() {
 			goals: [],
 			liveAssistants: {},
 			liveTools: {},
+			liveRetry: undefined,
 		}));
 		await refreshSessions(workspaceId, { archived: false });
 	}, [refreshSessions]);
@@ -871,7 +946,7 @@ export function useWumingClient() {
 		});
 		if (result?.type !== "session.compacted") return;
 		snapshotRef.current = result.snapshot;
-		setState((current) => ({ ...current, snapshot: result.snapshot, liveAssistants: {}, liveTools: {} }));
+		setState((current) => ({ ...current, snapshot: result.snapshot, liveAssistants: {}, liveTools: {}, liveRetry: undefined }));
 	}, []);
 
 	const setSessionModel = useCallback(async (model: ModelRef) => {
@@ -996,7 +1071,7 @@ export function useWumingClient() {
 		await requestRef.current?.({ type: "session.detach", sessionId }).catch(() => undefined);
 		snapshotRef.current = undefined;
 		localStorage.removeItem(sessionSelectionKey(workspaceId));
-		setState((current) => ({ ...current, snapshot: undefined, runs: [], subagents: [], subagentDepth: 0, canCreateSubagent: true, goals: [], liveAssistants: {}, liveTools: {} }));
+		setState((current) => ({ ...current, snapshot: undefined, runs: [], subagents: [], subagentDepth: 0, canCreateSubagent: true, goals: [], liveAssistants: {}, liveTools: {}, liveRetry: undefined }));
 	}, [refreshSessions]);
 
 	const respondApproval = useCallback(async (sessionId: string, approvalId: string, decision: "approve" | "deny") => {

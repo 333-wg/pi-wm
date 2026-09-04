@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { reduceSessionEvent, replaySessionEvents, type SessionEvent } from "@wuming/domain";
+import type { ProgressEvent } from "@wuming/protocol";
 import type { AgentRuntime, RuntimeTurnResult } from "../src/types.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { OrchestratorError, SessionOrchestrator, SqliteOrchestratorStore, type CommitMutationOptions } from "../src/index.js";
@@ -1017,6 +1018,8 @@ describe("session orchestrator", () => {
 		const store = new SqliteOrchestratorStore(":memory:");
 		const runtime = new FlakyRuntime();
 		const orchestrator = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: ids("retry"), maxRetries: 1, retryBaseDelayMs: 0 });
+		const progress: ProgressEvent[] = [];
+		orchestrator.subscribeProgress((event) => progress.push(event));
 		const created = await orchestrator.createSession(createInput());
 		await orchestrator.acceptTurn({ principalId: "user-1", idempotencyKey: "retry-turn", sessionId: created.snapshot.session.id, mode: "prompt", content: [{ type: "text", text: "retry" }] });
 		await expect(orchestrator.drainSession(created.snapshot.session.id, undefined, "trace-provider-retry")).resolves.toBe(1);
@@ -1029,6 +1032,17 @@ describe("session orchestrator", () => {
 			retryHistory: [{ attempt: 1, maxAttempts: 1, delayMs: 0, error: "temporary provider failure", timestamp: 100 }],
 		});
 		expect(store.loadSnapshot(created.snapshot.session.id)).toMatchObject({ session: { phase: "idle" }, usage: { costUsd: 0.02 } });
+		expect(progress).toContainEqual({
+			type: "run.retrying",
+			sessionId: created.snapshot.session.id,
+			operationId: expect.any(String),
+			attempt: 1,
+			nextAttempt: 2,
+			maxAttempts: 2,
+			delayMs: 0,
+			failureKind: "provider",
+			error: "temporary provider failure",
+		});
 		store.close();
 	});
 

@@ -22,7 +22,7 @@ import {
 	SquareTerminal,
 	Wrench,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { ArtifactRef, ContentPart } from "@wuming/protocol";
 import { CodeBlock } from "./CodeBlock";
 import { DiffStat, EditDiff, editDiffStat } from "./DiffView";
@@ -430,6 +430,9 @@ export function ToolCard({
 	const expandable = hasDetail;
 	const args = asRecord(input);
 	const argEntries = description.fallbackArgs ? Object.entries(args) : [];
+	useEffect(() => {
+		if (failed || (!description.quiet && hasDetail)) setOpen(true);
+	}, [description.quiet, failed, hasDetail]);
 	return (
 		<div className={`tool-card ${status}${open ? " open" : ""}`}>
 			<button
@@ -469,4 +472,3 @@ export function ToolCard({
 		</div>
 	);
 }
-

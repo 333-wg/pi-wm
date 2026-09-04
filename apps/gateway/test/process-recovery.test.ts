@@ -296,7 +296,7 @@ it("preserves provider retry backoff and accounting across a gateway restart", a
 	if (runs.type !== "response" || !runs.ok || runs.result.type !== "session.run.list") throw new Error("Run query failed");
 	expect(runs.result.runs[0]).toMatchObject({ status: "completed", attempt: 2, usage: { totalTokens: 17, costUsd: 0.02 }, traceId: expect.any(String) });
 	expect(runs.result.runs[0]?.retryHistory).toEqual([
-		expect.objectContaining({ attempt: 1, maxAttempts: 1, delayMs: 3000, error: "Simulated transient provider failure" }),
+		expect.objectContaining({ attempt: 1, maxAttempts: 1, delayMs: 3000, error: "Simulated transient provider network failure" }),
 	]);
 
 	send(secondClient.ws, { type: "request", requestId: "retry-snapshot", idempotencyKey: "retry-snapshot", command: { type: "session.snapshot.get", sessionId } });

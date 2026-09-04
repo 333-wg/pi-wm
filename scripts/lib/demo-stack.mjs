@@ -174,7 +174,7 @@ export async function startDemoStack({ token, log = () => {} } = {}) {
 				WUMING_WORKSPACE: workspace,
 				WUMING_DATA_DIR: data,
 				WUMING_TERMINAL_MODE: process.env.WUMING_TERMINAL_MODE ?? "host",
-				WUMING_RETRY_BASE_DELAY_MS: "10",
+				WUMING_RETRY_BASE_DELAY_MS: "800",
 				// A deliberately small window so the context meter moves visibly
 				// within the handful of turns one walkthrough performs.
 				WUMING_CONTEXT_WINDOW: process.env.WUMING_CONTEXT_WINDOW ?? "5000",

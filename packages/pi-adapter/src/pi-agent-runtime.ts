@@ -446,9 +446,32 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			}
 			if (event.type === "message_end" && event.message.role === "toolResult") {
 				const toolResult = event.message as ToolResultMessage;
+				const output = preview(toolResult, this.#maxProgressPreviewChars);
+				const artifact = detailArtifact(toolResult);
+				input.onProgress({
+					type: "tool.finished",
+					sessionId: input.operation.sessionId,
+					toolCallId: toolResult.toolCallId,
+					preview: output.text,
+					truncated: output.truncated,
+					isError: toolResult.isError,
+					...(artifact ? { artifact } : {}),
+				});
 				items.push(mapToolResult(toolResult, toolInputs.get(toolResult.toolCallId) ?? null));
 			}
 			if (event.type === "auto_retry_start") {
+				const classified = providerFailure(event.errorMessage);
+				input.onProgress({
+					type: "run.retrying",
+					sessionId: input.operation.sessionId,
+					operationId: input.operation.id,
+					attempt: event.attempt,
+					nextAttempt: event.attempt + 1,
+					maxAttempts: event.maxAttempts + 1,
+					delayMs: event.delayMs,
+					failureKind: classified.kind,
+					error: classified.message,
+				});
 				input.onRetry?.({
 					attempt: event.attempt,
 					maxAttempts: event.maxAttempts,

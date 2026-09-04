@@ -77,6 +77,31 @@ describe("wire protocol", () => {
 				},
 			}),
 		).toBe(true);
+		expect(check.Check({
+			type: "progress",
+			event: {
+				type: "tool.finished",
+				sessionId: "session-1",
+				toolCallId: "tool-1",
+				preview: "ok",
+				truncated: false,
+				isError: false,
+			},
+		})).toBe(true);
+		expect(check.Check({
+			type: "progress",
+			event: {
+				type: "run.retrying",
+				sessionId: "session-1",
+				operationId: "operation-1",
+				attempt: 1,
+				nextAttempt: 2,
+				maxAttempts: 3,
+				delayMs: 1000,
+				failureKind: "provider_network",
+				error: "connection reset",
+			},
+		})).toBe(true);
 	});
 
 	it("rejects an untyped successful response", () => {

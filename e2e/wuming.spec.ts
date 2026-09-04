@@ -101,7 +101,7 @@ test.beforeAll(async () => {
 			WUMING_WORKSPACE: workspace,
 			WUMING_DATA_DIR: data,
 			WUMING_TERMINAL_MODE: "disabled",
-			WUMING_RETRY_BASE_DELAY_MS: "10",
+			WUMING_RETRY_BASE_DELAY_MS: "750",
 			// Small enough that the context meter reports a meaningful share
 			// after a single demo turn.
 			WUMING_CONTEXT_WINDOW: "5000",
@@ -431,6 +431,57 @@ test("shows a thinking activity before the first model event", async ({ page }) 
 	await expect(thinking.locator(".thinking-bars i")).toHaveCount(4);
 	await page.getByRole("button", { name: "停止任务" }).click();
 	await expect(thinking).toBeHidden();
+});
+
+test("shows live commands, output, and completion in execution order", async ({ page }) => {
+	await createSession(page);
+	await sendMessage(page, "/demo-live-tool");
+
+	const transcript = page.locator(".transcript");
+	await expect(transcript.getByText("我先运行项目测试，确认当前状态。", { exact: true })).toBeVisible();
+	const liveTool = transcript.locator(".live-tool");
+	await expect(liveTool).toContainText("执行");
+	await expect(liveTool).toContainText("npm test --silent");
+	await expect(liveTool).toContainText("运行中");
+	await expect(liveTool).toContainText("RUN tests");
+	await expect(liveTool).toContainText("已完成");
+	await expect(liveTool).toContainText("4 tests passed");
+
+	await waitForIdle(page);
+	await expect(liveTool).toHaveCount(0);
+	const durableTool = transcript.locator(".tool-row").filter({ hasText: "npm test --silent" });
+	await expect(durableTool).toContainText("已完成");
+	await expect(transcript.getByText("测试完成：4 项通过。", { exact: true })).toBeVisible();
+});
+
+test("shows automatic retry progress and recovery in the conversation", async ({ page }) => {
+	await createSession(page);
+	await sendMessage(page, "/retry-once");
+
+	const retry = page.getByRole("status", { name: "正在自动重试" });
+	await expect(retry).toBeVisible();
+	await expect(retry).toContainText("模型网络故障");
+	await expect(retry).toContainText("第 1 次尝试失败，正在进行第 2/3 次尝试");
+	await expect(retry).toContainText("750ms 后重试");
+
+	await waitForIdle(page);
+	await expect(retry).toHaveCount(0);
+	await expect(page.getByText("Demo provider recovered after retry.", { exact: true })).toBeVisible();
+});
+
+test("shows a recoverable final error with details and a rerun action", async ({ page }) => {
+	await createSession(page);
+	await sendMessage(page, "/demo-fail");
+	await waitForIdle(page);
+
+	const failure = page.getByRole("alert").filter({ hasText: "模型服务错误" });
+	await expect(failure).toBeVisible();
+	await expect(failure).toContainText("任务没有完成");
+	await failure.getByText("技术详情", { exact: true }).click();
+	await expect(failure).toContainText("Simulated provider request failed after recovery was exhausted");
+	await failure.getByRole("button", { name: "重新执行" }).click();
+	await expect(page.locator(".message-row.user").filter({ hasText: "/demo-fail" })).toHaveCount(2);
+	await waitForIdle(page);
 });
 
 test("completes and cancels durable subagents", async ({ page }) => {

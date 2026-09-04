@@ -60,6 +60,10 @@ async function waitIdle(page, timeout = 30_000) {
 		.catch(() => {});
 }
 
+async function waitComposerReady(page) {
+	await page.locator('textarea[aria-label="消息"]:not([disabled])').waitFor({ timeout: 20_000 });
+}
+
 async function scrollTranscript(page, top) {
 	await page
 		.locator(".transcript")
@@ -71,7 +75,7 @@ async function scrollTranscript(page, top) {
 
 async function newSession(page) {
 	await page.getByRole("button", { name: "新建会话" }).click();
-	await page.getByRole("textbox", { name: "消息" }).waitFor({ timeout: 20_000 });
+	await waitComposerReady(page);
 }
 
 /**
@@ -150,7 +154,7 @@ export async function desktopWalkthrough(capture) {
 	await capture.shot("shell-empty");
 
 	await page.getByRole("button", { name: "新建会话" }).click();
-	await page.getByRole("textbox", { name: "消息" }).waitFor({ timeout: 20_000 });
+	await waitComposerReady(page);
 	await capture.shot("session-new");
 
 	await composerMenus(capture);
@@ -174,6 +178,19 @@ export async function desktopWalkthrough(capture) {
 		await collapsed.click();
 		await capture.shot("tool-card-expanded", { settle: 250 });
 	}
+
+	await newSession(page);
+	await send(page, "/retry-once");
+	await page.getByRole("status", { name: "正在自动重试" }).waitFor({ timeout: 10_000 });
+	await capture.shot("automatic-retry", { settle: 100 });
+	await waitIdle(page);
+	await send(page, "/demo-fail");
+	await waitIdle(page);
+	const failureNotice = page.locator(".failure-notice").last();
+	await failureNotice.waitFor({ timeout: 10_000 });
+	await failureNotice.scrollIntoViewIfNeeded();
+	await failureNotice.locator("details").click();
+	await capture.shot("final-failure", { settle: 250 });
 
 	await send(page, "/approval");
 	const approval = page.getByRole("region", { name: "需要批准工具调用" });
@@ -261,7 +278,7 @@ export async function mobileWalkthrough(capture) {
 	await page.getByRole("button", { name: "新建会话" }).click();
 	const closeNav = page.getByRole("button", { name: "关闭导航" });
 	if ((await closeNav.count()) > 0) await closeNav.first().click().catch(() => {});
-	await page.getByRole("textbox", { name: "消息" }).waitFor({ timeout: 20_000 });
+	await waitComposerReady(page);
 	const mobileComposer = page.getByRole("textbox", { name: "消息" });
 	await mobileComposer.click();
 	await mobileComposer.pressSequentially("@rea", { delay: 40 });
@@ -283,6 +300,16 @@ export async function mobileWalkthrough(capture) {
 	await capture.shot("mobile-tool-cards", { settle: 800 });
 	await scrollTranscript(page, 0);
 	await capture.shot("mobile-tool-cards-top", { settle: 250 });
+	await send(page, "/retry-once");
+	await page.getByRole("status", { name: "正在自动重试" }).waitFor({ timeout: 10_000 });
+	await capture.shot("mobile-automatic-retry", { settle: 100 });
+	await waitIdle(page);
+	await send(page, "/demo-fail");
+	await waitIdle(page);
+	const mobileFailureNotice = page.locator(".failure-notice").last();
+	await mobileFailureNotice.waitFor({ timeout: 10_000 });
+	await mobileFailureNotice.scrollIntoViewIfNeeded();
+	await capture.shot("mobile-final-failure", { settle: 250 });
 	await page.keyboard.press("Control+k");
 	await page.locator(".palette-list button").first().waitFor({ timeout: 10_000 }).catch(() => {});
 	await capture.shot("mobile-palette", { settle: 350 });

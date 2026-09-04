@@ -839,6 +839,17 @@ export const DurableEventSchema = Type.Union([
 ]);
 export const ProgressEventSchema = Type.Union([
 	StrictObject({
+		type: Type.Literal("run.retrying"),
+		sessionId: Id,
+		operationId: Id,
+		attempt: Type.Integer({ minimum: 1 }),
+		nextAttempt: Type.Integer({ minimum: 2 }),
+		maxAttempts: Type.Integer({ minimum: 2 }),
+		delayMs: Type.Integer({ minimum: 0 }),
+		failureKind: RunFailureKindSchema,
+		error: Type.String({ maxLength: 4000 }),
+	}),
+	StrictObject({
 		type: Type.Literal("assistant.delta"),
 		sessionId: Id,
 		itemId: Id,
@@ -861,6 +872,15 @@ export const ProgressEventSchema = Type.Union([
 		streamSeq: Type.Integer({ minimum: 0 }),
 		preview: Type.String(),
 		truncated: Type.Boolean(),
+		artifact: Type.Optional(ArtifactRefSchema),
+	}),
+	StrictObject({
+		type: Type.Literal("tool.finished"),
+		sessionId: Id,
+		toolCallId: Id,
+		preview: Type.String(),
+		truncated: Type.Boolean(),
+		isError: Type.Boolean(),
 		artifact: Type.Optional(ArtifactRefSchema),
 	}),
 ]);

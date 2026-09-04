@@ -84,7 +84,7 @@ import type {
 	UsageOverview,
 	ToolStatus,
 } from "@wuming/protocol";
-import { type LiveAssistant, type LiveTool, useWumingClient } from "./use-wuming-client.js";
+import { type LiveAssistant, type LiveRetry, type LiveTool, useWumingClient } from "./use-wuming-client.js";
 import { workspaceApi } from "./workspace-api.js";
 import { Markdown } from "./components/Markdown.js";
 import { UnifiedDiff } from "./components/DiffView.js";
@@ -102,7 +102,7 @@ import { ShortcutsDialog } from "./components/ShortcutsDialog.js";
 import { ContextMeter, ContextPill } from "./components/ContextMeter.js";
 import { PermissionPicker, type PermissionValue } from "./components/PermissionPicker.js";
 import { estimateContext, formatTokens, type ContextUsage } from "./lib/context-usage.js";
-import { anchorBefore, formatItemTime, formatItemTimestamp, latestUserItemIndex, messageText } from "./lib/transcript.js";
+import { anchorBefore, formatItemTime, formatItemTimestamp, messageText } from "./lib/transcript.js";
 import { isNearBottom } from "./lib/scroll.js";
 import { themeLabel, type ThemeChoice } from "./lib/theme.js";
 import { isImplicitWorkspace } from "./lib/workspaces.js";
@@ -620,12 +620,10 @@ function Content({
 	parts,
 	onDownload,
 	renderedToolCalls,
-	hideToolCalls = false,
 }: {
 	parts: ContentPart[];
 	onDownload?: (artifact: ArtifactRef) => Promise<void>;
 	renderedToolCalls?: Set<string> | undefined;
-	hideToolCalls?: boolean;
 }) {
 	return (
 		<div className="message-content">
@@ -640,7 +638,6 @@ function Content({
 					);
 				}
 				if (part.type === "tool_call") {
-					if (hideToolCalls) return null;
 					// The tool gets its own transcript item once it starts; render the
 					// call inline only while that item does not exist yet.
 					if (renderedToolCalls?.has(part.toolCallId)) return null;
@@ -675,20 +672,66 @@ interface MessageActionState {
 	onEditSubmit: (text: string) => void;
 }
 
+interface FailureActionState {
+	run?: RunSummary | undefined;
+	busy: boolean;
+	disabled: boolean;
+	disabledTitle: string;
+	onRetry: () => void;
+	onOpenSettings: () => void;
+	onOpenUsage: () => void;
+}
+
+function failureAdvice(kind: RunSummary["failureKind"]): string {
+	switch (kind) {
+		case "provider_auth": return "模型凭据无效或已过期，请检查设置后再试。";
+		case "provider_rate_limit": return "模型服务请求过多。自动重试已用尽，请稍后重新执行。";
+		case "provider_timeout": return "模型在限定时间内没有响应，可以重新执行。";
+		case "provider_network": return "连接模型服务失败，请检查网络后重新执行。";
+		case "tool": return "工具没有成功完成。请展开详情检查命令输出，再决定是否重新执行。";
+		case "runtime_restart": return "运行期间服务发生重启，服务恢复后可以重新执行。";
+		case "budget": return "当前会话的 Token 或费用限额已用尽，请先调整用量限额。";
+		case "user_abort": return "本次任务已由你停止。";
+		default: return "任务没有完成。可查看技术详情后重新执行。";
+	}
+}
+
+function FailureNotice({ error, actions }: { error: string; actions: FailureActionState }) {
+	const kind = actions.run?.failureKind;
+	const retries = actions.run?.retryHistory?.length ?? 0;
+	const action = kind === "provider_auth" ? "settings" : kind === "budget" ? "usage" : kind === "user_abort" ? undefined : "retry";
+	return (
+		<section className="failure-notice" role="alert">
+			<div className="failure-notice-heading"><CircleAlert size={16} /><strong>{kind ? failureKindLabel(kind) : "任务执行失败"}</strong></div>
+			<p>{failureAdvice(kind)}</p>
+			{retries > 0 && <div className="failure-retry-summary">已自动重试 {retries} 次，共尝试 {Math.max(actions.run?.attempt ?? 1, retries + 1)} 次</div>}
+			<details className="failure-details">
+				<summary>技术详情</summary>
+				<pre>{redactDiagnostic(error)}</pre>
+			</details>
+			{action && <div className="failure-actions">
+				{action === "retry" && <button type="button" disabled={actions.busy || actions.disabled} title={actions.disabled ? actions.disabledTitle : "重新执行上一条请求"} onClick={actions.onRetry}><RefreshCw size={14} />{actions.busy ? "正在重新执行..." : "重新执行"}</button>}
+				{action === "settings" && <button type="button" onClick={actions.onOpenSettings}><Settings size={14} />打开设置</button>}
+				{action === "usage" && <button type="button" onClick={actions.onOpenUsage}><PanelRight size={14} />查看用量</button>}
+			</div>}
+		</section>
+	);
+}
+
 function TranscriptItemView({
 	item,
 	onDownload,
 	renderedToolCalls,
 	actions,
+	failureActions,
 	now,
-	hideToolCalls = false,
 }: {
 	item: TranscriptItem;
 	onDownload: (artifact: ArtifactRef) => Promise<void>;
 	renderedToolCalls?: Set<string> | undefined;
 	actions?: MessageActionState | undefined;
+	failureActions?: FailureActionState | undefined;
 	now: number;
-	hideToolCalls?: boolean;
 }) {
 	if (item.type === "tool") {
 		return (
@@ -727,10 +770,11 @@ function TranscriptItemView({
 				{actions?.editing ? (
 					<MessageEditor initial={text} busy={actions.busy} onCancel={actions.onEditCancel} onSubmit={actions.onEditSubmit} />
 				) : (
-					<Content parts={item.content} onDownload={onDownload} renderedToolCalls={renderedToolCalls} hideToolCalls={hideToolCalls} />
+					<Content parts={item.content} onDownload={onDownload} renderedToolCalls={renderedToolCalls} />
 				)}
-				{item.type === "assistant" && item.error && (
-					<div className="message-error"><CircleAlert size={15} />{item.error}</div>
+				{item.type === "assistant" && item.error && (failureActions
+					? <FailureNotice error={item.error} actions={failureActions} />
+					: <div className="message-error"><CircleAlert size={15} />{item.error}</div>
 				)}
 				{actions?.error && <div className="message-error"><CircleAlert size={15} />{actions.error}</div>}
 			</div>
@@ -773,10 +817,24 @@ function ThinkingActivity({ phase }: { phase: SessionSnapshot["session"]["phase"
 	);
 }
 
-function LiveToolView({ tool, input, awaitingApproval = false }: { tool: LiveTool; input?: unknown; awaitingApproval?: boolean }) {
+function RetryActivity({ retry }: { retry: LiveRetry }) {
+	return (
+		<div className="message-row assistant retry-activity" role="status" aria-live="assertive" aria-label="正在自动重试">
+			<div className="message-avatar retry-avatar" aria-hidden="true"><RefreshCw size={16} /></div>
+			<div className="message-body">
+				<div className="message-meta"><strong>Wuming</strong><span>自动恢复</span></div>
+				<div className="retry-heading"><strong>{failureKindLabel(retry.failureKind)}</strong><span>{formatDelay(retry.delayMs)} 后重试</span></div>
+				<p>第 {retry.attempt} 次尝试失败，正在进行第 {retry.nextAttempt}/{retry.maxAttempts} 次尝试。</p>
+				<details className="failure-details"><summary>失败原因</summary><pre>{redactDiagnostic(retry.error)}</pre></details>
+			</div>
+		</div>
+	);
+}
+
+function LiveToolView({ tool, awaitingApproval = false }: { tool: LiveTool; awaitingApproval?: boolean }) {
 	return (
 		<div className="tool-row live-tool">
-			<ToolCard toolName={tool.toolName} input={input} status={awaitingApproval ? "awaiting_approval" : "running"}>
+			<ToolCard toolName={tool.toolName} input={tool.input} status={awaitingApproval ? "awaiting_approval" : tool.status}>
 				{tool.preview ? (
 					<pre className="tool-output">
 						{tool.preview}
@@ -2389,26 +2447,19 @@ export function App() {
 		&& ["turn", "retry", "compaction"].includes(client.snapshot.session.phase);
 	const liveAssistantItems = Object.values(client.liveAssistants).filter((item) => item.thinking.trim() !== "" || item.text.trim() !== "");
 	const liveAssistantLength = liveAssistantItems.reduce((length, item) => length + item.thinking.length + item.text.length, 0);
-	const showThinkingActivity = reasoningPhase && liveAssistantItems.length === 0;
-	const activeTurnStart = reasoningPhase ? latestUserItemIndex(transcript ?? []) : Number.MAX_SAFE_INTEGER;
-	// Tool calls appear twice in a snapshot: as a part of the assistant message
-	// that requested them and as a tool item once they start. Cards render from
-	// the item, so the inline part is suppressed and only lends its arguments.
-	const toolCalls = useMemo(() => {
+	const liveTrace = [
+		...liveAssistantItems.map((item) => ({ kind: "assistant" as const, order: item.order, item })),
+		...Object.values(client.liveTools).map((item) => ({ kind: "tool" as const, order: item.order, item })),
+	].sort((left, right) => left.order - right.order);
+	const showThinkingActivity = reasoningPhase && liveTrace.length === 0 && client.liveRetry === undefined;
+	// A completed call appears in both its assistant request and its own result
+	// item. Render the result card once; live calls carry their own input.
+	const renderedToolCalls = useMemo(() => {
 		const rendered = new Set<string>();
-		const inputs = new Map<string, unknown>();
 		for (const item of transcript ?? []) {
-			if (item.type === "tool") {
-				rendered.add(item.toolCallId);
-				inputs.set(item.toolCallId, item.input);
-				continue;
-			}
-			if (item.type !== "assistant") continue;
-			for (const part of item.content) {
-				if (part.type === "tool_call" && !inputs.has(part.toolCallId)) inputs.set(part.toolCallId, part.input);
-			}
+			if (item.type === "tool") rendered.add(item.toolCallId);
 		}
-		return { rendered, inputs };
+		return rendered;
 	}, [transcript]);
 
 	// Message-level actions. Both branching actions need an idle, writable,
@@ -2440,6 +2491,17 @@ export function App() {
 		if (anchor === undefined) await client.createSession();
 		else await client.forkSession(anchor);
 		await client.sendPrompt(text);
+	});
+	const retryFailedTurn = (item: TranscriptItem) => void runMessageAction(item.id, async () => {
+		const items = transcript ?? [];
+		const failedIndex = items.findIndex((candidate) => candidate.id === item.id);
+		const previousUser = items.slice(0, failedIndex < 0 ? items.length : failedIndex).reverse().find((candidate) => candidate.type === "user");
+		if (!previousUser || previousUser.type !== "user") throw new Error("找不到可重新执行的上一条请求");
+		const artifacts = previousUser.content
+			.filter((part): part is Extract<(typeof previousUser.content)[number], { type: "artifact" }> => part.type === "artifact")
+			.map((part) => part.artifact);
+		jumpToLatest();
+		await client.sendPrompt(messageText(previousUser.content), artifacts);
 	});
 	const messageActions = (item: TranscriptItem): MessageActionState => ({
 		editing: editingItemId === item.id,
@@ -2476,7 +2538,7 @@ export function App() {
 		}
 		element.scrollTop = element.scrollHeight;
 		pinnedAtRef.current = element.scrollTop;
-	}, [following, client.snapshot?.transcript.length, client.snapshot?.pendingApprovals.length, liveAssistantLength, showThinkingActivity]);
+	}, [following, client.snapshot?.transcript.length, client.snapshot?.pendingApprovals.length, client.liveRetry, liveAssistantLength, showThinkingActivity]);
 
 	// How much output the tail holds. Item counts alone would miss a streaming
 	// reply, whose deltas grow one live item in place, so the live text counts too.
@@ -2484,8 +2546,9 @@ export function App() {
 		let signal = transcript?.length ?? 0;
 		signal += liveAssistantLength;
 		signal += client.snapshot?.pendingApprovals.length ?? 0;
+		signal += client.liveRetry ? 1 : 0;
 		return signal;
-	}, [transcript, client.snapshot?.pendingApprovals.length, liveAssistantLength]);
+	}, [transcript, client.snapshot?.pendingApprovals.length, client.liveRetry, liveAssistantLength]);
 
 	// Distinguishes "you scrolled up" from "you scrolled up and missed something",
 	// so the pill only claims new content when content actually arrived.
@@ -2615,6 +2678,7 @@ export function App() {
 				["long", "演示：长流式输出"],
 				["inject", "演示：注入一条记录"],
 				["retry-once", "演示：首次失败后自动重试"],
+				["demo-fail", "演示：最终失败与恢复操作"],
 			] as const) {
 				commands.push({ name, title, hint: "演示 demo", kind: "prompt", icon: <Play size={14} /> });
 			}
@@ -2936,26 +3000,37 @@ export function App() {
 								</ul>
 							</div>
 						)}
-						{client.snapshot?.transcript.map((item, index) => {
-							const activeTurnTrace = reasoningPhase && index > activeTurnStart;
-							if (activeTurnTrace && item.type === "tool") return null;
+						{client.snapshot?.transcript.map((item) => {
+							const failureRun = item.type === "assistant" && item.error
+								? client.runs.find((run) => item.id === `${run.id}:error`)
+								: undefined;
 							return <TranscriptItemView
 								item={item}
 								key={item.id}
 								now={Date.now()}
 								onDownload={client.downloadArtifact}
-								renderedToolCalls={toolCalls.rendered}
+								renderedToolCalls={renderedToolCalls}
 								actions={item.type === "tool" ? undefined : messageActions(item)}
-								hideToolCalls={activeTurnTrace && item.type === "assistant"}
+								failureActions={item.type === "assistant" && item.error ? {
+									run: failureRun,
+									busy: messageBusyId === item.id,
+									disabled: branchDisabled,
+									disabledTitle: branchTitle,
+									onRetry: () => retryFailedTurn(item),
+									onOpenSettings: () => setSettingsOpen(true),
+									onOpenUsage: () => setShowRight(true),
+								} : undefined}
 							/>;
 						})}
-						{liveAssistantItems.map((item) => <LiveAssistantView item={item} key={item.id} />)}
-						{!reasoningPhase && Object.values(client.liveTools).map((tool) => <LiveToolView
-							tool={tool}
-							input={toolCalls.inputs.get(tool.toolCallId)}
-							awaitingApproval={client.snapshot?.pendingApprovals.some((approval) => approval.toolCallId === tool.toolCallId) ?? false}
-							key={tool.toolCallId}
-						/>)}
+						{liveTrace.map((entry) => entry.kind === "assistant"
+							? <LiveAssistantView item={entry.item} key={`assistant:${entry.item.id}`} />
+							: <LiveToolView
+								tool={entry.item}
+								awaitingApproval={client.snapshot?.pendingApprovals.some((approval) => approval.toolCallId === entry.item.toolCallId) ?? false}
+								key={`tool:${entry.item.toolCallId}`}
+							/>,
+						)}
+						{client.liveRetry && <RetryActivity retry={client.liveRetry} />}
 						{client.snapshot?.pendingApprovals.map((approval) => (
 							<ApprovalPanel
 								key={approval.id}

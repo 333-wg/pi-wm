@@ -294,7 +294,13 @@ class DemoRuntime implements AgentRuntime {
 				return {
 					items: [],
 					usage: { inputTokens: 7, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 7, costUsd: 0.01 },
-					failure: { code: "runtime_error" as const, message: "Simulated transient provider failure", retryable: true },
+					failure: { code: "runtime_error" as const, message: "Simulated transient provider network failure", retryable: true, kind: "provider_network" as const },
+				};
+			}
+			if (text.trim() === "/demo-fail") {
+				return {
+					items: [],
+					failure: { code: "runtime_error" as const, message: "Simulated provider request failed after recovery was exhausted", retryable: false, kind: "provider" as const },
 				};
 			}
 			if (text.trim() === "/approval" && this.requestApproval) {
@@ -305,6 +311,71 @@ class DemoRuntime implements AgentRuntime {
 				});
 			}
 			if (text.trim() === "/inject") await this.#waitForInjection(active, input.signal);
+			if (text.trim() === "/demo-live-tool") {
+				const assistantId = `demo-live-assistant-${input.operation.id}`;
+				const toolCallId = `demo-live-tool-${input.operation.id}`;
+				const toolInput = { command: "npm test --silent", timeout: 120_000 };
+				input.onProgress({
+					type: "assistant.delta",
+					sessionId: input.operation.sessionId,
+					itemId: assistantId,
+					streamSeq: 0,
+					contentIndex: 0,
+					kind: "text",
+					delta: "我先运行项目测试，确认当前状态。",
+				});
+				await delay(120, input.signal);
+				input.onProgress({ type: "tool.started", sessionId: input.operation.sessionId, toolCallId, toolName: "exec", input: toolInput });
+				await delay(250, input.signal);
+				input.onProgress({ type: "tool.progress", sessionId: input.operation.sessionId, toolCallId, streamSeq: 0, preview: "RUN tests", truncated: false });
+				await delay(250, input.signal);
+				input.onProgress({ type: "tool.finished", sessionId: input.operation.sessionId, toolCallId, preview: "4 tests passed", truncated: false, isError: false });
+				await delay(800, input.signal);
+				return {
+					items: [
+						{
+							id: assistantId,
+							type: "assistant" as const,
+							createdAt: Date.now(),
+							status: "complete" as const,
+							content: [
+								{ type: "text" as const, text: "我先运行项目测试，确认当前状态。" },
+								{ type: "tool_call" as const, toolCallId, toolName: "exec", input: toolInput },
+							],
+							model: input.snapshot.model,
+						},
+						{
+							id: `tool:${toolCallId}`,
+							type: "tool" as const,
+							createdAt: Date.now() + 1,
+							toolCallId,
+							toolName: "exec",
+							status: "complete" as const,
+							input: toolInput,
+							content: [{ type: "text" as const, text: "4 tests passed" }],
+							isError: false,
+						},
+						{
+							id: `demo-live-summary-${input.operation.id}`,
+							type: "assistant" as const,
+							createdAt: Date.now() + 2,
+							status: "complete" as const,
+							content: [{ type: "text" as const, text: "测试完成：4 项通过。" }],
+							model: input.snapshot.model,
+						},
+					],
+					usage: demoUsage(input.snapshot.transcript.length),
+					tools: [{
+						toolName: "exec",
+						callCount: 1,
+						usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 },
+						durationMs: 500,
+						succeededCount: 1,
+						failedCount: 0,
+						abortedCount: 0,
+					}],
+				};
+			}
 			if (text.trim() === "/demo-rich") {
 				await delay(120, input.signal);
 				return {

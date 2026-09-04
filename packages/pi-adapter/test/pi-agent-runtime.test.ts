@@ -117,6 +117,40 @@ class FakePiSession implements PiSessionLike {
 	}
 }
 
+it("surfaces native provider retries as visible progress", async () => {
+	const session = new FakePiSession();
+	session.emitScript = async (current) => {
+		current.emit({
+			type: "auto_retry_start",
+			attempt: 1,
+			maxAttempts: 3,
+			delayMs: 2000,
+			errorMessage: "429 rate limit exceeded",
+		});
+	};
+	const runtime = new PiAgentRuntime({ createSession: async () => session });
+	const progress: string[] = [];
+	const retries: Array<{ attempt: number; maxAttempts: number; delayMs: number; error: string }> = [];
+	await runtime.executeTurn({
+		operation: operation([{ type: "text", text: "retry" }]),
+		snapshot,
+		signal: new AbortController().signal,
+		onProgress: (event) => {
+			progress.push(event.type);
+			if (event.type === "run.retrying") expect(event).toMatchObject({
+				attempt: 1,
+				nextAttempt: 2,
+				maxAttempts: 4,
+				delayMs: 2000,
+				failureKind: "provider_rate_limit",
+			});
+		},
+		onRetry: (event) => retries.push(event),
+	});
+	expect(progress).toContain("run.retrying");
+	expect(retries).toEqual([{ attempt: 1, maxAttempts: 3, delayMs: 2000, error: "429 rate limit exceeded" }]);
+});
+
 function operation(content: DurableOperation["payload"]["content"], skills?: string[]): DurableOperation {
 	return {
 		id: "operation-1",
@@ -188,6 +222,7 @@ describe("PiAgentRuntime", () => {
 		const runtime = new PiAgentRuntime({ createSession: async () => session, idFactory: () => `item-${++nextId}` });
 		const progress: string[] = [];
 		const progressArtifacts: unknown[] = [];
+		const finishedTools: unknown[] = [];
 		const result = await runtime.executeTurn({
 			operation: operation([{ type: "text", text: "inspect" }]),
 			snapshot,
@@ -195,6 +230,7 @@ describe("PiAgentRuntime", () => {
 			onProgress: (event) => {
 				progress.push(`${event.type}:${"streamSeq" in event ? event.streamSeq : "-"}`);
 				if (event.type === "tool.progress") progressArtifacts.push(event.artifact);
+				if (event.type === "tool.finished") finishedTools.push(event);
 			},
 		});
 
@@ -203,6 +239,7 @@ describe("PiAgentRuntime", () => {
 			"assistant.delta:1",
 			"tool.started:-",
 			"tool.progress:0",
+			"tool.finished:-",
 		]);
 		expect(result.items.map((item) => item.type)).toEqual(["assistant", "tool", "assistant"]);
 		expect(result.items[0]).toMatchObject({
@@ -213,6 +250,12 @@ describe("PiAgentRuntime", () => {
 		expect(result.items[1]).toMatchObject({ input: { path: "a.ts" }, status: "complete" });
 		expect(result.items[1]).toMatchObject({ content: expect.arrayContaining([{ type: "artifact", artifact: outputArtifact }]) });
 		expect(progressArtifacts).toEqual([outputArtifact]);
+		expect(finishedTools).toEqual([expect.objectContaining({
+			toolCallId: "call-1",
+			preview: "file data",
+			isError: false,
+			artifact: outputArtifact,
+		})]);
 		expect(result.usage).toMatchObject({ inputTokens: 9, outputTokens: 3, totalTokens: 12, costUsd: 0.06 });
 		expect(session.prompts[0]).toMatchObject({ text: "inspect", options: { expandPromptTemplates: false, source: "rpc" } });
 	});

@@ -473,6 +473,18 @@ button { color: inherit; }
 .artifact-line button:hover { color: var(--green); border-color: var(--line-strong); }
 .inline-tool code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--amber-ink); }
 .message-error, .global-error { display: flex; align-items: center; gap: 7px; color: var(--red); font-size: 12px; }
+.failure-notice { margin-top: 9px; padding: 11px 12px; border: 1px solid var(--red-border); border-left: 3px solid var(--red); border-radius: 6px; background: var(--red-soft); color: var(--red-ink); }
+.failure-notice-heading { display: flex; align-items: center; gap: 7px; }
+.failure-notice-heading strong { font-size: 12px; }
+.failure-notice p { margin: 6px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.55; }
+.failure-retry-summary { margin-top: 6px; color: var(--muted); font-size: 11px; }
+.failure-details { margin-top: 7px; }
+.failure-details summary { width: max-content; cursor: pointer; color: var(--muted); font-size: 11px; font-weight: 600; }
+.failure-details pre { max-height: 180px; margin: 7px 0 0; padding: 8px; overflow: auto; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-code); color: var(--text-soft); font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.failure-actions { display: flex; gap: 7px; margin-top: 9px; }
+.failure-actions button { min-height: 29px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); color: var(--text); cursor: pointer; font-size: 11px; font-weight: 650; }
+.failure-actions button:hover:not(:disabled) { border-color: var(--green-border); color: var(--green); }
+.failure-actions button:disabled { cursor: not-allowed; opacity: .5; }
 
 .tool-row { margin: 7px 0 7px 41px; font-size: 12px; }
 .tool-row.tool-error .tool-card { border-color: var(--red-border); }
@@ -492,6 +504,14 @@ button { color: inherit; }
 .thinking-bars i:nth-child(4) { animation-delay: 360ms; }
 @keyframes thinking-bar { 0%, 100% { transform: scaleY(.35); opacity: .38; } 50% { transform: scaleY(1); opacity: 1; } }
 @keyframes thinking-avatar-pulse { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow-off); } 50% { box-shadow: 0 0 0 4px var(--accent-glow); } }
+.retry-activity { min-height: 104px; }
+.message-row.assistant .retry-avatar { background: var(--amber-soft); color: var(--amber); animation: retry-spin 1.5s linear infinite; }
+.retry-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.retry-heading strong { color: var(--amber); font-size: 12px; }
+.retry-heading span { color: var(--muted); font-size: 11px; }
+.retry-activity p { margin: 5px 0 0; color: var(--text-soft); font-size: 12px; }
+.retry-activity .failure-details { max-width: 680px; }
+@keyframes retry-spin { to { transform: rotate(360deg); } }
 
 .empty-state { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); }
 .empty-state h2 { margin: 11px 0 0; color: var(--ink); font-size: 15px; font-weight: 650; }
