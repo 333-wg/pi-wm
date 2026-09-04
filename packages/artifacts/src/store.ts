@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ArtifactRef, SessionSnapshot } from "@wuming/protocol";
 import { DatabaseSync } from "node:sqlite";
 import { ArtifactError } from "./errors.js";
-import { extractArtifact } from "./extraction.js";
+import { extractArtifact, type PdfExtractionOptions } from "./extraction.js";
 import { validateArtifact, type ArtifactValidationOptions } from "./validation.js";
 
 interface ArtifactRow {
@@ -32,6 +32,7 @@ export interface ArtifactStoreOptions extends ArtifactValidationOptions {
 	idFactory?: () => string;
 	clock?: () => number;
 	maxExtractedTextChars?: number;
+	pdfExtraction?: PdfExtractionOptions;
 }
 
 function record(row: ArtifactRow): ArtifactRecord {
@@ -56,6 +57,7 @@ export class ArtifactStore implements Disposable {
 	readonly #clock: () => number;
 	readonly #validation: ArtifactValidationOptions;
 	readonly #maxExtractedTextChars: number;
+	readonly #pdfExtraction: PdfExtractionOptions;
 
 	private constructor(databasePath: string, objectRoot: string, options: ArtifactStoreOptions) {
 		this.#db = new DatabaseSync(databasePath);
@@ -78,6 +80,7 @@ export class ArtifactStore implements Disposable {
 		this.#idFactory = options.idFactory ?? randomUUID;
 		this.#clock = options.clock ?? Date.now;
 		this.#maxExtractedTextChars = options.maxExtractedTextChars ?? 200_000;
+		this.#pdfExtraction = options.pdfExtraction ?? {};
 		this.#validation = {
 			...(options.maxFileBytes === undefined ? {} : { maxFileBytes: options.maxFileBytes }),
 			...(options.maxImageBytes === undefined ? {} : { maxImageBytes: options.maxImageBytes }),
@@ -169,7 +172,7 @@ export class ArtifactStore implements Disposable {
 		this.assertSessionReference(ref, snapshot);
 		const { record: stored, content } = await this.read(ref.id);
 		const extraction = stored.kind === "binary"
-			? await extractArtifact({ name: stored.ref.name, mimeType: stored.ref.mimeType, content }, this.#maxExtractedTextChars)
+			? await extractArtifact({ name: stored.ref.name, mimeType: stored.ref.mimeType, content }, this.#maxExtractedTextChars, this.#pdfExtraction)
 			: {};
 		return {
 			data: content.toString("base64"),

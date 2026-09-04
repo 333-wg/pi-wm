@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,46 @@ const onePixelPng = Buffer.from(
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
 	"base64",
 );
+
+/** A single-page PDF with one uncompressed text run and a valid cross-reference table. */
+function pdfWithText(text: string): Buffer {
+	const content = `BT /F1 12 Tf 40 700 Td (${text}) Tj ET\n`;
+	const objects = [
+		"<</Type/Catalog/Pages 2 0 R>>",
+		"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+		"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>",
+		`<</Length ${content.length}>>stream\n${content}endstream`,
+		"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+	];
+	let pdf = "%PDF-1.4\n";
+	const offsets: number[] = [];
+	for (const [index, body] of objects.entries()) {
+		offsets.push(pdf.length);
+		pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+	}
+	const xrefOffset = pdf.length;
+	pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+	for (const offset of offsets) pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+	pdf += `trailer\n<</Size ${objects.length + 1}/Root 1 0 R>>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+	return Buffer.from(pdf, "latin1");
+}
+
+async function nodeStdout(args: string[]): Promise<string> {
+	return await new Promise<string>((resolve, reject) => {
+		const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		let stderr = "";
+		child.stdout.setEncoding("utf8");
+		child.stderr.setEncoding("utf8");
+		child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+		child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+		child.on("error", reject);
+		child.on("close", (code) => {
+			if (code === 0) resolve(stdout);
+			else reject(new Error(`probe exited with ${code}: ${stderr.slice(0, 2000)}`));
+		});
+	});
+}
 
 async function docxWithText(text: string): Promise<Buffer> {
 	const zip = new JSZip();
@@ -163,4 +204,79 @@ describe("artifact validation", () => {
 			expect.objectContaining({ code: "too_large" }),
 		);
 	});
+});
+
+describe("PDF attachment extraction", () => {
+	it("extracts text through the isolated worker", async () => {
+		await expect(extractArtifact({
+			name: "quarter.pdf",
+			mimeType: "application/pdf",
+			content: pdfWithText("Quarterly attachment: 42"),
+		})).resolves.toEqual({ text: "Quarterly attachment: 42\n\n-- 1 of 1 --" });
+	}, 30_000);
+
+	it("degrades to a notice when the worker exits non-zero", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "wuming-pdf-worker-"));
+		cleanup.push(directory);
+		await expect(extractArtifact(
+			{ name: "quarter.pdf", mimeType: "application/pdf", content: pdfWithText("Quarterly attachment: 42") },
+			200_000,
+			{ workerPath: join(directory, "absent-worker.js") },
+		)).resolves.toEqual({ notice: "The PDF attachment was uploaded, but its text could not be extracted." });
+	}, 30_000);
+
+	it("degrades to a notice when the worker exceeds its time budget", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "wuming-pdf-worker-"));
+		cleanup.push(directory);
+		const workerPath = join(directory, "stalling-worker.js");
+		await writeFile(workerPath, "setInterval(() => {}, 1000);\n");
+		const started = Date.now();
+		await expect(extractArtifact(
+			{ name: "quarter.pdf", mimeType: "application/pdf", content: pdfWithText("Quarterly attachment: 42") },
+			200_000,
+			{ workerPath, timeoutMs: 250 },
+		)).resolves.toEqual({
+			notice: "The PDF attachment was uploaded, but its text could not be extracted within the time limit.",
+		});
+		expect(Date.now() - started).toBeLessThan(15_000);
+	}, 30_000);
+
+	it("degrades to a notice when the worker emits unparseable output", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "wuming-pdf-worker-"));
+		cleanup.push(directory);
+		const workerPath = join(directory, "garbage-worker.js");
+		await writeFile(workerPath, 'process.stdout.write("not json at all");\n');
+		await expect(extractArtifact(
+			{ name: "quarter.pdf", mimeType: "application/pdf", content: pdfWithText("Quarterly attachment: 42") },
+			200_000,
+			{ workerPath },
+		)).resolves.toEqual({ notice: "The PDF attachment was uploaded, but its text could not be extracted." });
+	}, 30_000);
+
+	// A worker that answers with well-formed but oversized JSON must be cut off by
+	// the output cap rather than buffered into the Gateway's heap.
+	it("caps worker output instead of buffering it without bound", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "wuming-pdf-worker-"));
+		cleanup.push(directory);
+		const workerPath = join(directory, "flooding-worker.js");
+		await writeFile(workerPath, 'process.stdout.write(JSON.stringify({ text: "x".repeat(20000) }));\n');
+		await expect(extractArtifact(
+			{ name: "quarter.pdf", mimeType: "application/pdf", content: pdfWithText("Quarterly attachment: 42") },
+			100,
+			{ workerPath },
+		)).resolves.toEqual({ notice: "The PDF attachment was uploaded, but its text could not be extracted." });
+	}, 30_000);
+
+	it("keeps pdfjs and its native bindings out of the package import graph", async () => {
+		const entry = new URL("../src/index.ts", import.meta.url).href;
+		const probe = [
+			'import { registerHooks } from "node:module";',
+			"const seen = [];",
+			"registerHooks({ resolve(specifier, context, next) { seen.push(specifier); return next(specifier, context); } });",
+			`await import(${JSON.stringify(entry)});`,
+			'process.stdout.write(JSON.stringify(seen.filter((specifier) => /pdf|canvas/i.test(specifier))));',
+		].join("\n");
+		const resolved = await nodeStdout(["--import", "tsx", "--input-type=module", "-e", probe]);
+		expect(JSON.parse(resolved)).toEqual([]);
+	}, 60_000);
 });

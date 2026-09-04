@@ -22,7 +22,7 @@
   "dependencies": {
     "@wuming/protocol": "0.1.0",
     "mammoth": "^1.12.2",
-    "pdf-parse": "^2.4.5"
+    "pdf-parse": "2.4.5"
   },
   "devDependencies": {
     "jszip": "^3.10.1"

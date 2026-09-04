@@ -462,6 +462,10 @@ async function main(): Promise<void> {
 		maxTextBytes: maxTextArtifactBytes,
 		maxImagePixels: envPositiveNumber("WUMING_MAX_IMAGE_PIXELS", 40_000_000),
 		maxExtractedTextChars: envPositiveNumber("WUMING_MAX_EXTRACTED_TEXT_CHARS", 200_000),
+		pdfExtraction: {
+			timeoutMs: envPositiveNumber("WUMING_PDF_EXTRACT_TIMEOUT_MS", 60_000),
+			maxOldSpaceMb: envPositiveNumber("WUMING_PDF_EXTRACT_MEMORY_MB", 1024),
+		},
 	});
 	const { ApprovalBroker, WorkspaceInspector } = await import("@wuming/sandbox");
 	let handleRecoveredDecision: ((approval: ApprovalRequest) => void) | undefined;
