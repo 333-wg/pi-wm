@@ -1,6 +1,7 @@
 import { ChevronRight, CircleAlert, Command, CornerDownLeft } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cycleIndex, rankBy } from "../lib/suggest.js";
+import { useFocusTrap } from "../use-focus-trap.js";
 
 /**
  * One row of the palette. Optional fields accept `undefined` explicitly so
@@ -43,6 +44,7 @@ export function CommandPalette({ entries, onClose }: { entries: readonly Palette
 	const [activeIndex, setActiveIndex] = useState(0);
 	const input = useRef<HTMLInputElement>(null);
 	const list = useRef<HTMLUListElement>(null);
+	const dialog = useFocusTrap<HTMLDivElement>();
 
 	// Groups stay contiguous — ranking only reorders rows inside a group, which
 	// keeps the list readable while typing.
@@ -92,7 +94,7 @@ export function CommandPalette({ entries, onClose }: { entries: readonly Palette
 	let group: string | undefined;
 	return (
 		<div className="modal-backdrop palette-backdrop" role="presentation" onMouseDown={onClose}>
-			<div className="palette" role="dialog" aria-modal="true" aria-label="命令面板" onMouseDown={(event) => event.stopPropagation()}>
+			<div className="palette" role="dialog" aria-modal="true" aria-label="命令面板" ref={dialog} onMouseDown={(event) => event.stopPropagation()}>
 				<div className="palette-input">
 					{pending ? (
 						<button type="button" className="palette-scope" title="返回命令列表" onClick={leave}>

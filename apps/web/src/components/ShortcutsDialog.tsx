@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import { useFocusTrap } from "../use-focus-trap.js";
 import { modifierLabel } from "./CommandPalette.js";
 
 interface ShortcutRow {
@@ -33,9 +34,10 @@ const sections: readonly { title: string; rows: readonly ShortcutRow[] }[] = [
 
 export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
 	const modifier = modifierLabel();
+	const dialog = useFocusTrap<HTMLDivElement>();
 	return (
 		<div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-			<div className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" onMouseDown={(event) => event.stopPropagation()}>
+			<div className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" ref={dialog} onMouseDown={(event) => event.stopPropagation()}>
 				<div className="dialog-header">
 					<h2 id="shortcuts-title">快捷键</h2>
 					<button className="icon-button" type="button" title="关闭" onClick={onClose}><X size={18} /></button>
