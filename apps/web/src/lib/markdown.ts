@@ -3,8 +3,9 @@
 // It covers the constructs coding agents actually emit: ATX headings, fenced
 // code, ordered/unordered nested lists, block quotes, GFM tables, thematic
 // breaks, paragraphs, and inline emphasis/code/links. Raw HTML is never
-// interpreted, and only http(s)/mailto links survive parsing, so streamed model
-// output cannot inject markup or dangerous URLs.
+// interpreted, and a link survives parsing only if it is http(s), mailto, a
+// same-page anchor, or a root-relative path, so streamed model output cannot
+// inject markup or dangerous URLs.
 //
 // Parsing is streaming-safe: an unterminated fence yields a code block with
 // `open: true` instead of swallowing the remainder as plain text.
@@ -36,7 +37,10 @@ const QUOTE = /^ {0,3}> ?/;
 const BULLET = /^(\s*)([-*+])[ \t]+(.*)$/;
 const ORDERED = /^(\s*)(\d{1,9})[.)][ \t]+(.*)$/;
 const TABLE_DELIMITER = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
-const SAFE_HREF = /^(?:https?:\/\/|mailto:|#|\/)/i;
+// A leading `//` has to be excluded by hand: it reads as a relative path but
+// browsers resolve it as a protocol-relative URL, so `[x](//evil.example)` would
+// otherwise be a link off this origin that looks local in the source.
+const SAFE_HREF = /^(?:https?:\/\/|mailto:|#|\/(?!\/))/i;
 
 function pushText(nodes: InlineNode[], value: string): void {
 	if (!value) return;
