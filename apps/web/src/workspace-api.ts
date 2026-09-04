@@ -22,11 +22,11 @@ function workspacePath(workspaceId: string, suffix: string): string {
 }
 
 export const workspaceApi = {
-	async pickProject(token: string, kind: "file" | "directory") {
+	async pickProject(token: string) {
 		const response = await fetch("/api/projects/pick", {
 			method: "POST",
 			headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-			body: JSON.stringify({ kind }),
+			body: "{}",
 		});
 		if (!response.ok) throw await responseError(response, "打开项目失败");
 		return response.json() as Promise<{ project: WorkspaceSummary }>;

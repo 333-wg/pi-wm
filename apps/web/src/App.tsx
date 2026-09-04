@@ -216,13 +216,12 @@ function ProjectImportDialog({
 	onClose,
 }: {
 	local: boolean;
-	onOpenLocal: (kind: "file" | "directory") => Promise<unknown>;
+	onOpenLocal: () => Promise<unknown>;
 	onImport: (name: string, files: Array<{ file: File; path: string }>, onProgress: (uploaded: number, total: number) => void) => Promise<unknown>;
 	onClose: () => void;
 }) {
 	const folderInput = useRef<HTMLInputElement>(null);
 	const fileInput = useRef<HTMLInputElement>(null);
-	const [pickerOpen, setPickerOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [progress, setProgress] = useState<{ uploaded: number; total: number }>();
 	const [error, setError] = useState<string>();
@@ -258,14 +257,15 @@ function ProjectImportDialog({
 		const name = dot > 0 ? file.name.slice(0, dot) : file.name;
 		void importSelection(name, [{ file, path: file.name }]);
 	};
-	const openLocal = async (kind: "file" | "directory") => {
+	const openLocal = async () => {
 		setBusy(true);
 		setError(undefined);
 		try {
-			await onOpenLocal(kind);
+			await onOpenLocal();
 			onClose();
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
+			const message = cause instanceof Error ? cause.message : String(cause);
+			if (message !== "Project selection was cancelled") setError(message);
 			setBusy(false);
 		}
 	};
@@ -277,21 +277,20 @@ function ProjectImportDialog({
 					<div><h2 id="project-dialog-title">打开项目</h2><span>{local ? "使用这台电脑上的文件和文件夹" : "导入到 Wuming 工作区"}</span></div>
 					<button className="icon-button" type="button" title="关闭" disabled={busy} onClick={onClose}><X size={18} /></button>
 				</div>
-				<div className={`project-import-choice ${pickerOpen ? "open" : ""}`}>
-					<button className="project-import-trigger" type="button" aria-expanded={pickerOpen} disabled={busy} onClick={() => setPickerOpen((open) => !open)}>
-						<Paperclip size={20} />
-						<span><strong>文件和文件夹</strong><small>{local ? "打开这台电脑上的项目内容" : "上传内容并创建项目"}</small></span>
-						<ChevronDown size={16} />
+				{local ? (
+					<button className="project-import-trigger" type="button" disabled={busy} onClick={() => void openLocal()}>
+						<FolderOpen size={20} /><span><strong>文件或文件夹</strong><small>选择这台电脑上的项目内容</small></span>
 					</button>
-					{pickerOpen && <div className="project-import-kinds" role="group" aria-label="选择项目内容类型">
-						<button type="button" disabled={busy} onClick={() => local ? void openLocal("file") : (() => { if (fileInput.current) { fileInput.current.value = ""; fileInput.current.click(); } })()}>
-							<FileCode2 size={17} /><span><strong>文件</strong><small>{local ? "使用文件所在目录" : "上传为独立项目"}</small></span>
+				) : (
+					<div className="project-import-kinds" role="group" aria-label="选择项目内容类型">
+						<button type="button" disabled={busy} onClick={() => { if (fileInput.current) { fileInput.current.value = ""; fileInput.current.click(); } }}>
+							<FileCode2 size={17} /><span><strong>文件</strong><small>上传为独立项目</small></span>
 						</button>
-						<button type="button" disabled={busy} onClick={() => local ? void openLocal("directory") : (() => { if (folderInput.current) { folderInput.current.value = ""; folderInput.current.click(); } })()}>
-							<FolderOpen size={17} /><span><strong>文件夹</strong><small>{local ? "直接使用本机目录" : "上传并保留目录结构"}</small></span>
+						<button type="button" disabled={busy} onClick={() => { if (folderInput.current) { folderInput.current.value = ""; folderInput.current.click(); } }}>
+							<FolderOpen size={17} /><span><strong>文件夹</strong><small>上传并保留目录结构</small></span>
 						</button>
-					</div>}
-				</div>
+					</div>
+				)}
 				{!local && <>
 					<input ref={folderInput} className="visually-hidden" type="file" multiple {...{ webkitdirectory: "" }} onChange={pickFolder} />
 					<input ref={fileInput} className="visually-hidden" type="file" onChange={pickFile} />

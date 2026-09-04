@@ -170,11 +170,19 @@ test("starts projectless and groups imported projects", async ({ page }) => {
 
 	await page.getByRole("button", { name: "打开项目" }).click();
 	const dialog = page.getByRole("dialog", { name: "打开项目" });
-	const combinedPicker = dialog.getByRole("button", { name: /文件和文件夹/ });
-	await expect(combinedPicker).toHaveAttribute("aria-expanded", "false");
+	const combinedPicker = dialog.getByRole("button", { name: /^文件或文件夹\s*选择这台电脑上的项目内容$/ });
+	await expect(combinedPicker).toBeVisible();
+	await expect(dialog.getByRole("group", { name: "选择项目内容类型" })).toHaveCount(0);
+	await page.route("**/api/projects/pick", (route) => route.fulfill({
+		status: 400,
+		contentType: "application/json",
+		body: JSON.stringify({ error: "Project selection was cancelled" }),
+	}));
+	const pickRequest = page.waitForRequest("**/api/projects/pick");
 	await combinedPicker.click();
-	await expect(combinedPicker).toHaveAttribute("aria-expanded", "true");
-	await expect(dialog.getByRole("group", { name: "选择项目内容类型" }).getByRole("button")).toHaveCount(2);
+	expect((await pickRequest).postDataJSON()).toEqual({});
+	await expect(combinedPicker).toBeEnabled();
+	await expect(dialog.getByRole("alert")).toHaveCount(0);
 });
 
 test("uploads uncommon text files and accepts dragged images", async ({ page }) => {

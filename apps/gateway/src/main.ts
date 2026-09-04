@@ -715,8 +715,8 @@ async function main(): Promise<void> {
 		},
 		projects: {
 			pick: async (_ownerId, kind) => {
-				const path = await showLocalProjectPicker(kind);
-				return registerProjectWorkspace(await importedProjects.addLocal(path, kind));
+				const selection = await showLocalProjectPicker(kind);
+				return registerProjectWorkspace(await importedProjects.addLocal(selection.path, selection.kind));
 			},
 			create: (ownerId, name) => importedProjects.create(ownerId, name),
 			writeFile: (ownerId, projectId, path, content) => importedProjects.writeProjectFile(ownerId, projectId, path, content),

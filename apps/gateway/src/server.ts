@@ -99,7 +99,7 @@ export interface GatewayWorkspaceService {
 }
 
 export interface GatewayProjectService {
-	pick(ownerId: string, kind: "file" | "directory"): Promise<WorkspaceSummary>;
+	pick(ownerId: string, kind?: "file" | "directory"): Promise<WorkspaceSummary>;
 	create(ownerId: string, name: string): Promise<WorkspaceSummary>;
 	writeFile(ownerId: string, projectId: string, path: string, content: Buffer): Promise<void>;
 	complete(ownerId: string, projectId: string): Promise<WorkspaceSummary>;
@@ -312,7 +312,7 @@ export class GatewayServer implements AsyncDisposable {
 					throw Object.assign(new Error("Project request must contain valid JSON"), { httpStatus: 400 });
 				}
 				const kind = value && typeof value === "object" ? (value as { kind?: unknown }).kind : undefined;
-				if (kind !== "file" && kind !== "directory") throw Object.assign(new Error("Project kind must be file or directory"), { httpStatus: 400 });
+				if (kind !== undefined && kind !== "file" && kind !== "directory") throw Object.assign(new Error("Project kind must be file or directory"), { httpStatus: 400 });
 				const project = await this.#projects.pick(principal.id, kind);
 				if (!principal.workspaces.some((workspace) => workspace.id === project.id)) principal.workspaces.push(project);
 				this.#json(response, 200, { project });

@@ -759,8 +759,8 @@ export function useWumingClient() {
 		return project;
 	}, [createSessionInWorkspace, openWorkspace, state.models.length, state.workspaces, token]);
 
-	const openLocalProject = useCallback(async (kind: "file" | "directory") => {
-		const { project } = await workspaceApi.pickProject(token, kind);
+	const openLocalProject = useCallback(async () => {
+		const { project } = await workspaceApi.pickProject(token);
 		const result = await requestRef.current?.({ type: "workspace.list" });
 		const workspaces = result?.type === "workspace.list" ? result.workspaces : [...state.workspaces, project];
 		setState((current) => ({ ...current, workspaces }));

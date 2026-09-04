@@ -682,12 +682,16 @@ describe("GatewayServer", () => {
 		};
 		let uploaded: { path: string; content: string } | undefined;
 		let removedProjectId: string | undefined;
+		let pickedKind: "file" | "directory" | undefined;
 		const server = new GatewayServer({
 			auth: new StaticTokenAuth("secret", { id: "user-1", workspaces }),
 			orchestrator: new SessionOrchestrator(store, new GatewayRuntime()),
 			store,
 			projects: {
-				pick: async () => imported,
+				pick: async (_ownerId, kind) => {
+					pickedKind = kind;
+					return imported;
+				},
 				create: async (_ownerId, name) => ({ ...imported, name, status: "provisioning" }),
 				writeFile: async (_ownerId, projectId, path, content) => {
 					expect(projectId).toBe(imported.id);
@@ -707,10 +711,11 @@ describe("GatewayServer", () => {
 		const picked = await fetch(`${base}/api/projects/pick`, {
 			method: "POST",
 			headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
-			body: JSON.stringify({ kind: "directory" }),
+			body: "{}",
 		});
 		expect(picked.status).toBe(200);
 		expect(await picked.json()).toMatchObject({ project: { id: imported.id } });
+		expect(pickedKind).toBeUndefined();
 
 		const created = await fetch(`${base}/api/projects`, {
 			method: "POST",

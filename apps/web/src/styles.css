@@ -934,34 +934,21 @@ button { color: inherit; }
 .dialog-header h2 { margin: 0; font-size: 15px; }
 .project-dialog .dialog-header > div { min-width: 0; display: grid; gap: 3px; }
 .project-dialog .dialog-header span { color: var(--muted); font-size: 11px; }
-.project-import-choice { overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
-.project-import-choice:focus-within, .project-import-choice.open { border-color: var(--green-border); }
-.project-import-trigger {
-  min-width: 0;
-  min-height: 62px;
-  width: 100%;
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 18px;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 11px;
-  border: 0;
-  background: transparent;
-  color: var(--text-soft);
-  text-align: left;
-  cursor: pointer;
-}
-.project-import-trigger:hover:not(:disabled) { background: var(--green-soft); color: var(--green); }
-.project-import-trigger:disabled, .project-import-kinds button:disabled { cursor: wait; opacity: 0.55; }
+.project-import-trigger { min-width: 0; min-height: 62px; width: 100%; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text-soft); text-align: left; cursor: pointer; }
+.project-import-trigger:hover:not(:disabled) { border-color: var(--green-border); background: var(--green-soft); color: var(--green); }
+.project-import-trigger:focus-visible { border-color: var(--green-border); outline: 2px solid var(--focus-line); outline-offset: 1px; }
+.project-import-trigger:disabled { cursor: wait; opacity: .55; }
 .project-import-trigger > span { min-width: 0; display: grid; gap: 3px; }
-.project-import-trigger > svg:last-child { transition: transform 140ms ease; }
-.project-import-choice.open .project-import-trigger > svg:last-child { transform: rotate(180deg); }
-.project-import-choice strong { color: var(--ink); font-size: 12px; }
-.project-import-choice small { color: var(--muted); font-size: 10.5px; }
-.project-import-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; padding: 1px; border-top: 1px solid var(--line); background: var(--line); }
+.project-import-trigger strong { color: var(--ink); font-size: 12px; }
+.project-import-trigger small { color: var(--muted); font-size: 10.5px; }
+.project-import-kinds { overflow: hidden; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; padding: 1px; border: 1px solid var(--line); border-radius: 7px; background: var(--line); }
+.project-import-kinds:focus-within { border-color: var(--green-border); }
 .project-import-kinds button { min-width: 0; min-height: 55px; display: grid; grid-template-columns: 21px minmax(0, 1fr); align-items: center; gap: 7px; padding: 8px 9px; border: 0; background: var(--panel); color: var(--text-soft); text-align: left; cursor: pointer; }
 .project-import-kinds button:hover:not(:disabled) { background: var(--green-soft); color: var(--green); }
+.project-import-kinds button:disabled { cursor: wait; opacity: 0.55; }
 .project-import-kinds button > span { min-width: 0; display: grid; gap: 2px; }
+.project-import-kinds strong { color: var(--ink); font-size: 12px; }
+.project-import-kinds small { color: var(--muted); font-size: 10.5px; }
 .project-import-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 12px; margin-top: 13px; color: var(--muted); font-size: 11px; }
 .project-import-progress strong { color: var(--text-soft); font-size: 11px; font-weight: 600; }
 .project-import-progress > i { grid-column: 1 / -1; height: 4px; overflow: hidden; border-radius: 2px; background: var(--track); }
