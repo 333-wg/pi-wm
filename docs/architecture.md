@@ -71,7 +71,7 @@ Container or microVM
 | Organization/User | Gateway | Identity comes from authentication, never message payloads |
 | Workspace | Gateway + executor | Opaque ID maps to exactly one isolated filesystem |
 | Session | Orchestrator | At most one live writer; many read subscribers |
-| Subagent | Orchestrator | One-level child session; isolated operation/transcript; terminal result published once to parent |
+| Subagent | Orchestrator | Child session bounded to three levels; isolated operation/transcript; cascade cancellation; terminal result published once to parent |
 | Turn | Orchestrator | One active turn per session in MVP |
 | Transcript item | Orchestrator | Append-only identity; later status updates preserve item ID |
 | Tool call | Pi adapter | Every call reaches exactly one terminal settlement |

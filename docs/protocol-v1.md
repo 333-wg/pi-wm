@@ -39,21 +39,31 @@ collection selected with `archived: true`. `session.rename` and
 Archived sessions remain attachable for inspection but reject new turns until
 restored.
 
-The `subagents` capability enables a one-level durable child-session workflow:
+The `subagents` capability enables a depth-bounded durable child-session workflow:
 
 - `subagent.create` accepts a parent session, task, optional name, and optional
   cost/token limits. It returns after the child operation is durably queued;
   `wait: true` waits for its terminal summary.
-- `subagent.list` returns bounded child summaries for one authorized parent.
+- `subagent.list` returns bounded child summaries plus the current depth and
+  whether another level may be created for one authorized parent.
 - `subagent.cancel` durably requests cancellation and propagates abort to a live
   runtime or recovered pending approval.
 
 A child inherits the parent workspace, model, thinking, sandbox, approval
 policy, and remaining budget ceiling. Child sessions are omitted from the
-normal session list and cannot create nested children. On terminal settlement,
+normal session list and can recursively delegate up to three agent levels. Cancelling
+an ancestor cancels active descendants before settling the ancestor. On terminal settlement,
 the orchestrator writes one stable `subagent:<childSessionId>` tool result to
 the parent transcript and aggregates the child's usage once. The stable item ID
 makes recovery and repeated publication idempotent.
+
+The `goals` capability provides durable pending objectives with explicit start
+and cancel commands. A goal may include success criteria and a bounded review
+round count. After each worker result, an independent reviewer returns a strict
+JSON verdict with one or more criterion checks. An overall pass is accepted only
+when every check passes. Durable review history keeps model-provided evidence
+separate from the tool names observed in the reviewer session; a failed review
+starts a fresh worker session with the feedback until the round limit is reached.
 
 Prompt behavior is explicit:
 

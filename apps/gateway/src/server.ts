@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { OrchestratorError, SessionOrchestrator, type SqliteOrchestratorStore, type StoredSessionEvent } from "@wuming/orchestrator";
+import { MAX_SUBAGENT_DEPTH, OrchestratorError, SessionOrchestrator, type SqliteOrchestratorStore, type StoredSessionEvent } from "@wuming/orchestrator";
 import {
 	type Capability,
 	type ArtifactRef,
@@ -998,9 +998,17 @@ export class GatewayServer implements AsyncDisposable {
 					...(command.costBudgetUsd === undefined ? {} : { costBudgetUsd: command.costBudgetUsd }),
 					...(command.tokenBudget === undefined ? {} : { tokenBudget: command.tokenBudget }),
 				});
-			case "subagent.list":
+			case "subagent.list": {
 				this.#requireSession(connection, command.sessionId);
-				return { type: "subagent.list", sessionId: command.sessionId, subagents: this.#orchestrator.listSubagents(command.sessionId, command.limit ?? 100) };
+				const depth = this.#orchestrator.subagentDepth(command.sessionId);
+				return {
+					type: "subagent.list",
+					sessionId: command.sessionId,
+					depth,
+					canCreate: depth < MAX_SUBAGENT_DEPTH,
+					subagents: this.#orchestrator.listSubagents(command.sessionId, command.limit ?? 100),
+				};
+			}
 			case "subagent.cancel":
 				this.#requireSession(connection, command.sessionId);
 				return this.#orchestrator.cancelSubagent({ principalId: connection.principal.id, idempotencyKey, sessionId: command.sessionId, subagentId: command.subagentId });

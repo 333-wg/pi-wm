@@ -39,18 +39,21 @@ The Agents tab creates independent durable child sessions that inherit the
 parent model, sandbox, and approval policy. Each child has its own transcript,
 operation, approvals, and optional cost/token limits; it continues in the
 background, can be cancelled, and publishes its terminal result and usage back
-to the parent session exactly once. Nested subagents are not enabled in this
-increment.
+to the parent session exactly once. The workbench can search and filter tasks,
+reuse an earlier task configuration, render structured results, and open the
+child's full conversation for tool-level inspection or follow-up before returning
+to the parent. Delegation can continue recursively to a hard limit of three agent
+levels; cancelling an ancestor first cancels its active descendants.
 The Goals tab creates durable objectives without starting model work
 immediately. Starting a goal runs one independent child session in the
 background; its status, approvals, usage, result, and cancellation state remain
 available after navigation or restart. Multi-step plans and scheduled triggers
 are deferred beyond this increment.
-Protocol clients can optionally provide `successCriteria` and a bounded
-`maxRounds` value when creating a Goal. The backend then runs independent
-reviewer sessions, records pass/fail feedback, and starts a corrected worker
-round when required. Web controls for configuring and inspecting this review
-loop are tracked as the next frontend increment.
+Goals can optionally include `successCriteria` and a bounded `maxRounds` value.
+The backend then runs independent reviewer sessions, records per-criterion
+pass/fail evidence and the reviewer's actual tool trace, and starts a corrected
+worker round when required. The Web Goals view configures the loop and exposes
+its durable evidence history.
 Provider failures marked retryable use bounded retries (`WUMING_MAX_RETRIES` and
 `WUMING_RETRY_BASE_DELAY_MS`). Set `WUMING_COST_BUDGET_USD` for a default
 per-session budget, or send `costBudgetUsd` when creating a session; all model

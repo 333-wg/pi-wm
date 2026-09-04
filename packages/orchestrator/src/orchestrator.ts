@@ -3,6 +3,7 @@ import { EMPTY_USAGE, reduceSessionEvent, type SessionEvent } from "@wuming/doma
 import type {
 	ApprovalPolicy,
 	CommandResult,
+	GoalReviewCheck,
 	GoalSummary,
 	ModelRef,
 	ProgressEvent,
@@ -257,7 +258,9 @@ function subagentResult(snapshot: SessionSnapshot): string | undefined {
 	return (text || assistant.error)?.slice(0, 200_000);
 }
 
-function summarizeSubagent(snapshot: SessionSnapshot, operation: DurableOperation): SubagentSummary {
+export const MAX_SUBAGENT_DEPTH = 3;
+
+function summarizeSubagent(snapshot: SessionSnapshot, operation: DurableOperation, depth: number): SubagentSummary {
 	const status = snapshot.session.phase === "awaiting_approval" && (operation.status === "queued" || operation.status === "running")
 		? "awaiting_approval" as const
 		: operation.abortRequested && (operation.status === "queued" || operation.status === "running")
@@ -273,6 +276,7 @@ function summarizeSubagent(snapshot: SessionSnapshot, operation: DurableOperatio
 		operationId: operation.id,
 		name: snapshot.session.name ?? "Subagent",
 		task: subagentTask(snapshot),
+		depth,
 		status,
 		createdAt: operation.createdAt,
 		updatedAt: Math.max(snapshot.session.updatedAt, operation.updatedAt),
@@ -342,7 +346,7 @@ function summarizeGoal(goal: DurableGoal, subagent?: SubagentSummary, projection
 	};
 }
 
-function parseGoalReview(text: string | undefined): { verdict: "pass" | "fail"; feedback: string } | undefined {
+function parseGoalReview(text: string | undefined): { verdict: "pass" | "fail"; feedback: string; checks: GoalReviewCheck[] } | undefined {
 	if (!text) return undefined;
 	const normalized = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
 	try {
@@ -351,7 +355,22 @@ function parseGoalReview(text: string | undefined): { verdict: "pass" | "fail"; 
 		const record = value as Record<string, unknown>;
 		if (record.verdict !== "pass" && record.verdict !== "fail") return undefined;
 		if (typeof record.feedback !== "string") return undefined;
-		return { verdict: record.verdict, feedback: record.feedback.trim().slice(0, 4000) };
+		if (!Array.isArray(record.checks) || record.checks.length < 1 || record.checks.length > 20) return undefined;
+		const checks: GoalReviewCheck[] = [];
+		for (const value of record.checks) {
+			if (!value || typeof value !== "object") return undefined;
+			const check = value as Record<string, unknown>;
+			if (typeof check.criterion !== "string" || !check.criterion.trim()) return undefined;
+			if (check.status !== "pass" && check.status !== "fail") return undefined;
+			if (typeof check.evidence !== "string" || !check.evidence.trim()) return undefined;
+			checks.push({
+				criterion: check.criterion.trim().slice(0, 500),
+				status: check.status,
+				evidence: check.evidence.trim().slice(0, 2000),
+			});
+		}
+		if ((record.verdict === "pass") !== checks.every((check) => check.status === "pass")) return undefined;
+		return { verdict: record.verdict, feedback: record.feedback.trim().slice(0, 4000), checks };
 	} catch {
 		return undefined;
 	}
@@ -360,8 +379,9 @@ function parseGoalReview(text: string | undefined): { verdict: "pass" | "fail"; 
 function goalReviewPrompt(goal: DurableGoal, candidate: string): string {
 	return [
 		"Review the candidate result against the goal and success criteria.",
-		"Return exactly one JSON object with no commentary or markdown. Set verdict to either pass or fail:",
-		'{"verdict":"pass","feedback":"concise evidence and required corrections"}',
+		"Independently inspect the workspace and use available tools for every relevant check. Run tests or static checks when process tools are available. Never claim a command or inspection you did not perform.",
+		"Return exactly one JSON object with no commentary or markdown. Include one check for every independently verifiable criterion. The overall verdict is pass only when every check passes:",
+		'{"verdict":"pass","feedback":"concise summary and required corrections","checks":[{"criterion":"criterion being checked","status":"pass","evidence":"specific observed file, command, output, or candidate fact"}]}',
 		`Goal:\n${goal.objective.slice(0, 7000)}`,
 		`Success criteria:\n${goal.review!.successCriteria}`,
 		`Candidate result:\n${candidate.slice(0, 7000)}`,
@@ -655,7 +675,8 @@ export class SessionOrchestrator {
 			if (existing) return existing as Extract<CommandResult, { type: "subagent.created" }>;
 			const parent = this.store.loadSnapshot(input.sessionId);
 			if (!parent) throw new OrchestratorError("not_found", `Session ${input.sessionId} does not exist`);
-			if (parent.session.parentSessionId !== undefined) throw new OrchestratorError("conflict", "Nested subagents are not supported in this increment");
+			const parentDepth = this.subagentDepth(parent.session.id);
+			if (parentDepth >= MAX_SUBAGENT_DEPTH) throw new OrchestratorError("conflict", `Subagents are limited to ${MAX_SUBAGENT_DEPTH} levels`);
 			if (parent.session.archivedAt !== undefined) throw new OrchestratorError("conflict", "Archived sessions cannot create subagents");
 			const prepared = this.#prepareSubagent(parent, {
 				task,
@@ -739,14 +760,32 @@ export class SessionOrchestrator {
 			updatedAt: now,
 			abortRequested: false,
 		};
-		return { events: [created, item, phase], snapshot, operation, summary: summarizeSubagent(snapshot, operation) };
+		return { events: [created, item, phase], snapshot, operation, summary: summarizeSubagent(snapshot, operation, this.subagentDepth(parent.session.id) + 1) };
+	}
+
+	/** Return the number of parent links above a session, with primary sessions at depth zero. */
+	subagentDepth(sessionId: string): number {
+		let snapshot = this.store.loadSnapshot(sessionId);
+		if (!snapshot) throw new OrchestratorError("not_found", `Session ${sessionId} does not exist`);
+		let depth = 0;
+		const visited = new Set<string>([sessionId]);
+		while (snapshot.session.parentSessionId !== undefined) {
+			const parentId = snapshot.session.parentSessionId;
+			if (visited.has(parentId)) throw new OrchestratorError("conflict", `Session ${sessionId} has a cyclic parent chain`);
+			visited.add(parentId);
+			depth += 1;
+			const parent = this.store.loadSnapshot(parentId);
+			if (!parent) throw new OrchestratorError("not_found", `Parent session ${parentId} does not exist`);
+			snapshot = parent;
+		}
+		return depth;
 	}
 
 	listSubagents(parentSessionId: string, limit = 100): SubagentSummary[] {
 		if (!this.store.loadSnapshot(parentSessionId)) throw new OrchestratorError("not_found", `Session ${parentSessionId} does not exist`);
 		return this.store.listChildSnapshots(parentSessionId, limit).flatMap((snapshot) => {
 			const operation = this.store.listOperations(snapshot.session.id, 1)[0];
-			return operation ? [summarizeSubagent(snapshot, operation)] : [];
+			return operation ? [summarizeSubagent(snapshot, operation, this.subagentDepth(snapshot.session.id))] : [];
 		});
 	}
 
@@ -794,7 +833,7 @@ export class SessionOrchestrator {
 	#loadSubagentSummary(sessionId: string): SubagentSummary | undefined {
 		const snapshot = this.store.loadSnapshot(sessionId);
 		const operation = this.store.listOperations(sessionId, 1)[0];
-		return snapshot && operation ? summarizeSubagent(snapshot, operation) : undefined;
+		return snapshot && operation ? summarizeSubagent(snapshot, operation, this.subagentDepth(sessionId)) : undefined;
 	}
 
 	#summarizeStoredGoal(goal: DurableGoal): GoalSummary {
@@ -975,8 +1014,21 @@ export class SessionOrchestrator {
 
 				if (goal.review.phase !== "reviewing") return this.#summarizeStoredGoal(goal);
 				const parsed = parseGoalReview(active.result);
-				const record = parsed ?? { verdict: "fail" as const, feedback: "Reviewer returned an invalid structured verdict." };
-				const history = [...goal.review.history, { round: goal.review.round, verdict: record.verdict, feedback: record.feedback, reviewedAt: this.#clock() }];
+				const record = parsed ?? {
+					verdict: "fail" as const,
+					feedback: "Reviewer returned an invalid structured verdict.",
+					checks: [{ criterion: "Structured review output", status: "fail" as const, evidence: "The reviewer response did not match the required evidence schema." }],
+				};
+				const reviewerSnapshot = this.store.loadSnapshot(activeSessionId);
+				const toolsUsed = [...new Set((reviewerSnapshot?.usageByTool ?? []).filter((tool) => tool.callCount > 0).map((tool) => tool.toolName))].slice(0, 50);
+				const history = [...goal.review.history, {
+					round: goal.review.round,
+					verdict: record.verdict,
+					feedback: record.feedback,
+					checks: record.checks,
+					...(toolsUsed.length === 0 ? {} : { toolsUsed }),
+					reviewedAt: this.#clock(),
+				}];
 				const workerSessionId = goal.review.runs.at(-1)?.workerSessionId;
 				if (!parsed) {
 					goal = this.#settleGoalReview(goal, { ...goal.review, phase: "failed", history, failure: record.feedback }, workerSessionId);
@@ -1094,6 +1146,25 @@ export class SessionOrchestrator {
 	}
 
 	async cancelSubagent(input: CancelSubagentInput): Promise<Extract<CommandResult, { type: "subagent.cancel_requested" }>> {
+		const requestedParent = this.store.loadSnapshot(input.sessionId);
+		const requestedChild = this.store.loadSnapshot(input.subagentId);
+		if (!requestedParent || !requestedChild || requestedChild.session.parentSessionId !== requestedParent.session.id) throw new OrchestratorError("not_found", `Subagent ${input.subagentId} does not exist`);
+		for (const descendant of this.store.listAllDirectChildSnapshots(input.subagentId)) {
+			const descendantOperation = this.store.listOperations(descendant.session.id, 1)[0];
+			if (!descendantOperation || (descendantOperation.status !== "queued" && descendantOperation.status !== "running")) continue;
+			try {
+				await this.cancelSubagent({
+					principalId: input.principalId,
+					idempotencyKey: `cascade:${input.idempotencyKey}:${descendant.session.id}`,
+					sessionId: input.subagentId,
+					subagentId: descendant.session.id,
+				});
+			} catch (error) {
+				const latest = this.store.listOperations(descendant.session.id, 1)[0];
+				if (error instanceof OrchestratorError && error.code === "conflict" && latest && (latest.abortRequested || !["queued", "running"].includes(latest.status))) continue;
+				throw error;
+			}
+		}
 		const result = await this.#serializeCommand(`subagent:cancel:${input.sessionId}:${input.subagentId}`, () => {
 			const now = this.#clock();
 			const hash = commandHash({ type: "subagent.cancel", sessionId: input.sessionId, subagentId: input.subagentId });
@@ -1106,7 +1177,7 @@ export class SessionOrchestrator {
 			if (!operation) throw new OrchestratorError("not_found", `Subagent ${input.subagentId} has no operation`);
 			if (operation.status !== "queued" && operation.status !== "running") throw new OrchestratorError("conflict", `Subagent ${input.subagentId} is already ${operation.status}`);
 			const projected = { ...operation, abortRequested: true, updatedAt: now };
-			const result = { type: "subagent.cancel_requested", subagent: summarizeSubagent(child, projected) } as const;
+			const result = { type: "subagent.cancel_requested", subagent: summarizeSubagent(child, projected, this.subagentDepth(child.session.id)) } as const;
 			const committed = this.store.requestOperationAbort({
 				principalId: input.principalId,
 				idempotencyKey: input.idempotencyKey,
@@ -1151,7 +1222,7 @@ export class SessionOrchestrator {
 			if (!parent || !child || child.session.parentSessionId !== parent.session.id) throw new OrchestratorError("not_found", `Subagent ${subagentId} does not exist`);
 			const operation = this.store.listOperations(subagentId, 1)[0];
 			if (!operation) throw new OrchestratorError("not_found", `Subagent ${subagentId} has no operation`);
-			const summary = summarizeSubagent(child, operation);
+			const summary = summarizeSubagent(child, operation, this.subagentDepth(child.session.id));
 			if (!this.#subagentPublishPending(parent, child, operation)) return summary;
 			const inline = operation.payload.deliverInline === true;
 			const now = this.#clock();

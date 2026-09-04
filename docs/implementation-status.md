@@ -89,17 +89,21 @@
   initialized connections, abort/timeout process termination, strict launch
   validation, approval-gated Pi tool bridging with bounded output, and MCP
   server/tool/duration/outcome attribution in Usage and the Run rail.
-- One-level durable subagents backed by independent child sessions and operations,
+- Depth-bounded durable subagents backed by independent child sessions and operations,
   inherited model/sandbox/approval policy, bounded child budgets, create/list/
   cancel commands, approval handling, restart-safe execution, idempotent result
-  and usage propagation to the parent, and responsive Web queue/detail controls.
+  and usage propagation to the parent, responsive searchable/status-filtered Web
+  queue/detail controls, reusable task configuration, Markdown result rendering,
+  direct child-conversation inspection with parent navigation, model-driven
+  recursive delegation up to three levels, and descendant-first cascade cancellation.
 - Durable single-run goals with explicit pending/start semantics, atomic
   idempotent lifecycle commands, child-session-backed background execution,
   restart-safe status projection, approval/cancellation support, result and usage
   recovery, and a responsive Web Goals workbench.
-- Optional backend Goal review loops with bounded success criteria, independent
-  worker/reviewer child sessions, durable verdict history, feedback-driven retry
-  rounds, aggregate usage, atomic run transitions, and restart continuation.
+- Optional Goal review loops with bounded success criteria, independent
+  worker/reviewer child sessions, schema-checked per-criterion evidence, grounded
+  reviewer tool traces, feedback-driven retry rounds, aggregate usage, atomic run
+  transitions, restart continuation, and responsive Web history controls.
 - Isolated Playwright browser coverage for persisted turns, approval, active-run
   cancellation, completed/cancelled subagents, durable goal restoration, refresh
   recovery, and mobile workbench layouts, using dynamic ports and disposable
@@ -113,7 +117,7 @@
 
 ## Next production increments
 
-1. Review-loop Web controls, scheduled/triggered jobs, multi-step goals, and nested/multi-agent coordination.
+1. Scheduled/triggered jobs, multi-step goals, and cross-branch multi-agent coordination views.
 2. Organization identity, encrypted credential store, RBAC, quotas, and audit UI.
 3. PostgreSQL/event transport, multi-node workers, deployment, and observability.
 

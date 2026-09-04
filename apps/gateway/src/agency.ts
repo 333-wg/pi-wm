@@ -1,4 +1,5 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { MAX_SUBAGENT_DEPTH } from "@wuming/orchestrator";
 import type { SessionSnapshot, SubagentSummary } from "@wuming/protocol";
 import { Type } from "typebox";
 
@@ -24,6 +25,7 @@ export interface SubagentRunner {
 		deliverInline?: boolean;
 	}): Promise<{ subagent: SubagentSummary }>;
 	drainSession(sessionId: string): Promise<number>;
+	subagentDepth(sessionId: string): number;
 	subagentSummary(parentSessionId: string, subagentId: string): SubagentSummary;
 	cancelSubagent(input: {
 		principalId: string;
@@ -100,9 +102,7 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 	];
 
 	const runner = options.runner;
-	// Pi has no nesting story yet, and a child that could fan out again would make the
-	// parent's budget derivation unsound; the orchestrator rejects it either way.
-	if (!runner || options.snapshot.session.parentSessionId !== undefined) return tools;
+	if (!runner || runner.subagentDepth(sessionId) >= MAX_SUBAGENT_DEPTH) return tools;
 
 	tools.push(defineTool({
 		name: "subagent",
@@ -110,6 +110,7 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 		description: [
 			"Delegate a self-contained investigation to a fresh agent and wait for its answer.",
 			"The subagent starts with an empty context, inherits this session's workspace, sandbox mode and approval policy, and returns one final report.",
+			`Delegation is bounded to ${MAX_SUBAGENT_DEPTH} agent levels; a child can delegate again while it remains below that limit.`,
 			"Use it to keep a large search out of your own context — for example locating every caller of an API across an unfamiliar tree.",
 			"It cannot ask you questions, so state the goal, the paths worth looking at, and exactly what to report back.",
 			"Its cost counts against this session's budget.",
@@ -170,7 +171,7 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 			const truncated = report.length > maxResultChars;
 			return textResult(
 				`Subagent ${summary.name} completed using ${usage}.\n\n${truncated ? `${report.slice(0, maxResultChars)}\n[report truncated]` : report}`,
-				{ subagentId, status: summary.status, truncated, costUsd: summary.usage.costUsd, totalTokens: summary.usage.totalTokens },
+				{ subagentId, depth: summary.depth, status: summary.status, truncated, costUsd: summary.usage.costUsd, totalTokens: summary.usage.totalTokens },
 			);
 		},
 	}));

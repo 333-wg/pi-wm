@@ -88,7 +88,7 @@ class GoalReviewRuntime implements AgentRuntime {
 	workerCalls = 0;
 	reviewerCalls = 0;
 
-	constructor(readonly verdicts: Array<"pass" | "fail">) {}
+	constructor(readonly verdicts: Array<"pass" | "fail">, readonly inconsistent = false) {}
 
 	async executeTurn(input: Parameters<AgentRuntime["executeTurn"]>[0]): Promise<RuntimeTurnResult> {
 		this.calls += 1;
@@ -101,7 +101,15 @@ class GoalReviewRuntime implements AgentRuntime {
 		if (reviewing) {
 			this.reviewerCalls += 1;
 			const verdict = this.verdicts.shift() ?? "pass";
-			result = JSON.stringify({ verdict, feedback: verdict === "pass" ? "All criteria are satisfied." : "Add concrete verification evidence." });
+			result = JSON.stringify({
+				verdict,
+				feedback: verdict === "pass" ? "All criteria are satisfied." : "Add concrete verification evidence.",
+				checks: [{
+					criterion: "The report includes concrete verification evidence.",
+					status: this.inconsistent ? (verdict === "pass" ? "fail" : "pass") : verdict,
+					evidence: verdict === "pass" ? "The report includes a verified command result." : "No command result was included.",
+				}],
+			});
 		} else {
 			this.workerCalls += 1;
 			result = `candidate-${this.workerCalls}`;
@@ -116,6 +124,7 @@ class GoalReviewRuntime implements AgentRuntime {
 				model: input.snapshot.model,
 			}],
 			usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 2, costUsd: 0.01 },
+			...(reviewing ? { tools: [{ toolName: "read_file", callCount: 1, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 }, succeededCount: 1 }] } : {}),
 		};
 	}
 }
@@ -300,7 +309,7 @@ describe("session orchestrator", () => {
 			tokenBudget: 50,
 		});
 
-		expect(created.subagent).toMatchObject({ parentSessionId: parent.snapshot.session.id, status: "queued", task: "Inspect the authentication flow", costBudgetUsd: 0.25, tokenBudget: 50 });
+		expect(created.subagent).toMatchObject({ parentSessionId: parent.snapshot.session.id, depth: 1, status: "queued", task: "Inspect the authentication flow", costBudgetUsd: 0.25, tokenBudget: 50 });
 		expect(store.listSnapshots("workspace-1").map((snapshot) => snapshot.session.id)).toEqual([parent.snapshot.session.id]);
 		expect(orchestrator.listSubagents(parent.snapshot.session.id)).toHaveLength(1);
 		expect(await orchestrator.drainSession(created.subagent.sessionId, "subagent-worker")).toBe(1);
@@ -313,6 +322,50 @@ describe("session orchestrator", () => {
 		expect(parentAfter.usageByTool).toEqual([expect.objectContaining({ toolName: "subagent", callCount: 1, succeededCount: 1 })]);
 		await orchestrator.publishSubagentResult(parent.snapshot.session.id, created.subagent.sessionId);
 		expect(store.loadSnapshot(parent.snapshot.session.id)?.usage.totalTokens).toBe(12);
+		store.close();
+	});
+
+	it("bounds nested delegation and cascades cancellation through descendants", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const orchestrator = new SessionOrchestrator(store, new FakeRuntime(), { clock: () => 100, idFactory: ids("nested") });
+		const root = await orchestrator.createSession(createInput());
+		const first = await orchestrator.createSubagent({ principalId: "user-1", idempotencyKey: "nested-1", sessionId: root.snapshot.session.id, task: "Coordinate the investigation" });
+		const second = await orchestrator.createSubagent({ principalId: "agent:first", idempotencyKey: "nested-2", sessionId: first.subagent.sessionId, task: "Inspect the protocol" });
+		const third = await orchestrator.createSubagent({ principalId: "agent:second", idempotencyKey: "nested-3", sessionId: second.subagent.sessionId, task: "Check schema callers" });
+
+		expect([first.subagent.depth, second.subagent.depth, third.subagent.depth]).toEqual([1, 2, 3]);
+		expect(orchestrator.subagentDepth(root.snapshot.session.id)).toBe(0);
+		await expect(orchestrator.createSubagent({ principalId: "agent:third", idempotencyKey: "nested-4", sessionId: third.subagent.sessionId, task: "Exceed the bound" }))
+			.rejects.toMatchObject({ code: "conflict", message: "Subagents are limited to 3 levels" });
+
+		await orchestrator.cancelSubagent({ principalId: "user-1", idempotencyKey: "cancel-nested-tree", sessionId: root.snapshot.session.id, subagentId: first.subagent.sessionId });
+		expect(orchestrator.subagentSummary(root.snapshot.session.id, first.subagent.sessionId)).toMatchObject({ depth: 1, status: "cancelled" });
+		expect(orchestrator.subagentSummary(first.subagent.sessionId, second.subagent.sessionId)).toMatchObject({ depth: 2, status: "cancelled" });
+		expect(orchestrator.subagentSummary(second.subagent.sessionId, third.subagent.sessionId)).toMatchObject({ depth: 3, status: "cancelled" });
+		store.close();
+	});
+
+	it("cascades cancellation to every descendant beyond the UI list limit", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const orchestrator = new SessionOrchestrator(store, new FakeRuntime(), { clock: () => 100, idFactory: ids("wide-tree") });
+		const root = await orchestrator.createSession(createInput());
+		const branch = await orchestrator.createSubagent({ principalId: "user-1", idempotencyKey: "wide-branch", sessionId: root.snapshot.session.id, task: "Coordinate a wide investigation" });
+		const descendants = [];
+		for (let index = 0; index < 105; index += 1) {
+			descendants.push(await orchestrator.createSubagent({
+				principalId: "agent:branch",
+				idempotencyKey: `wide-child-${index}`,
+				sessionId: branch.subagent.sessionId,
+				task: `Inspect partition ${index}`,
+			}));
+		}
+
+		expect(orchestrator.listSubagents(branch.subagent.sessionId)).toHaveLength(100);
+		expect(store.listAllDirectChildSnapshots(branch.subagent.sessionId)).toHaveLength(105);
+		await orchestrator.cancelSubagent({ principalId: "user-1", idempotencyKey: "cancel-wide-tree", sessionId: root.snapshot.session.id, subagentId: branch.subagent.sessionId });
+		for (const descendant of [descendants[0]!, descendants[100]!, descendants[104]!]) {
+			expect(orchestrator.subagentSummary(branch.subagent.sessionId, descendant.subagent.sessionId).status).toBe("cancelled");
+		}
 		store.close();
 	});
 
@@ -454,8 +507,20 @@ describe("session orchestrator", () => {
 			result: "candidate-2",
 			usage: { totalTokens: 8, costUsd: 0.04 },
 			reviewHistory: [
-				{ round: 1, verdict: "fail", feedback: "Add concrete verification evidence." },
-				{ round: 2, verdict: "pass", feedback: "All criteria are satisfied." },
+				{
+					round: 1,
+					verdict: "fail",
+					feedback: "Add concrete verification evidence.",
+					checks: [{ criterion: "The report includes concrete verification evidence.", status: "fail", evidence: "No command result was included." }],
+					toolsUsed: ["read_file"],
+				},
+				{
+					round: 2,
+					verdict: "pass",
+					feedback: "All criteria are satisfied.",
+					checks: [{ criterion: "The report includes concrete verification evidence.", status: "pass", evidence: "The report includes a verified command result." }],
+					toolsUsed: ["read_file"],
+				},
 			],
 		});
 		expect(orchestrator.listSubagents(parent.snapshot.session.id)).toHaveLength(4);
@@ -515,6 +580,35 @@ describe("session orchestrator", () => {
 		await orchestrator.startGoal({ principalId: "user-1", idempotencyKey: "failed-review-goal-start", sessionId: parent.snapshot.session.id, goalId: created.goal.id });
 		const failed = await orchestrator.driveGoal(parent.snapshot.session.id, created.goal.id);
 		expect(failed).toMatchObject({ status: "failed", reviewPhase: "failed", round: 1, result: "candidate-1", error: "Add concrete verification evidence." });
+		expect(runtime).toMatchObject({ calls: 2, workerCalls: 1, reviewerCalls: 1 });
+		store.close();
+	});
+
+	it("rejects a review whose overall verdict contradicts its checks", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const runtime = new GoalReviewRuntime(["pass"], true);
+		const orchestrator = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: ids("inconsistent-review") });
+		const parent = await orchestrator.createSession(createInput());
+		const created = await orchestrator.createGoal({
+			principalId: "user-1",
+			idempotencyKey: "inconsistent-review-create",
+			sessionId: parent.snapshot.session.id,
+			objective: "Produce a verified report",
+			successCriteria: "Every recorded check passes.",
+			maxRounds: 2,
+		});
+		await orchestrator.startGoal({ principalId: "user-1", idempotencyKey: "inconsistent-review-start", sessionId: parent.snapshot.session.id, goalId: created.goal.id });
+		const failed = await orchestrator.driveGoal(parent.snapshot.session.id, created.goal.id);
+
+		expect(failed).toMatchObject({
+			status: "failed",
+			reviewPhase: "failed",
+			error: "Reviewer returned an invalid structured verdict.",
+			reviewHistory: [{
+				verdict: "fail",
+				checks: [{ criterion: "Structured review output", status: "fail" }],
+			}],
+		});
 		expect(runtime).toMatchObject({ calls: 2, workerCalls: 1, reviewerCalls: 1 });
 		store.close();
 	});

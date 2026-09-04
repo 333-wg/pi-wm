@@ -313,7 +313,11 @@ class DemoRuntime implements AgentRuntime {
 				};
 			}
 			const answer = text.trim().startsWith("Review the candidate result against the goal")
-				? JSON.stringify({ verdict: "pass", feedback: "Demo reviewer accepted the candidate result." })
+				? JSON.stringify({
+					verdict: "pass",
+					feedback: "Demo reviewer accepted the candidate result.",
+					checks: [{ criterion: "The configured success criteria", status: "pass", evidence: "The demo candidate contains the requested goal result." }],
+				})
 				: text.trim() === "/long"
 				? Array.from({ length: 600 }, (_, index) => `demo-step-${index + 1}`).join(" ")
 				: text.trim() === "/inject"

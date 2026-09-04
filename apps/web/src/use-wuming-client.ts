@@ -64,6 +64,8 @@ interface ClientState {
 	tools: ToolStatus[];
 	toolRuntime: "pi" | "demo" | undefined;
 	subagents: SubagentSummary[];
+	subagentDepth: number;
+	canCreateSubagent: boolean;
 	goals: GoalSummary[];
 	error: string | undefined;
 }
@@ -92,6 +94,8 @@ const initialState: ClientState = {
 	tools: [],
 	toolRuntime: undefined,
 	subagents: [],
+	subagentDepth: 0,
+	canCreateSubagent: true,
 	goals: [],
 	error: undefined,
 };
@@ -276,7 +280,7 @@ export function useWumingClient() {
 	const refreshSubagents = useCallback(async (sessionId: string) => {
 		const result = await requestRef.current?.({ type: "subagent.list", sessionId, limit: 100 });
 		if (result?.type === "subagent.list" && snapshotRef.current?.session.id === sessionId) {
-			setState((current) => ({ ...current, subagents: result.subagents }));
+			setState((current) => ({ ...current, subagents: result.subagents, subagentDepth: result.depth, canCreateSubagent: result.canCreate }));
 		}
 		return result?.type === "subagent.list" ? result.subagents : [];
 	}, []);
@@ -303,6 +307,8 @@ export function useWumingClient() {
 				liveAssistants: {},
 				liveTools: {},
 				subagents: [],
+				subagentDepth: 0,
+				canCreateSubagent: true,
 				goals: [],
 				error: undefined,
 			}));
@@ -633,6 +639,8 @@ export function useWumingClient() {
 			tools: [],
 			toolRuntime: undefined,
 			subagents: [],
+			subagentDepth: 0,
+			canCreateSubagent: true,
 			goals: [],
 		}));
 		await refreshSkills(workspaceId);
@@ -671,7 +679,7 @@ export function useWumingClient() {
 		if (current) await requestRef.current?.({ type: "session.detach", sessionId: current.session.id }).catch(() => undefined);
 		snapshotRef.current = undefined;
 		localStorage.removeItem(sessionSelectionKey(workspaceId));
-		setState((value) => ({ ...value, snapshot: undefined, runs: [], subagents: [], goals: [], liveAssistants: {}, liveTools: {} }));
+		setState((value) => ({ ...value, snapshot: undefined, runs: [], subagents: [], subagentDepth: 0, canCreateSubagent: true, goals: [], liveAssistants: {}, liveTools: {} }));
 		if (sessions[0]) await attachSession(sessions[0].id);
 		return sessions;
 	}, [attachSession, refreshSessions]);
@@ -710,6 +718,8 @@ export function useWumingClient() {
 				snapshot: result.snapshot,
 				runs: [],
 				subagents: [],
+				subagentDepth: 0,
+				canCreateSubagent: true,
 				goals: [],
 				liveAssistants: {},
 				liveTools: {},
@@ -797,6 +807,8 @@ export function useWumingClient() {
 			snapshot: undefined,
 			runs: [],
 			subagents: [],
+			subagentDepth: 0,
+			canCreateSubagent: true,
 			goals: [],
 			liveAssistants: {},
 			liveTools: {},
@@ -822,6 +834,8 @@ export function useWumingClient() {
 			snapshot: result.snapshot,
 			runs: [],
 			subagents: [],
+			subagentDepth: 0,
+			canCreateSubagent: true,
 			goals: [],
 			liveAssistants: {},
 			liveTools: {},
@@ -964,7 +978,7 @@ export function useWumingClient() {
 		await requestRef.current?.({ type: "session.detach", sessionId }).catch(() => undefined);
 		snapshotRef.current = undefined;
 		localStorage.removeItem(sessionSelectionKey(workspaceId));
-		setState((current) => ({ ...current, snapshot: undefined, runs: [], subagents: [], goals: [], liveAssistants: {}, liveTools: {} }));
+		setState((current) => ({ ...current, snapshot: undefined, runs: [], subagents: [], subagentDepth: 0, canCreateSubagent: true, goals: [], liveAssistants: {}, liveTools: {} }));
 		if (sessions[0]) await attachSession(sessions[0].id);
 	}, [attachSession, refreshSessions]);
 

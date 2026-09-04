@@ -35,6 +35,12 @@ const checkGoalReview = Compile(Type.Object({
 		round: Type.Integer({ minimum: 1, maximum: 5 }),
 		verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
 		feedback: Type.String({ maxLength: 4000 }),
+		checks: Type.Optional(Type.Array(Type.Object({
+			criterion: Type.String({ minLength: 1, maxLength: 500 }),
+			status: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
+			evidence: Type.String({ minLength: 1, maxLength: 2000 }),
+		}, { additionalProperties: false }), { minItems: 1, maxItems: 20 })),
+		toolsUsed: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 200 }), { maxItems: 50, uniqueItems: true })),
 		reviewedAt: Type.Integer({ minimum: 0 }),
 	}, { additionalProperties: false }), { maxItems: 5 }),
 	failure: Type.Optional(Type.String({ maxLength: 4000 })),
@@ -434,6 +440,13 @@ export class SqliteOrchestratorStore implements Disposable {
 		const rows = this.#db
 			.prepare("SELECT session_id, snapshot_json FROM session_snapshots WHERE parent_session_id = ? ORDER BY updated_at DESC LIMIT ?")
 			.all(parentSessionId, Math.max(1, Math.min(100, Math.trunc(limit)))) as unknown as Array<{ session_id: string; snapshot_json: string }>;
+		return rows.map((row) => parseChecked<SessionSnapshot>(row.snapshot_json, checkSnapshot, `Snapshot ${row.session_id}`));
+	}
+
+	listAllDirectChildSnapshots(parentSessionId: string): SessionSnapshot[] {
+		const rows = this.#db
+			.prepare("SELECT session_id, snapshot_json FROM session_snapshots WHERE parent_session_id = ? ORDER BY updated_at DESC")
+			.all(parentSessionId) as unknown as Array<{ session_id: string; snapshot_json: string }>;
 		return rows.map((row) => parseChecked<SessionSnapshot>(row.snapshot_json, checkSnapshot, `Snapshot ${row.session_id}`));
 	}
 

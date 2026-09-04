@@ -384,7 +384,7 @@ test("drives the shell from the keyboard and reports context occupancy", async (
 	await expect(shortcuts).toBeVisible();
 	await page.keyboard.press("Escape");
 	await expect(shortcuts).toBeHidden();
-	await page.keyboard.press("Control+b");
+	await page.keyboard.press("Control+Shift+b");
 	await expect(meter).toBeHidden();
 });
 
@@ -406,6 +406,49 @@ test("completes and cancels durable subagents", async ({ page }) => {
 	await page.getByRole("button", { name: "创建智能体" }).click();
 	await expect(page.getByText("已完成", { exact: true }).last()).toBeVisible();
 	await expect(page.getByText(/Demo runtime received: Return an E2E child result/)).toBeVisible();
+
+	await page.getByRole("tab", { name: /已完成/ }).click();
+	await page.getByRole("textbox", { name: "搜索智能体" }).fill("E2E completion");
+	await expect(page.getByRole("navigation", { name: "智能体任务" }).getByText("E2E completion")).toBeVisible();
+	await page.getByRole("button", { name: "复制任务" }).click();
+	await expect(page.getByRole("textbox", { name: "任务" })).toHaveValue("Return an E2E child result");
+	await expect(page.getByRole("textbox", { name: "名称" })).toHaveValue("E2E completion");
+
+	await page.getByRole("button", { name: "打开对话" }).click();
+	await expect(page.getByRole("button", { name: "返回主会话" })).toBeVisible();
+	await expect(page.locator(".right-rail")).toHaveCount(0);
+	await expect(page.getByRole("heading", { name: "E2E completion" })).toBeVisible();
+	await expect(page.getByText("智能体对话", { exact: true })).toBeVisible();
+	await expect(page.getByText(/Demo runtime received: Return an E2E child result/)).toBeVisible();
+
+	await page.getByRole("tab", { name: "智能体" }).click();
+	await expect(page.getByText("第 1 层 · 0 个任务", { exact: true })).toBeVisible();
+	await page.getByRole("textbox", { name: "任务", exact: true }).fill("Inspect the nested agent protocol");
+	await page.getByRole("textbox", { name: "名称", exact: true }).fill("E2E nested level 2");
+	await page.getByRole("button", { name: "创建智能体" }).click();
+	await page.locator(".subagent-status-label.status-completed").waitFor();
+	await expect(page.getByText("第 2 层", { exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "打开对话" }).click();
+	await expect(page.getByRole("heading", { name: "E2E nested level 2" })).toBeVisible();
+
+	await page.getByRole("tab", { name: "智能体" }).click();
+	await expect(page.getByText("第 2 层 · 0 个任务", { exact: true })).toBeVisible();
+	await page.getByRole("textbox", { name: "任务", exact: true }).fill("Verify the maximum nesting boundary");
+	await page.getByRole("textbox", { name: "名称", exact: true }).fill("E2E nested level 3");
+	await page.getByRole("button", { name: "创建智能体" }).click();
+	await page.locator(".subagent-status-label.status-completed").waitFor();
+	await expect(page.getByText("第 3 层", { exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "打开对话" }).click();
+	await page.getByRole("tab", { name: "智能体" }).click();
+	await expect(page.getByText("已到达 3 层上限", { exact: true })).toBeVisible();
+	await expect(page.getByRole("button", { name: "创建智能体" })).toHaveCount(0);
+
+	await page.getByRole("button", { name: "返回主会话" }).click();
+	await expect(page.getByRole("heading", { name: "E2E nested level 2" })).toBeVisible();
+	await page.getByRole("button", { name: "返回主会话" }).click();
+	await expect(page.getByRole("heading", { name: "E2E completion" })).toBeVisible();
+	await page.getByRole("button", { name: "返回主会话" }).click();
+	await page.getByRole("tab", { name: "智能体" }).click();
 
 	await page.getByRole("textbox", { name: "任务" }).fill("/approval");
 	await page.getByRole("textbox", { name: "名称" }).fill("E2E cancellation");
@@ -479,6 +522,10 @@ test("runs a goal through a bounded review loop", async ({ page }) => {
 	await expect(history.getByText("第 1 轮", { exact: true })).toBeVisible();
 	await expect(history.getByText("通过", { exact: true })).toBeVisible();
 	await expect(history.getByText("Demo reviewer accepted the candidate result.")).toBeVisible();
+	const checks = history.getByRole("list", { name: "第 1 轮验收项" });
+	await expect(checks.getByText("The configured success criteria", { exact: true })).toBeVisible();
+	await expect(checks.getByText("The demo candidate contains the requested goal result.", { exact: true })).toBeVisible();
+	await expect(history.getByText("本轮未记录工具调用", { exact: true })).toBeVisible();
 	await expect(page.getByText(/Demo runtime received: Return a reviewed E2E goal result/)).toBeVisible();
 	await expect(page.getByText("已完成", { exact: true }).last()).toBeVisible();
 });

@@ -224,7 +224,14 @@ describe("wire protocol", () => {
 					round: 1,
 					maxRounds: 3,
 					reviewPhase: "reviewing",
-					reviewHistory: [{ round: 1, verdict: "fail", feedback: "Missing evidence", reviewedAt: 2 }],
+					reviewHistory: [{
+						round: 1,
+						verdict: "fail",
+						feedback: "Missing evidence",
+						checks: [{ criterion: "All checks pass", status: "fail", evidence: "The test command exited with code 1." }],
+						toolsUsed: ["exec"],
+						reviewedAt: 2,
+					}],
 				}],
 			},
 		})).toBe(true);

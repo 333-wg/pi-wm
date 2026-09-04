@@ -28,6 +28,7 @@ function summary(overrides: Partial<SubagentSummary> = {}): SubagentSummary {
 		operationId: "op-1",
 		name: "callers",
 		task: "Find every caller of the approval broker",
+		depth: 1,
 		status: "completed",
 		createdAt: 1,
 		updatedAt: 2,
@@ -48,7 +49,7 @@ interface FakeRunner extends SubagentRunner {
 	cancelled: string[];
 }
 
-function fakeRunner(options: { summary?: SubagentSummary; drain?: () => Promise<number> } = {}): FakeRunner {
+function fakeRunner(options: { summary?: SubagentSummary; drain?: () => Promise<number>; depth?: number } = {}): FakeRunner {
 	const runner: FakeRunner = {
 		created: [],
 		drained: [],
@@ -61,6 +62,7 @@ function fakeRunner(options: { summary?: SubagentSummary; drain?: () => Promise<
 			runner.drained.push(sessionId);
 			return options.drain ? await options.drain() : 1;
 		},
+		subagentDepth: () => options.depth ?? 0,
 		subagentSummary: () => options.summary ?? summary(),
 		async cancelSubagent(input) {
 			runner.cancelled.push(input.subagentId);
@@ -118,11 +120,12 @@ describe("update_plan", () => {
 });
 
 describe("subagent", () => {
-	it("is offered only to a root session that has a runner", () => {
+	it("is offered while the session remains below the nesting limit", () => {
 		const runner = fakeRunner();
 		expect(createAgencyTools({ snapshot: snapshot(), runner }).map((entry) => entry.name)).toEqual(["update_plan", "subagent"]);
 		expect(createAgencyTools({ snapshot: snapshot() }).map((entry) => entry.name)).toEqual(["update_plan"]);
-		expect(createAgencyTools({ snapshot: snapshot({ id: "sub-1", parentSessionId: "session-1" }), runner }).map((entry) => entry.name)).toEqual(["update_plan"]);
+		expect(createAgencyTools({ snapshot: snapshot({ id: "sub-1", parentSessionId: "session-1" }), runner: fakeRunner({ depth: 1 }) }).map((entry) => entry.name)).toEqual(["update_plan", "subagent"]);
+		expect(createAgencyTools({ snapshot: snapshot({ id: "sub-3", parentSessionId: "sub-2" }), runner: fakeRunner({ depth: 3 }) }).map((entry) => entry.name)).toEqual(["update_plan"]);
 	});
 
 	it("delegates inline, drains the child, and returns its report with usage", async () => {
@@ -143,7 +146,7 @@ describe("subagent", () => {
 		expect(runner.created[0]).not.toHaveProperty("tokenBudget");
 		expect(runner.drained).toEqual(["sub-1"]);
 		expect(result.content[0]?.text).toBe("Subagent callers completed using 12 token(s), $0.0125.\n\nThree callers, all in packages/orchestrator.");
-		expect(result.details).toMatchObject({ subagentId: "sub-1", status: "completed", truncated: false, costUsd: 0.0125, totalTokens: 12 });
+		expect(result.details).toMatchObject({ subagentId: "sub-1", depth: 1, status: "completed", truncated: false, costUsd: 0.0125, totalTokens: 12 });
 	});
 
 	it("truncates an oversized report", async () => {

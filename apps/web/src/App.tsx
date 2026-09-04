@@ -1,6 +1,7 @@
 import {
 	Activity,
 	ArrowDown,
+	ArrowLeft,
 	BookOpen,
 	Archive,
 	Bot,
@@ -34,6 +35,7 @@ import {
 	Play,
 	Plus,
 	RefreshCw,
+	Search,
 	Send,
 	Settings,
 	ShieldAlert,
@@ -1478,22 +1480,34 @@ function ToolsView({ tools, runtime, onRefresh }: { tools: ToolStatus[]; runtime
 	</section>;
 }
 
+type SubagentFilter = "all" | "active" | "completed" | "attention";
+
+const SUBAGENT_ACTIVE_STATUSES: readonly SubagentSummary["status"][] = ["queued", "running", "awaiting_approval", "cancelling"];
+
 function SubagentsView({
 	subagents,
+	depth,
+	canCreate,
 	disabled,
 	onCreate,
 	onCancel,
+	onOpenSession,
 	onRespondApproval,
 	onRefresh,
 }: {
 	subagents: SubagentSummary[];
+	depth: number;
+	canCreate: boolean;
 	disabled: boolean;
 	onCreate: (input: { task: string; name?: string; costBudgetUsd?: number; tokenBudget?: number }) => Promise<SubagentSummary>;
 	onCancel: (subagentId: string) => Promise<SubagentSummary>;
+	onOpenSession: (sessionId: string) => Promise<void>;
 	onRespondApproval: (sessionId: string, approvalId: string, decision: "approve" | "deny") => Promise<void>;
 	onRefresh: () => Promise<SubagentSummary[]>;
 }) {
 	const [selectedId, setSelectedId] = useState<string>();
+	const [query, setQuery] = useState("");
+	const [filter, setFilter] = useState<SubagentFilter>("all");
 	const [task, setTask] = useState("");
 	const [name, setName] = useState("");
 	const [costBudget, setCostBudget] = useState("");
@@ -1501,12 +1515,31 @@ function SubagentsView({
 	const [creating, setCreating] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
 	const [cancelling, setCancelling] = useState(false);
+	const [opening, setOpening] = useState(false);
 	const [error, setError] = useState<string>();
-	const selected = subagents.find((subagent) => subagent.id === selectedId) ?? subagents[0];
+	const taskInput = useRef<HTMLTextAreaElement>(null);
+	const counts = useMemo(() => ({
+		all: subagents.length,
+		active: subagents.filter((subagent) => SUBAGENT_ACTIVE_STATUSES.includes(subagent.status)).length,
+		completed: subagents.filter((subagent) => subagent.status === "completed").length,
+		attention: subagents.filter((subagent) => subagent.status === "failed" || subagent.status === "cancelled").length,
+	}), [subagents]);
+	const visibleSubagents = useMemo(() => {
+		const normalizedQuery = query.trim().toLocaleLowerCase();
+		return subagents.filter((subagent) => {
+			const matchesQuery = !normalizedQuery || `${subagent.name}\n${subagent.task}`.toLocaleLowerCase().includes(normalizedQuery);
+			const matchesStatus = filter === "all"
+				|| (filter === "active" && SUBAGENT_ACTIVE_STATUSES.includes(subagent.status))
+				|| (filter === "completed" && subagent.status === "completed")
+				|| (filter === "attention" && (subagent.status === "failed" || subagent.status === "cancelled"));
+			return matchesQuery && matchesStatus;
+		});
+	}, [filter, query, subagents]);
+	const selected = visibleSubagents.find((subagent) => subagent.id === selectedId) ?? visibleSubagents[0];
 
 	useEffect(() => {
-		if (!selectedId || !subagents.some((subagent) => subagent.id === selectedId)) setSelectedId(subagents[0]?.id);
-	}, [selectedId, subagents]);
+		if (!selectedId || !visibleSubagents.some((subagent) => subagent.id === selectedId)) setSelectedId(visibleSubagents[0]?.id);
+	}, [selectedId, visibleSubagents]);
 
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
@@ -1550,32 +1583,61 @@ function SubagentsView({
 		try { await onCancel(selected.id); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } finally { setCancelling(false); }
 	};
 
-	const active = selected && ["queued", "running", "awaiting_approval", "cancelling"].includes(selected.status);
+	const openSession = async () => {
+		if (!selected || opening) return;
+		setOpening(true);
+		setError(undefined);
+		try { await onOpenSession(selected.sessionId); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } finally { setOpening(false); }
+	};
+
+	const reuse = () => {
+		if (!selected) return;
+		setTask(selected.task);
+		setName(selected.name);
+		setCostBudget(selected.costBudgetUsd?.toString() ?? "");
+		setTokenBudget(selected.tokenBudget?.toString() ?? "");
+		setError(undefined);
+		requestAnimationFrame(() => taskInput.current?.focus());
+	};
+
+	const active = selected && SUBAGENT_ACTIVE_STATUSES.includes(selected.status);
 	return (
 		<section className="subagents-workbench" aria-label="子智能体">
 			<aside className="subagents-sidebar">
 				<div className="workbench-heading">
-					<div><strong>智能体</strong><span>{subagents.length} 个任务</span></div>
+					<div><strong>智能体</strong><span>{depth > 0 ? `第 ${depth} 层 · ` : ""}{subagents.length} 个任务</span></div>
 					<button className="icon-button" title="刷新智能体" disabled={refreshing} onClick={() => void refresh()}><RefreshCw size={15} /></button>
 				</div>
-				<form className="subagent-create" onSubmit={(event) => void submit(event)}>
-					<label><span>任务</span><textarea rows={4} maxLength={20_000} placeholder="调查问题并汇报结果" value={task} onChange={(event) => setTask(event.target.value)} /></label>
+				{canCreate ? <form className="subagent-create" onSubmit={(event) => void submit(event)}>
+					<label><span>任务</span><textarea ref={taskInput} rows={4} maxLength={20_000} placeholder="调查问题并汇报结果" value={task} onChange={(event) => setTask(event.target.value)} /></label>
 					<label><span>名称</span><input maxLength={500} placeholder="可选" value={name} onChange={(event) => setName(event.target.value)} /></label>
 					<div className="subagent-budget-fields">
 						<label><span>费用限额（USD）</span><input inputMode="decimal" placeholder="继承主会话" value={costBudget} onChange={(event) => setCostBudget(event.target.value)} /></label>
 						<label><span>Token 限额</span><input inputMode="numeric" placeholder="继承主会话" value={tokenBudget} onChange={(event) => setTokenBudget(event.target.value)} /></label>
 					</div>
 					<button className="subagent-create-button" type="submit" disabled={disabled || creating || !task.trim()}><Plus size={15} />{creating ? "正在创建..." : "创建智能体"}</button>
-				</form>
+				</form> : <div className="subagent-depth-limit"><ShieldAlert size={15} /><span><strong>已到达 3 层上限</strong><small>当前智能体不能继续委派，可返回上层管理协作树。</small></span></div>}
 				{error && <div className="workbench-error"><CircleAlert size={14} />{error}</div>}
+				<div className="subagent-list-controls">
+					<label className="subagent-search"><Search size={13} /><input aria-label="搜索智能体" placeholder="搜索名称或任务" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+					<div className="subagent-filters" role="tablist" aria-label="智能体状态筛选">
+						{([
+							["all", "全部"],
+							["active", "进行中"],
+							["completed", "已完成"],
+							["attention", "需关注"],
+						] as const).map(([value, label]) => <button role="tab" aria-selected={filter === value} className={filter === value ? "active" : ""} type="button" key={value} onClick={() => setFilter(value)}><span>{label}</span><small>{counts[value]}</small></button>)}
+					</div>
+				</div>
 				<nav className="subagent-list" aria-label="智能体任务">
-					{subagents.map((subagent) => (
+					{visibleSubagents.map((subagent) => (
 						<button className={`subagent-entry ${selected?.id === subagent.id ? "selected" : ""}`} type="button" key={subagent.id} onClick={() => setSelectedId(subagent.id)}>
 							<i className={`subagent-status status-${subagent.status}`} />
 							<span><strong>{subagent.name}</strong><small>{statusLabel(subagent.status)} · {formatRunTime(subagent.updatedAt)}</small></span>
 						</button>
 					))}
 					{subagents.length === 0 && <div className="subagent-list-empty">暂无智能体任务</div>}
+					{subagents.length > 0 && visibleSubagents.length === 0 && <div className="subagent-list-empty">没有符合条件的任务</div>}
 				</nav>
 			</aside>
 			<div className="subagent-detail">
@@ -1583,11 +1645,16 @@ function SubagentsView({
 					<>
 						<header className="subagent-detail-heading">
 							<div><Bot size={16} /><span><strong>{selected.name}</strong><small>{selected.model.provider}/{selected.model.id}</small></span></div>
-							{active && <button className="subagent-cancel" type="button" title="取消智能体任务" disabled={cancelling || selected.status === "cancelling"} onClick={() => void cancel()}><Square size={13} />{selected.status === "cancelling" ? "正在取消" : "取消"}</button>}
+							<div className="subagent-actions">
+								<button className="subagent-secondary-action" type="button" title={canCreate ? "复制任务配置" : "当前已到达智能体层级上限"} disabled={opening || !canCreate} onClick={reuse}><Copy size={13} />复制任务</button>
+								<button className="subagent-primary-action" type="button" title="打开智能体完整对话" disabled={opening} onClick={() => void openSession()}>{opening ? <RefreshCw className="spin" size={13} /> : <MessageSquareCode size={13} />}{opening ? "正在打开" : "打开对话"}</button>
+								{active && <button className="subagent-cancel" type="button" title="取消智能体任务" disabled={cancelling || selected.status === "cancelling"} onClick={() => void cancel()}><Square size={13} />{selected.status === "cancelling" ? "正在取消" : "取消"}</button>}
+							</div>
 						</header>
 						<div className="subagent-detail-scroll">
-							<div className="subagent-meta">
+						<div className="subagent-meta">
 								<span className={`subagent-status-label status-${selected.status}`}><i />{statusLabel(selected.status)}</span>
+								<span>第 {selected.depth} 层</span>
 								<span>{formatTokens(selected.usage.totalTokens)} Token</span>
 								<span>{formatMoney(selected.usage.costUsd)}</span>
 								{selected.startedAt && <span>{formatDuration(selected.startedAt, selected.finishedAt ?? (["running", "awaiting_approval", "cancelling"].includes(selected.status) ? Date.now() : selected.updatedAt))}</span>}
@@ -1596,12 +1663,12 @@ function SubagentsView({
 							</div>
 							<section className="subagent-section"><h2>任务</h2><p>{selected.task}</p></section>
 							{selected.pendingApprovals.map((approval) => <ApprovalPanel key={approval.id} approval={approval} onRespond={(decision) => onRespondApproval(selected.sessionId, approval.id, decision)} />)}
-							{selected.result !== undefined && <section className="subagent-section"><h2>结果</h2><pre>{selected.result || "任务已完成，但没有文本结果。"}</pre></section>}
+							{selected.result !== undefined && <section className="subagent-section"><h2>结果</h2>{selected.result ? <Markdown text={selected.result} className="prose subagent-result" /> : <p>任务已完成，但没有文本结果。</p>}</section>}
 							{selected.error && <section className="subagent-error"><CircleAlert size={15} /><span>{selected.error}</span></section>}
 							{active && selected.pendingApprovals.length === 0 && <div className="subagent-running"><Activity size={17} /><span>{selected.status === "queued" ? "等待开始" : selected.status === "cancelling" ? "正在停止任务" : "正在工作"}</span></div>}
 						</div>
 					</>
-				) : <div className="workbench-empty"><Bot size={24} /><span>创建一个智能体任务</span></div>}
+				) : <div className="workbench-empty"><Bot size={24} /><span>{subagents.length === 0 ? (canCreate ? "创建一个智能体任务" : "当前层级不可继续委派") : "没有符合条件的任务"}</span></div>}
 			</div>
 		</section>
 	);
@@ -1685,6 +1752,8 @@ function GoalsView({
 			setTitle("");
 			setObjective("");
 			setSuccessCriteria("");
+			setReviewEnabled(false);
+			setMaxRounds(3);
 		} catch (cause) {
 			setFormError(cause instanceof Error ? cause.message : String(cause));
 		} finally {
@@ -1776,7 +1845,14 @@ function GoalsView({
 												<span className="goal-review-verdict">{record.verdict === "pass" ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}{record.verdict === "pass" ? "通过" : "未通过"}</span>
 												<small>{formatRunTime(record.reviewedAt)}</small>
 											</div>
-											<p>{record.feedback || "评审未给出说明。"}</p>
+											<p className="goal-review-feedback">{record.feedback || "评审未给出说明。"}</p>
+											{record.checks !== undefined && <ul className="goal-review-checks" aria-label={`第 ${record.round} 轮验收项`}>
+												{record.checks.map((check, index) => <li className={`status-${check.status}`} key={`${check.criterion}-${index}`}>
+													<div>{check.status === "pass" ? <Check size={12} /> : <X size={12} />}<strong>{check.criterion}</strong></div>
+													<p>{check.evidence}</p>
+												</li>)}
+											</ul>}
+											<div className="goal-review-tools"><Wrench size={11} /><strong>工具轨迹</strong>{record.toolsUsed?.length ? record.toolsUsed.map((tool) => <code key={tool}>{tool}</code>) : <small>本轮未记录工具调用</small>}</div>
 										</li>
 									))}
 								</ol>
@@ -2725,9 +2801,10 @@ export function App() {
 					<div className="topbar-title">
 						<button className="icon-button mobile-menu" title="打开导航" onClick={() => setMobileNav(true)}><Menu size={19} /></button>
 						{sidebarCollapsed && <button className="icon-button desktop-sidebar-toggle sidebar-open-button" type="button" title={`展开侧边栏（${modifierLabel()} B）`} aria-label="展开侧边栏" onClick={toggleSidebar}><PanelLeftOpen size={18} /></button>}
+						{client.snapshot?.session.parentSessionId && <button className="icon-button subagent-back" type="button" title="返回主会话" aria-label="返回主会话" onClick={() => void client.attachSession(client.snapshot!.session.parentSessionId!)}><ArrowLeft size={18} /></button>}
 							<div>
 								<h1>{client.snapshot?.session.name || DEFAULT_SESSION_TITLE}</h1>
-								{(client.snapshot?.session.archivedAt || selectedProject) && <span>{client.snapshot?.session.archivedAt ? "已归档" : ""}{client.snapshot?.session.archivedAt && selectedProject ? " · " : ""}{selectedProject ? workspaceName(selectedProject.name) : ""}</span>}
+								{(client.snapshot?.session.archivedAt || selectedProject || client.snapshot?.session.parentSessionId) && <span>{client.snapshot?.session.parentSessionId ? "智能体对话" : client.snapshot?.session.archivedAt ? "已归档" : ""}{(client.snapshot?.session.parentSessionId || client.snapshot?.session.archivedAt) && selectedProject ? " · " : ""}{selectedProject ? workspaceName(selectedProject.name) : ""}</span>}
 							</div>
 					</div>
 					<div className="workbench-tabs" role="tablist" aria-label="工作区视图">
@@ -2880,9 +2957,12 @@ export function App() {
 				</section>}
 				{workbenchView === "agents" && <SubagentsView
 					subagents={client.subagents}
+					depth={client.subagentDepth}
+					canCreate={client.canCreateSubagent}
 					disabled={!client.snapshot || client.snapshot.session.archivedAt !== undefined || client.connection !== "connected"}
 					onCreate={client.createSubagent}
 					onCancel={client.cancelSubagent}
+					onOpenSession={async (sessionId) => { await client.attachSession(sessionId); setShowRight(false); setWorkbenchView("chat"); }}
 					onRespondApproval={client.respondApproval}
 					onRefresh={() => client.snapshot ? client.refreshSubagents(client.snapshot.session.id) : Promise.resolve([])}
 				/>}

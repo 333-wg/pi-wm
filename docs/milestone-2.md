@@ -30,10 +30,15 @@ cancelled without blocking the parent conversation.
 - The parent session receives the child result and usage exactly once.
 - An archived or child session cannot create a goal.
 
+## Review-loop extension
+
+- Optional success criteria drive an independent reviewer session after each worker round.
+- Reviewers return schema-checked per-criterion outcomes and concrete evidence.
+- The durable history records actual reviewer tool names separately from model-provided evidence.
+- Failed reviews feed corrections into a fresh worker session until the bounded round limit.
+
 ## Deliberately deferred
 
 - Multi-step goal plans and checkpoints.
 - Periodic, scheduled, and externally triggered jobs.
-- Automatic review loops and success-criteria evaluation.
-- Goal retries that intentionally create a new run.
-- Nested subagents and multi-agent coordination graphs.
+- Cross-branch multi-agent coordination graphs and shared checkpoints.

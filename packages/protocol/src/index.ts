@@ -455,6 +455,7 @@ export const SubagentSummarySchema = StrictObject({
 	operationId: Id,
 	name: Type.String({ minLength: 1, maxLength: 500 }),
 	task: Type.String({ minLength: 1, maxLength: 20_000 }),
+	depth: Type.Integer({ minimum: 1, maximum: 3 }),
 	status: SubagentStatusSchema,
 	createdAt: Timestamp,
 	updatedAt: Timestamp,
@@ -495,10 +496,19 @@ export const GoalReviewPhaseSchema = Type.Union([
 ]);
 export type GoalReviewPhase = Static<typeof GoalReviewPhaseSchema>;
 
+export const GoalReviewCheckSchema = StrictObject({
+	criterion: Type.String({ minLength: 1, maxLength: 500 }),
+	status: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
+	evidence: Type.String({ minLength: 1, maxLength: 2000 }),
+});
+export type GoalReviewCheck = Static<typeof GoalReviewCheckSchema>;
+
 export const GoalReviewRecordSchema = StrictObject({
 	round: Type.Integer({ minimum: 1, maximum: 5 }),
 	verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
 	feedback: Type.String({ maxLength: 4000 }),
+	checks: Type.Optional(Type.Array(GoalReviewCheckSchema, { minItems: 1, maxItems: 20 })),
+	toolsUsed: Type.Optional(Type.Array(Id, { maxItems: 50, uniqueItems: true })),
 	reviewedAt: Timestamp,
 });
 export type GoalReviewRecord = Static<typeof GoalReviewRecordSchema>;
@@ -742,7 +752,7 @@ export const CommandResultSchema = Type.Union([
 	StrictObject({ type: Type.Literal("session.archived"), snapshot: SessionSnapshotSchema }),
 	StrictObject({ type: Type.Literal("session.run.list"), sessionId: Id, runs: Type.Array(RunSummarySchema) }),
 	StrictObject({ type: Type.Literal("subagent.created"), subagent: SubagentSummarySchema }),
-	StrictObject({ type: Type.Literal("subagent.list"), sessionId: Id, subagents: Type.Array(SubagentSummarySchema) }),
+	StrictObject({ type: Type.Literal("subagent.list"), sessionId: Id, depth: Type.Integer({ minimum: 0, maximum: 3 }), canCreate: Type.Boolean(), subagents: Type.Array(SubagentSummarySchema) }),
 	StrictObject({ type: Type.Literal("subagent.cancel_requested"), subagent: SubagentSummarySchema }),
 	StrictObject({ type: Type.Literal("goal.created"), goal: GoalSummarySchema }),
 	StrictObject({ type: Type.Literal("goal.list"), sessionId: Id, goals: Type.Array(GoalSummarySchema) }),
