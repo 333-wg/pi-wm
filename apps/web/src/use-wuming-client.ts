@@ -28,6 +28,7 @@ import type {
 	ToolStatus,
 } from "@wuming/protocol";
 import { workspaceApi } from "./workspace-api.js";
+import { readStoredPermission, writeStoredPermission } from "./lib/permission-preference.js";
 import { isImplicitWorkspace } from "./lib/workspaces.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -715,13 +716,14 @@ export function useWumingClient() {
 			?? state.models.find((candidate) => candidate.authenticated)
 			?? state.models[0];
 		if (!model) throw new Error("模型不可用");
+		const permission = readStoredPermission(localStorage);
 		const result = await requestRef.current?.({
 			type: "session.create",
 			workspaceId,
 			model: model.model,
 			thinkingLevel: model.reasoning ? "medium" : "off",
-			sandboxMode: "workspace_write",
-			approvalPolicy: "on_risk",
+			sandboxMode: permission.sandboxMode,
+			approvalPolicy: permission.approvalPolicy,
 		});
 		if (result?.type === "session.created") {
 			sessionListRef.current = { archived: false };
@@ -896,6 +898,7 @@ export function useWumingClient() {
 		const result = await requestRef.current?.({ type: "session.policy.set", sessionId: snapshot.session.id, sandboxMode, approvalPolicy });
 		if (result?.type !== "session.configured") return;
 		snapshotRef.current = result.snapshot;
+		writeStoredPermission(localStorage, { sandboxMode, approvalPolicy });
 		setState((current) => ({ ...current, snapshot: result.snapshot }));
 	}, []);
 
