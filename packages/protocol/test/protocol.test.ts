@@ -6,7 +6,7 @@ import {
 	RequestEnvelopeSchema,
 	ServerMessageSchema,
 	ToolStatusSchema,
-} from "../src/index.ts";
+} from "../src/index.js";
 
 describe("wire protocol", () => {
 	it("accepts a prompt command with an artifact reference", () => {

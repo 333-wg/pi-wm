@@ -12,9 +12,10 @@
   },
   "scripts": {
     "build": "tsc -b && npm run build --workspace @wuming/web",
-    "check": "tsc -b --pretty false && npm run check --workspace @wuming/web && npm run check:e2e && npm run check:contrast",
+    "check": "tsc -b --pretty false && npm run check --workspace @wuming/web && npm run check:e2e && npm run check:tests && npm run check:contrast",
     "check:contrast": "node scripts/token-contrast.mjs",
     "check:e2e": "tsc -p e2e/tsconfig.json --noEmit --pretty false",
+    "check:tests": "node scripts/check-tests.mjs",
     "clean": "tsc -b --clean",
     "dev": "concurrently -k -n gateway,web -c green,cyan \"npm run dev --workspace @wuming/gateway\" \"npm run dev --workspace @wuming/web\"",
     "dev:gateway": "npm run dev --workspace @wuming/gateway",

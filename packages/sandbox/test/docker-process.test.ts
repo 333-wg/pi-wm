@@ -9,7 +9,9 @@ import {
 class RecordingRunner implements CommandRunner {
 	readonly calls: Array<{ executable: string; args: string[] }> = [];
 
-	async run(executable: string, args: string[]): Promise<CommandRunResult> {
+	// The third parameter is part of the CommandRunner contract even where a
+	// double ignores it; leaving it out makes the subclasses below unassignable.
+	async run(executable: string, args: string[], _options: CommandRunOptions): Promise<CommandRunResult> {
 		this.calls.push({ executable, args });
 		return { exitCode: 0, stdout: "ok", stderr: "", truncated: false };
 	}

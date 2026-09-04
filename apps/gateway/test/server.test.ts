@@ -187,7 +187,7 @@ describe("GatewayServer", () => {
 		// events, so the first turn it starts there renders nothing.
 		const forkedSessionId = forkResult.result.snapshot.session.id;
 		send(ws, { type: "request", requestId: "fork-prompt", idempotencyKey: "fork-prompt", command: { type: "turn.prompt", sessionId: forkedSessionId, content: [{ type: "text", text: "continue in the fork" }] } });
-		await collector.waitFor((message) => message.type === "event" && message.event.sessionId === forkedSessionId && message.event.type === "session.item.upserted" && message.event.item.type === "assistant");
+		await collector.waitFor((message) => message.type === "event" && message.event.type === "session.item.upserted" && message.event.sessionId === forkedSessionId && message.event.item.type === "assistant");
 		send(ws, { type: "request", requestId: "subagent-create", idempotencyKey: "subagent-create", command: { type: "subagent.create", sessionId: created.snapshot.session.id, task: "Inspect the configured session", wait: true } });
 		const subagentCreated = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "subagent-create" && message.ok);
 		expect(subagentCreated.result).toMatchObject({ type: "subagent.created", subagent: { parentSessionId: created.snapshot.session.id, status: "completed", result: "hello" } });
@@ -203,7 +203,10 @@ describe("GatewayServer", () => {
 		const goalStarted = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "goal-start" && message.ok);
 		expect(goalStarted.result).toMatchObject({ type: "goal.started", goal: { status: "queued", runSessionId: expect.any(String) } });
 		if (goalStarted.result.type !== "goal.started" || !goalStarted.result.goal.runSessionId) throw new Error("Expected started goal");
-		await collector.waitFor((message) => message.type === "event" && message.event.type === "session.item.upserted" && message.event.item.type === "tool" && message.event.item.toolCallId === goalStarted.result.goal.runSessionId);
+		// Narrowing a property path does not survive into a callback, so the id the
+		// predicate compares against is read out here rather than inside it.
+		const runSessionId = goalStarted.result.goal.runSessionId;
+		await collector.waitFor((message) => message.type === "event" && message.event.type === "session.item.upserted" && message.event.item.type === "tool" && message.event.item.toolCallId === runSessionId);
 		send(ws, { type: "request", requestId: "goal-list", idempotencyKey: "goal-list", command: { type: "goal.list", sessionId: created.snapshot.session.id } });
 		const goalList = await collector.waitFor((message): message is Extract<ServerMessage, { type: "response"; ok: true }> => message.type === "response" && message.requestId === "goal-list" && message.ok);
 		expect(goalList.result).toMatchObject({ type: "goal.list", goals: [{ status: "completed", result: "hello" }] });

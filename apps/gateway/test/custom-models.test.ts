@@ -18,6 +18,11 @@ const config = {
 	maxOutputTokens: 4096,
 };
 
+// The same model with no credential supplied. `exactOptionalPropertyTypes` rejects
+// `apiKey: undefined` on an optional field, and the registry reads the value
+// rather than testing for the key, so leaving it out is the same input.
+const { apiKey: _apiKey, ...anonymous } = config;
+
 function encryptedCatalog(value: unknown, secret: string): string {
 	const key = createHash("sha256").update(secret, "utf8").digest();
 	const iv = randomBytes(12);
@@ -114,7 +119,7 @@ describe("CustomModelRegistry", () => {
 			await second.load();
 			await second.refreshService(discovery.provider);
 			expect(fetchMock).toHaveBeenCalledTimes(2);
-			await second.set({ ...config, provider: discovery.provider, id: "model-a", name: "Model A", api: discovery.api, baseUrl: discovery.baseUrl, apiKey: undefined });
+			await second.set({ ...anonymous, provider: discovery.provider, id: "model-a", name: "Model A", api: discovery.api, baseUrl: discovery.baseUrl });
 			expect(second.registrations()[0]?.config.apiKey).toBe("service-key");
 			expect(second.services()[0]?.modelCount).toBe(1);
 			await second.discover({ baseUrl: discovery.baseUrl, apiKey: "rotated-key" });
@@ -149,7 +154,7 @@ describe("CustomModelRegistry", () => {
 			const filePath = join(root, "models.enc");
 			const first = new CustomModelRegistry({ filePath, encryptionKey: "master-key" });
 			await first.set(config);
-			const updated = await first.set({ ...config, apiKey: undefined, name: "Renamed model", contextWindow: 64_000 });
+			const updated = await first.set({ ...anonymous, name: "Renamed model", contextWindow: 64_000 });
 			expect(updated).toMatchObject({ name: "Renamed model", contextWindow: 64_000 });
 
 			const second = new CustomModelRegistry({ filePath, encryptionKey: "master-key" });
@@ -164,9 +169,9 @@ describe("CustomModelRegistry", () => {
 
 	it("requires credentials for new models and endpoint changes", async () => {
 		const registry = new CustomModelRegistry();
-		await expect(registry.set({ ...config, apiKey: undefined })).rejects.toThrow("required when adding");
+		await expect(registry.set({ ...anonymous })).rejects.toThrow("required when adding");
 		await registry.set(config);
-		await expect(registry.set({ ...config, apiKey: undefined, baseUrl: "https://other.example/v1" })).rejects.toThrow("required when changing");
+		await expect(registry.set({ ...anonymous, baseUrl: "https://other.example/v1" })).rejects.toThrow("required when changing");
 	});
 
 	it("rejects credential-bearing or unsupported endpoints", async () => {

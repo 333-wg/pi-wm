@@ -64,7 +64,10 @@ class FakeRuntime implements AgentRuntime {
 class InlineSubagentRuntime extends FakeRuntime {
 	orchestrator!: SessionOrchestrator;
 	childSessionId?: string;
-	parentUsageDuringTurn?: number;
+	// Reading the parent's usage mid-turn can come back empty, and
+	// `exactOptionalPropertyTypes` treats an absent field and an undefined one as
+	// different types, so the undefined case is declared rather than asserted away.
+	parentUsageDuringTurn?: number | undefined;
 
 	override async executeTurn(input: Parameters<AgentRuntime["executeTurn"]>[0]): Promise<RuntimeTurnResult> {
 		if (input.snapshot.session.parentSessionId === undefined && this.childSessionId === undefined) {

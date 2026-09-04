@@ -1,9 +1,14 @@
 import { access, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { SessionSnapshot } from "@wuming/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { FileMcpCatalog } from "../src/mcp.js";
+
+// MCP tools ignore Pi's fifth argument, so the tests pass what Pi passes for a
+// context-free call rather than fabricating an extension context.
+const noContext = undefined as unknown as Parameters<ToolDefinition["execute"]>[4];
 
 const serverScript = `
 const readline = require("node:readline");
@@ -80,7 +85,7 @@ describe("FileMcpCatalog", () => {
 
 		const tools = await catalog.createTools(snapshot(), { authorize: async () => undefined } as never);
 		expect(tools).toHaveLength(1);
-		const result = await tools[0]!.execute("call-1", { text: "hello" }, new AbortController().signal);
+		const result = await tools[0]!.execute("call-1", { text: "hello" }, new AbortController().signal, undefined, noContext);
 		expect(result).toMatchObject({ content: [{ text: "MCP says hello" }], details: { mcpServerId: "fixture", mcpToolName: "echo", durationMs: expect.any(Number), mcpStatus: "complete" } });
 	});
 
@@ -92,7 +97,7 @@ describe("FileMcpCatalog", () => {
 		const startedAt = Date.now();
 		setTimeout(() => controller.abort(new Error("cancelled by test")), 30);
 
-		await expect(tools[0]!.execute("call-abort", { hang: true }, controller.signal)).rejects.toThrow("cancelled by test");
+		await expect(tools[0]!.execute("call-abort", { hang: true }, controller.signal, undefined, noContext)).rejects.toThrow("cancelled by test");
 		expect(Date.now() - startedAt).toBeLessThan(1000);
 		await expect(catalog.get("workspace-1", root, "fixture")).resolves.toMatchObject({ tools: [{ description: "Echo input #1" }] });
 	});

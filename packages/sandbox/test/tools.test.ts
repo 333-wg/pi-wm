@@ -1,7 +1,17 @@
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ApprovalBroker } from "../src/approval.js";
 import type { ArtifactRef, SessionSnapshot } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
 import { createSandboxTools } from "../src/index.js";
+
+// Pi invokes a tool with five positional arguments, the last being the extension
+// context. These tools only forward it to Pi's own read/write/edit definitions
+// and never read it, so the tests pass the `undefined` they have always passed
+// at runtime and keep the cast that satisfies the signature in one place.
+const noContext = undefined as unknown as Parameters<ToolDefinition["execute"]>[4];
+
+/** One `onUpdate` payload, narrowed to what these assertions look at. */
+type Update = { content: { type: "text"; text: string }[]; details: Record<string, unknown> };
 
 const snapshot: SessionSnapshot = {
 	session: { id: "session-1", workspaceId: "workspace-1", phase: "turn", createdAt: 1, updatedAt: 1 },
@@ -42,7 +52,7 @@ describe("sandbox tool output artifacts", () => {
 			} },
 		});
 		const write = tools.find((tool) => tool.name === "write_file");
-		await expect(write!.execute("write-1", { path: "out.txt", content: "data" }, undefined)).resolves.toMatchObject({
+		await expect(write!.execute("write-1", { path: "out.txt", content: "data" }, undefined, undefined, noContext)).resolves.toMatchObject({
 			content: [{ text: "Successfully wrote 4 bytes to out.txt" }],
 		});
 		expect(writes).toBe(2);
@@ -69,7 +79,7 @@ describe("sandbox tool output artifacts", () => {
 				{ oldText: "alpha", newText: "one" },
 				{ oldText: "gamma", newText: "three" },
 			],
-		}, undefined);
+		}, undefined, undefined, noContext);
 
 		expect(content).toBe("one\r\nbeta\r\nthree\r\n");
 		expect(result.details).toMatchObject({ patch: expect.stringContaining("+three") });
@@ -94,8 +104,8 @@ describe("sandbox tool output artifacts", () => {
 			},
 		});
 		const read = tools.find((tool) => tool.name === "read_file");
-		const updates: unknown[] = [];
-		const result = await read!.execute("call/read", { path: "large.txt" }, undefined, (update) => updates.push(update));
+		const updates: Update[] = [];
+		const result = await read!.execute("call/read", { path: "large.txt" }, undefined, (update) => updates.push(update as Update), noContext);
 		expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("abcde\n[output truncated]") });
 		expect(result.details).toMatchObject({ artifact: { name: "read-output-call_read.txt" }, artifactTruncated: false });
 		expect(written?.toString("utf8")).toBe("abcdefghij");
@@ -130,13 +140,25 @@ describe("sandbox tool output artifacts", () => {
 			},
 		});
 		const exec = tools.find((tool) => tool.name === "exec");
-		const result = await exec!.execute("exec-1", { command: "generate-output" }, undefined, () => {});
+		const updates: Update[] = [];
+		const result = await exec!.execute("exec-1", { command: "generate-output" }, undefined, (update) => updates.push(update as Update), noContext);
 		expect(result.details).toMatchObject({
 			artifact: { name: "exec-output-exec-1.log", size: 10 },
 			artifactCaptureTruncated: false,
 			artifactTruncated: false,
 		});
 		expect(written?.toString("utf8")).toBe("1234567890");
+		// The live stream is what the transcript renders while the command runs: each
+		// chunk re-sends the accumulated output under the same result window, so the
+		// second update is already truncated even though the artifact keeps all of it.
+		expect(updates.slice(0, -1).map((update) => ({ text: update.content[0]?.text, details: update.details }))).toEqual([
+			{ text: "12345", details: { running: true } },
+			{ text: "12345\n[output truncated]", details: { running: true } },
+		]);
+		// The last update is the settled result, so the UI can swap the running card
+		// for one that links the spilled artifact.
+		expect(updates.at(-1)?.details).toMatchObject({ artifact: { name: "exec-output-exec-1.log" } });
+		expect(updates.at(-1)?.details.running).toBeUndefined();
 	});
 
 	it("exposes the complete configured tool catalog and limits read-only sessions", () => {
@@ -192,7 +214,7 @@ describe("sandbox tool output artifacts", () => {
 			},
 		});
 		const exec = tools.find((tool) => tool.name === "exec")!;
-		await expect(exec.execute("exec-failed", { command: "npm test" }, undefined)).resolves.toMatchObject({
+		await expect(exec.execute("exec-failed", { command: "npm test" }, undefined, undefined, noContext)).resolves.toMatchObject({
 			content: [{ text: "[exit code 2]\ntest failed\ndetails" }],
 			details: { exitCode: 2 },
 		});
@@ -212,14 +234,27 @@ describe("sandbox tool output artifacts", () => {
 					async writeText() { return { bytesWritten: 0 }; },
 					async editText() { return { bytesWritten: 0, replacements: 0 }; },
 				},
-				process: { async exec(value) { command = value; return { exitCode: 0, stdout: "42", stderr: "", truncated: false, timedOut: false }; } },
+				process: { async exec(value, options) {
+					command = value;
+					options?.onOutput?.("4");
+					options?.onOutput?.("2");
+					return { exitCode: 0, stdout: "42", stderr: "", truncated: false, timedOut: false };
+				} },
 			},
 		});
 		const python = tools.find((tool) => tool.name === "run_python")!;
-		await expect(python.execute("python-1", { code: "print('quoted value', 42)" }, undefined)).resolves.toMatchObject({ content: [{ text: "42" }] });
+		const updates: Update[] = [];
+		await expect(python.execute("python-1", { code: "print('quoted value', 42)" }, undefined, (update) => updates.push(update as Update), noContext))
+			.resolves.toMatchObject({ content: [{ text: "42" }] });
 		expect(command).toContain("python3 -c");
 		expect(command).not.toContain("quoted value");
 		expect(Buffer.from(command.match(/b64decode\(\"([^\"]+)/)?.[1] ?? "", "base64").toString("utf8")).toBe("print('quoted value', 42)");
+		// run_python has its own forwarding of the update callback into the shared
+		// process runner, so the live stream has to be asserted here too.
+		expect(updates.map((update) => ({ text: update.content[0]?.text, details: update.details }))).toEqual([
+			{ text: "4", details: { running: true } },
+			{ text: "42", details: { running: true } },
+		]);
 	});
 
 	it("formats web search and fetch results", async () => {
@@ -241,11 +276,11 @@ describe("sandbox tool output artifacts", () => {
 				},
 			},
 		});
-		await expect(tools.find((tool) => tool.name === "web_fetch")!.execute("fetch-1", { url: "https://example.com" }, undefined)).resolves.toMatchObject({
+		await expect(tools.find((tool) => tool.name === "web_fetch")!.execute("fetch-1", { url: "https://example.com" }, undefined, undefined, noContext)).resolves.toMatchObject({
 			content: [{ text: expect.stringContaining("page body") }],
 			details: { finalUrl: "https://example.com/final", status: 200 },
 		});
-		await expect(tools.find((tool) => tool.name === "web_search")!.execute("search-1", { query: "query" }, undefined)).resolves.toMatchObject({
+		await expect(tools.find((tool) => tool.name === "web_search")!.execute("search-1", { query: "query" }, undefined, undefined, noContext)).resolves.toMatchObject({
 			content: [{ text: expect.stringContaining("1. Result\nhttps://example.com\nSummary") }],
 			details: { provider: "test", resultCount: 1 },
 		});
