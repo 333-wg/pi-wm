@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import type { ServerMessage, TerminalServerMessage } from "@wuming/protocol";
+import { terminalTheme } from "./lib/terminal-theme.js";
 
 function id(): string { return crypto.randomUUID(); }
 
@@ -32,6 +33,8 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 		let handshake: { requestId: string; mode: "create" | "attach" } | undefined;
 		const container = containerRef.current;
 		if (!container) return;
+		// Read off the element that hosts the terminal, so a scoped override counts.
+		const readTheme = () => terminalTheme((name) => getComputedStyle(container).getPropertyValue(name));
 		const term = new Terminal({
 			allowProposedApi: false,
 			convertEol: true,
@@ -39,12 +42,7 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 			fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
 			fontSize: 12,
 			lineHeight: 1.25,
-			theme: {
-				background: "#17201a",
-				foreground: "#e7eee9",
-				cursor: "#a8d6b5",
-				selectionBackground: "#42604c",
-			},
+			theme: readTheme(),
 		});
 		const fit = new FitAddon();
 		term.loadAddon(fit);
@@ -62,6 +60,14 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 		};
 		const observer = new ResizeObserver(resize);
 		observer.observe(container);
+		// xterm keeps the colours it was constructed with, and the token block behind
+		// them is swapped by `data-theme`. Watching the attribute instead of taking
+		// the theme as a prop keeps this correct whoever owns the preference, and
+		// re-theming in place leaves the scrollback and the running process alone.
+		const themeObserver = new MutationObserver(() => {
+			term.options.theme = readTheme();
+		});
+		themeObserver.observe(document.documentElement, { attributeFilter: ["data-theme"] });
 		const dataDisposable = term.onData((data) => {
 			if (readyRef.current) send({ type: "terminal.input", terminalId, data });
 		});
@@ -166,6 +172,7 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 			if (socket?.readyState === WebSocket.OPEN && terminalExists) send({ type: "terminal.close", requestId: id(), terminalId });
 			socket?.close();
 			observer.disconnect();
+			themeObserver.disconnect();
 			dataDisposable.dispose();
 			term.dispose();
 		};
