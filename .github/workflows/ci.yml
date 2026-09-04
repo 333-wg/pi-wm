@@ -1,0 +1,46 @@
+# The gate every push has to clear. It runs exactly what a developer runs locally,
+# in the same order, so a green run here means `npm run check && npm test` passes
+# on a clean checkout — not just on a machine that happens to have stale build
+# output lying around.
+#
+# Deliberately not here:
+#   * `verify:pi-*` — those talk to real model providers with real keys and bill
+#     per run, so they stay manual.
+#   * the Playwright suite (`npm run test:e2e`) — it needs browsers and a running
+#     gateway + web stack; adding it is a separate step with its own caching.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push replaces an in-flight run for the same ref instead of queueing behind it.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The workspace requires >=22.19.0; 22.x keeps CI on the same major as local.
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # tsc -b for every package, the web app's own program, the e2e program, the
+      # test programs (scripts/check-tests.mjs), and the colour-contrast audit.
+      - run: npm run check
+
+      # Every workspace's vitest suite.
+      - run: npm test
