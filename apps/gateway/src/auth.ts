@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { WorkspaceSummary } from "@wuming/protocol";
 
 export interface GatewayPrincipal {
@@ -9,14 +10,28 @@ export interface GatewayAuth {
 	authenticate(token: string): Promise<GatewayPrincipal | undefined> | GatewayPrincipal | undefined;
 }
 
+/**
+ * Hashing first keeps the comparison fixed-width, so `timingSafeEqual` never
+ * throws on a length mismatch and the token's length does not leak either.
+ */
+function fingerprint(token: string): Buffer {
+	return createHash("sha256").update(token, "utf8").digest();
+}
+
 export class StaticTokenAuth implements GatewayAuth {
+	readonly #fingerprint: Buffer;
+
 	constructor(
-		private readonly token: string,
+		token: string,
 		private readonly principal: GatewayPrincipal,
-	) {}
+	) {
+		this.#fingerprint = fingerprint(token);
+	}
 
 	authenticate(token: string): GatewayPrincipal | undefined {
-		return token === this.token ? this.principal : undefined;
+		// A `===` comparison returns as soon as two bytes differ, which tells a
+		// caller how much of a guessed token was right.
+		return timingSafeEqual(fingerprint(token), this.#fingerprint) ? this.principal : undefined;
 	}
 }
 
