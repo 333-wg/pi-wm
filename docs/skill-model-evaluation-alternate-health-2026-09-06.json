@@ -1,0 +1,83 @@
+{
+	"evaluatedAt": "2026-09-06T13:20:47.096Z",
+	"provider": "custom-ai-121628-xyz-6bad47fd86",
+	"modelId": "deepseek-v4-flash-free",
+	"casePauseMs": 0,
+	"requestPacing": {
+		"intervalMs": 0,
+		"contextPreparations": 0,
+		"requestedDelayMs": 0
+	},
+	"turnTimeoutMs": 60000,
+	"maxTokens": 4096,
+	"skillVersions": [
+		{
+			"id": "code-change",
+			"digest": "afe7947790c1a6ef71e18c9e5abfc2f9b1c9c50606c0be0900523bfb771804f4"
+		},
+		{
+			"id": "code-review",
+			"digest": "7a9a0a832075c8ffe3a5ecfea282a8a12261bfaaa3dd3564694fa32bc74d174a"
+		},
+		{
+			"id": "debug",
+			"digest": "0a184543f2fa80ac35425813574daf3347e8be84808a0dbaccc1d4b3c7d247e0"
+		},
+		{
+			"id": "research",
+			"digest": "cea581570d9090c5a53f4029c60d13fa81f0d19f9ae2fa2103013d8b51b7f099"
+		},
+		{
+			"id": "run-app",
+			"digest": "95ac9dd98e3ffecb033a6dfc05c8c9e2c1be249d86af99360c7747e26bad532c"
+		},
+		{
+			"id": "skill-authoring",
+			"digest": "f7e4a45164b06a39c1f840d8563d7e7976c127bd4ac5af8bb6c876cab506bc2e"
+		},
+		{
+			"id": "verify-app",
+			"digest": "f5a6bdee1bd7208152b3da0c73588dc3e25269601b97f29fdfb669179710ae08"
+		},
+		{
+			"id": "fixture-audit",
+			"digest": "9aae4fca94a42b8c41cb43fd44e4ec01d4d5b635107f4f4af2b032940de481e9"
+		},
+		{
+			"id": "manual-check",
+			"digest": "5b90714da28a32f1b135ee7ed45a582888e5af9463e85c7c7062964d8ba7fffc"
+		}
+	],
+	"plannedCases": ["greeting-zh"],
+	"notRun": [],
+	"scope": "isolated read-only real-model skill routing, installation and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "greeting-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"finishReason": "aborted",
+			"error": "Turn timed out",
+			"failureKind": "provider_timeout",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		}
+	]
+}

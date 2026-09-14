@@ -21,9 +21,9 @@ const PERMISSIONS: readonly PermissionPreference[] = [
 function isPermissionPreference(value: unknown): value is PermissionPreference {
 	if (typeof value !== "object" || value === null) return false;
 	const candidate = value as Partial<PermissionPreference>;
-	return PERMISSIONS.some((permission) =>
-		permission.sandboxMode === candidate.sandboxMode
-		&& permission.approvalPolicy === candidate.approvalPolicy,
+	return PERMISSIONS.some(
+		(permission) =>
+			permission.sandboxMode === candidate.sandboxMode && permission.approvalPolicy === candidate.approvalPolicy
 	);
 }
 
@@ -39,11 +39,14 @@ export function readStoredPermission(storage: Pick<Storage, "getItem"> | undefin
 	}
 }
 
-export function writeStoredPermission(storage: Pick<Storage, "setItem"> | undefined, value: PermissionPreference): void {
+export function writeStoredPermission(
+	storage: Pick<Storage, "setItem"> | undefined,
+	value: PermissionPreference
+): void {
 	if (!storage || !isPermissionPreference(value)) return;
 	try {
 		storage.setItem(PERMISSION_STORAGE_KEY, JSON.stringify(value));
 	} catch {
-		// The session policy still works when browser storage is unavailable.
+		// The current session policy still works when browser storage is unavailable.
 	}
 }

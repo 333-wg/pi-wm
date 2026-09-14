@@ -18,15 +18,32 @@ const blockedAddresses = new BlockList();
 const proxyDnsAddresses = new BlockList();
 proxyDnsAddresses.addSubnet("198.18.0.0", 15, "ipv4");
 for (const [network, prefix] of [
-	["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
-	["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24],
-	["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24], ["203.0.113.0", 24],
-	["224.0.0.0", 4], ["240.0.0.0", 4],
-] as const) blockedAddresses.addSubnet(network, prefix, "ipv4");
+	["0.0.0.0", 8],
+	["10.0.0.0", 8],
+	["100.64.0.0", 10],
+	["127.0.0.0", 8],
+	["169.254.0.0", 16],
+	["172.16.0.0", 12],
+	["192.0.0.0", 24],
+	["192.0.2.0", 24],
+	["192.168.0.0", 16],
+	["198.18.0.0", 15],
+	["198.51.100.0", 24],
+	["203.0.113.0", 24],
+	["224.0.0.0", 4],
+	["240.0.0.0", 4],
+] as const)
+	blockedAddresses.addSubnet(network, prefix, "ipv4");
 for (const [network, prefix] of [
-	["::", 128], ["::1", 128], ["100::", 64], ["2001:db8::", 32],
-	["fc00::", 7], ["fe80::", 10], ["ff00::", 8],
-] as const) blockedAddresses.addSubnet(network, prefix, "ipv6");
+	["::", 128],
+	["::1", 128],
+	["100::", 64],
+	["2001:db8::", 32],
+	["fc00::", 7],
+	["fe80::", 10],
+	["ff00::", 8],
+] as const)
+	blockedAddresses.addSubnet(network, prefix, "ipv6");
 
 export type WebSearchConfiguration =
 	| { provider: "bing"; endpoint?: string }
@@ -64,13 +81,16 @@ function waitForAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
 		else signal.addEventListener("abort", abort, { once: true });
 		pending.then(
 			(value) => finish(() => resolve(value)),
-			(error) => finish(() => reject(error)),
+			(error) => finish(() => reject(error))
 		);
 	});
 }
 
 function hostnameOf(url: URL): string {
-	return url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+	return url.hostname
+		.replace(/^\[|\]$/g, "")
+		.replace(/\.$/, "")
+		.toLowerCase();
 }
 
 export function isPublicWebAddress(address: string): boolean {
@@ -88,8 +108,10 @@ export function validateWebUrl(value: string): URL {
 	} catch {
 		throw new SandboxError("network_denied", "URL is invalid");
 	}
-	if (url.protocol !== "http:" && url.protocol !== "https:") throw new SandboxError("network_denied", "Only HTTP and HTTPS URLs are allowed");
-	if (url.username || url.password) throw new SandboxError("network_denied", "URLs containing credentials are not allowed");
+	if (url.protocol !== "http:" && url.protocol !== "https:")
+		throw new SandboxError("network_denied", "Only HTTP and HTTPS URLs are allowed");
+	if (url.username || url.password)
+		throw new SandboxError("network_denied", "URLs containing credentials are not allowed");
 	const hostname = hostnameOf(url);
 	if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) {
 		throw new SandboxError("network_denied", "Local network hostnames are not allowed");
@@ -97,9 +119,13 @@ export function validateWebUrl(value: string): URL {
 	const explicitPort = url.port ? Number(url.port) : undefined;
 	const expectedPort = url.protocol === "https:" ? 443 : 80;
 	if (explicitPort !== undefined && explicitPort !== expectedPort) {
-		throw new SandboxError("network_denied", `Only port ${expectedPort} is allowed for ${url.protocol.slice(0, -1).toUpperCase()}`);
+		throw new SandboxError(
+			"network_denied",
+			`Only port ${expectedPort} is allowed for ${url.protocol.slice(0, -1).toUpperCase()}`
+		);
 	}
-	if (isIP(hostname) && !isPublicWebAddress(hostname)) throw new SandboxError("network_denied", "Private and reserved network addresses are not allowed");
+	if (isIP(hostname) && !isPublicWebAddress(hostname))
+		throw new SandboxError("network_denied", "Private and reserved network addresses are not allowed");
 	url.hash = "";
 	return url;
 }
@@ -128,33 +154,46 @@ function readableContent(body: Buffer, contentType: string): string {
 		});
 	}
 	if (/^(application\/json|[^;]+\+json)(?:;|$)/i.test(contentType)) {
-		try { return JSON.stringify(JSON.parse(decoded), null, 2); } catch { return decoded; }
+		try {
+			return JSON.stringify(JSON.parse(decoded), null, 2);
+		} catch {
+			return decoded;
+		}
 	}
 	return decoded;
 }
 
 export function isSupportedTextContentType(contentType: string): boolean {
 	const mimeType = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-	return mimeType.startsWith("text/") ||
+	return (
+		mimeType.startsWith("text/") ||
 		mimeType === "application/json" ||
 		mimeType === "application/xml" ||
 		mimeType === "application/xhtml+xml" ||
 		mimeType.endsWith("+json") ||
-		mimeType.endsWith("+xml");
+		mimeType.endsWith("+xml")
+	);
 }
 
 function parseSearchItems(value: unknown, provider: "brave" | "searxng", count: number): WebSearchResult["items"] {
 	if (!value || typeof value !== "object") return [];
-	const source = provider === "brave"
-		? (value as { web?: { results?: unknown } }).web?.results
-		: (value as { results?: unknown }).results;
+	const source =
+		provider === "brave"
+			? (value as { web?: { results?: unknown } }).web?.results
+			: (value as { results?: unknown }).results;
 	if (!Array.isArray(source)) return [];
 	return source.slice(0, count).flatMap((entry) => {
 		if (!entry || typeof entry !== "object") return [];
 		const item = entry as Record<string, unknown>;
 		if (typeof item.url !== "string" || typeof item.title !== "string") return [];
 		const snippet = provider === "brave" ? item.description : item.content;
-		return [{ title: item.title.slice(0, 500), url: item.url.slice(0, MAX_URL_CHARS), snippet: typeof snippet === "string" ? snippet.slice(0, 4000) : "" }];
+		return [
+			{
+				title: item.title.slice(0, 500),
+				url: item.url.slice(0, MAX_URL_CHARS),
+				snippet: typeof snippet === "string" ? snippet.slice(0, 4000) : "",
+			},
+		];
 	});
 }
 
@@ -192,7 +231,11 @@ export function parseBingItems(html: string, count: number): WebSearchResult["it
 		const link = $(element).find("h2 a").first();
 		const title = link.text().replace(/\s+/g, " ").trim();
 		let url: string | undefined;
-		try { url = validateWebUrl(link.attr("href") ?? "").toString(); } catch { return; }
+		try {
+			url = validateWebUrl(link.attr("href") ?? "").toString();
+		} catch {
+			return;
+		}
 		const snippet = $(element).find(".b_caption p").first().text().replace(/\s+/g, " ").trim();
 		if (title && url) items.push({ title: title.slice(0, 500), url, snippet: snippet.slice(0, 4000) });
 	});
@@ -200,8 +243,10 @@ export function parseBingItems(html: string, count: number): WebSearchResult["it
 }
 
 export function isAllowedWebResolution(address: string, allowProxyDnsAddresses: boolean): boolean {
-	return isPublicWebAddress(address) ||
-		(allowProxyDnsAddresses && isIP(address) === 4 && proxyDnsAddresses.check(address, "ipv4"));
+	return (
+		isPublicWebAddress(address) ||
+		(allowProxyDnsAddresses && isIP(address) === 4 && proxyDnsAddresses.check(address, "ipv4"))
+	);
 }
 
 export class SafeWebClient implements WebSandbox {
@@ -218,21 +263,33 @@ export class SafeWebClient implements WebSandbox {
 		this.#maxResponseBytes = options.maxResponseBytes ?? DEFAULT_MAX_BYTES;
 		this.#allowProxyDnsAddresses = options.allowProxyDnsAddresses ?? false;
 		if (!Number.isFinite(this.#timeoutMs) || this.#timeoutMs <= 0) throw new Error("Web timeout must be positive");
-		if (!Number.isFinite(this.#maxResponseBytes) || this.#maxResponseBytes <= 0) throw new Error("Web response limit must be positive");
+		if (!Number.isFinite(this.#maxResponseBytes) || this.#maxResponseBytes <= 0)
+			throw new Error("Web response limit must be positive");
 		this.#resolver = options.resolver ?? ((hostname) => dnsLookup(hostname, { all: true, verbatim: true }));
 		this.#search = options.search;
 		if (options.search) {
-			if (options.search.provider === "brave" && !options.search.apiKey.trim()) throw new Error("Brave Search API key must not be empty");
-			const endpoint = validateWebUrl(options.search.provider === "brave"
-				? options.search.endpoint ?? "https://api.search.brave.com/res/v1/web/search"
-				: options.search.provider === "bing"
-					? options.search.endpoint ?? "https://www.bing.com/search"
-				: options.search.provider === "duckduckgo"
-					? options.search.endpoint ?? "https://html.duckduckgo.com/html/"
-					: options.search.endpoint);
+			if (options.search.provider === "brave" && !options.search.apiKey.trim())
+				throw new Error("Brave Search API key must not be empty");
+			const endpoint = validateWebUrl(
+				options.search.provider === "brave"
+					? (options.search.endpoint ?? "https://api.search.brave.com/res/v1/web/search")
+					: options.search.provider === "bing"
+						? (options.search.endpoint ?? "https://www.bing.com/search")
+						: options.search.provider === "duckduckgo"
+							? (options.search.endpoint ?? "https://html.duckduckgo.com/html/")
+							: options.search.endpoint
+			);
 			this.searchHost = hostnameOf(endpoint);
 			this.searchSecretName = options.search.provider === "brave" ? "WUMING_WEB_SEARCH_API_KEY" : undefined;
 		}
+	}
+
+	async download(value: string, options: { maxBytes: number; signal?: AbortSignal }): Promise<Buffer> {
+		const response = await this.#request(validateWebUrl(value), options);
+		if (response.status < 200 || response.status >= 300)
+			throw new SandboxError("network_failed", `Media download returned HTTP ${response.status}`);
+		if (response.truncated) throw new SandboxError("network_failed", "Media download exceeds size limit");
+		return response.body;
 	}
 
 	async fetch(value: string, options: WebFetchOptions = {}): Promise<WebFetchResult> {
@@ -242,7 +299,8 @@ export class SafeWebClient implements WebSandbox {
 			...(options.signal ? { signal: options.signal } : {}),
 		});
 		const contentType = String(response.headers["content-type"] ?? "text/plain").toLowerCase();
-		if (!isSupportedTextContentType(contentType)) throw new SandboxError("content_unsupported", `Unsupported response content type: ${contentType}`);
+		if (!isSupportedTextContentType(contentType))
+			throw new SandboxError("content_unsupported", `Unsupported response content type: ${contentType}`);
 		return {
 			requestedUrl: requested.toString(),
 			finalUrl: response.url,
@@ -257,16 +315,20 @@ export class SafeWebClient implements WebSandbox {
 		if (!this.#search) throw new SandboxError("network_failed", "Web search is not configured");
 		if (!query.trim()) throw new SandboxError("network_failed", "Search query must not be empty");
 		const count = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Math.floor(options.count ?? 5)));
-		const endpoint = validateWebUrl(this.#search.provider === "brave"
-			? this.#search.endpoint ?? "https://api.search.brave.com/res/v1/web/search"
-			: this.#search.provider === "bing"
-				? this.#search.endpoint ?? "https://www.bing.com/search"
-			: this.#search.provider === "duckduckgo"
-				? this.#search.endpoint ?? "https://html.duckduckgo.com/html/"
-				: this.#search.endpoint);
+		const endpoint = validateWebUrl(
+			this.#search.provider === "brave"
+				? (this.#search.endpoint ?? "https://api.search.brave.com/res/v1/web/search")
+				: this.#search.provider === "bing"
+					? (this.#search.endpoint ?? "https://www.bing.com/search")
+					: this.#search.provider === "duckduckgo"
+						? (this.#search.endpoint ?? "https://html.duckduckgo.com/html/")
+						: this.#search.endpoint
+		);
 		endpoint.searchParams.set("q", query);
 		const htmlProvider = this.#search.provider === "bing" || this.#search.provider === "duckduckgo";
-		const headers: Record<string, string> = { accept: htmlProvider ? "text/html" : "application/json" };
+		const headers: Record<string, string> = {
+			accept: htmlProvider ? "text/html" : "application/json",
+		};
 		if (this.#search.provider === "brave") {
 			endpoint.searchParams.set("count", String(count));
 			headers["x-subscription-token"] = this.#search.apiKey;
@@ -280,7 +342,8 @@ export class SafeWebClient implements WebSandbox {
 			...(this.#search.provider === "brave" ? { redirectOrigin: endpoint.origin } : {}),
 			...(options.signal ? { signal: options.signal } : {}),
 		});
-		if (response.status < 200 || response.status >= 300) throw new SandboxError("network_failed", `Search provider returned HTTP ${response.status}`);
+		if (response.status < 200 || response.status >= 300)
+			throw new SandboxError("network_failed", `Search provider returned HTTP ${response.status}`);
 		if (this.#search.provider === "bing") {
 			const html = decodeBody(response.body, String(response.headers["content-type"] ?? "text/html"));
 			return { provider: this.#search.provider, items: parseBingItems(html, count) };
@@ -289,21 +352,35 @@ export class SafeWebClient implements WebSandbox {
 			const html = decodeBody(response.body, String(response.headers["content-type"] ?? "text/html"));
 			const items = parseDuckDuckGoItems(html, count);
 			if (items.length === 0 && /challenge-form|anomaly-modal/i.test(html)) {
-				throw new SandboxError("network_failed", "DuckDuckGo requested a human verification challenge; configure Bing, Brave, or SearXNG instead");
+				throw new SandboxError(
+					"network_failed",
+					"DuckDuckGo requested a human verification challenge; configure Bing, Brave, or SearXNG instead"
+				);
 			}
 			return { provider: this.#search.provider, items };
 		}
 		let payload: unknown;
-		try { payload = JSON.parse(decodeBody(response.body, String(response.headers["content-type"] ?? "application/json"))); }
-		catch { throw new SandboxError("network_failed", "Search provider returned invalid JSON"); }
-		return { provider: this.#search.provider, items: parseSearchItems(payload, this.#search.provider, count) };
+		try {
+			payload = JSON.parse(decodeBody(response.body, String(response.headers["content-type"] ?? "application/json")));
+		} catch {
+			throw new SandboxError("network_failed", "Search provider returned invalid JSON");
+		}
+		return {
+			provider: this.#search.provider,
+			items: parseSearchItems(payload, this.#search.provider, count),
+		};
 	}
 
 	async #request(
 		url: URL,
-		options: { maxBytes: number; headers?: Record<string, string>; redirectOrigin?: string; signal?: AbortSignal },
+		options: {
+			maxBytes: number;
+			headers?: Record<string, string>;
+			redirectOrigin?: string;
+			signal?: AbortSignal;
+		},
 		redirects = 0,
-		deadline = Date.now() + this.#timeoutMs,
+		deadline = Date.now() + this.#timeoutMs
 	): Promise<RawResponse> {
 		validateWebUrl(url.toString());
 		const hostname = hostnameOf(url);
@@ -312,10 +389,13 @@ export class SafeWebClient implements WebSandbox {
 		const externalAbort = () => controller.abort(options.signal?.reason);
 		if (options.signal?.aborted) externalAbort();
 		else options.signal?.addEventListener("abort", externalAbort, { once: true });
-		const timer = setTimeout(() => {
-			timedOut = true;
-			controller.abort(new SandboxError("network_timeout", `Web request exceeded ${this.#timeoutMs}ms`));
-		}, Math.max(0, deadline - Date.now()));
+		const timer = setTimeout(
+			() => {
+				timedOut = true;
+				controller.abort(new SandboxError("network_timeout", `Web request exceeded ${this.#timeoutMs}ms`));
+			},
+			Math.max(0, deadline - Date.now())
+		);
 		try {
 			let addresses: LookupAddress[];
 			try {
@@ -324,10 +404,16 @@ export class SafeWebClient implements WebSandbox {
 					: await waitForAbort(this.#resolver(hostname), controller.signal);
 			} catch (error) {
 				if (controller.signal.aborted) throw controller.signal.reason ?? error;
-				throw new SandboxError("network_failed", `DNS lookup failed for ${hostname}: ${error instanceof Error ? error.message : String(error)}`);
+				throw new SandboxError(
+					"network_failed",
+					`DNS lookup failed for ${hostname}: ${error instanceof Error ? error.message : String(error)}`
+				);
 			}
 			const allowSyntheticResolution = this.#allowProxyDnsAddresses || url.protocol === "https:";
-			if (addresses.length === 0 || addresses.some((entry) => !isAllowedWebResolution(entry.address, allowSyntheticResolution))) {
+			if (
+				addresses.length === 0 ||
+				addresses.some((entry) => !isAllowedWebResolution(entry.address, allowSyntheticResolution))
+			) {
 				throw new SandboxError("network_denied", `Host ${hostname} did not resolve exclusively to public addresses`);
 			}
 			const selected = addresses[0]!;
@@ -336,60 +422,74 @@ export class SafeWebClient implements WebSandbox {
 				else callback(null, selected.address, selected.family);
 			};
 			const response = await new Promise<RawResponse>((resolve, reject) => {
-				const request = (url.protocol === "https:" ? httpsRequest : httpRequest)({
-					protocol: url.protocol,
-					hostname,
-					port: url.port || undefined,
-					path: `${url.pathname}${url.search}`,
-					method: "GET",
-					lookup,
-					signal: controller.signal,
-					headers: {
-						accept: "text/html, text/plain, application/json, application/xml;q=0.9, */*;q=0.1",
-						"accept-encoding": "identity",
-						"user-agent": "Wuming-Agent/0.1 (+safe-web-fetch)",
-						...options.headers,
+				const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(
+					{
+						protocol: url.protocol,
+						hostname,
+						port: url.port || undefined,
+						path: `${url.pathname}${url.search}`,
+						method: "GET",
+						lookup,
+						signal: controller.signal,
+						headers: {
+							accept: "text/html, text/plain, application/json, application/xml;q=0.9, */*;q=0.1",
+							"accept-encoding": "identity",
+							"user-agent": "Wuming-Agent/0.1 (+safe-web-fetch)",
+							...options.headers,
+						},
 					},
-				}, (incoming) => {
-					const chunks: Buffer[] = [];
-					let bytes = 0;
-					let settled = false;
-					const finish = (truncated: boolean) => {
-						if (settled) return;
-						settled = true;
-						resolve({ url: url.toString(), status: incoming.statusCode ?? 0, headers: incoming.headers, body: Buffer.concat(chunks), truncated });
-					};
-					const contentEncoding = String(incoming.headers["content-encoding"] ?? "identity").toLowerCase();
-					if (contentEncoding !== "identity") {
-						settled = true;
-						incoming.destroy();
-						reject(new SandboxError("content_unsupported", `Unsupported response content encoding: ${contentEncoding}`));
-						return;
-					}
-					incoming.on("data", (chunk: Buffer) => {
-						if (settled) return;
-						const remaining = options.maxBytes - bytes;
-						if (remaining <= 0) {
-							finish(true);
+					(incoming) => {
+						const chunks: Buffer[] = [];
+						let bytes = 0;
+						let settled = false;
+						const finish = (truncated: boolean) => {
+							if (settled) return;
+							settled = true;
+							resolve({
+								url: url.toString(),
+								status: incoming.statusCode ?? 0,
+								headers: incoming.headers,
+								body: Buffer.concat(chunks),
+								truncated,
+							});
+						};
+						const contentEncoding = String(incoming.headers["content-encoding"] ?? "identity").toLowerCase();
+						if (contentEncoding !== "identity") {
+							settled = true;
 							incoming.destroy();
+							reject(
+								new SandboxError("content_unsupported", `Unsupported response content encoding: ${contentEncoding}`)
+							);
 							return;
 						}
-						const selectedChunk = chunk.byteLength <= remaining ? chunk : chunk.subarray(0, remaining);
-						chunks.push(selectedChunk);
-						bytes += selectedChunk.byteLength;
-						if (selectedChunk.byteLength < chunk.byteLength) {
-							finish(true);
-							incoming.destroy();
-						}
-					});
-					incoming.once("end", () => finish(false));
-					incoming.once("error", (error) => { if (!settled) reject(error); });
-				});
+						incoming.on("data", (chunk: Buffer) => {
+							if (settled) return;
+							const remaining = options.maxBytes - bytes;
+							if (remaining <= 0) {
+								finish(true);
+								incoming.destroy();
+								return;
+							}
+							const selectedChunk = chunk.byteLength <= remaining ? chunk : chunk.subarray(0, remaining);
+							chunks.push(selectedChunk);
+							bytes += selectedChunk.byteLength;
+							if (selectedChunk.byteLength < chunk.byteLength) {
+								finish(true);
+								incoming.destroy();
+							}
+						});
+						incoming.once("end", () => finish(false));
+						incoming.once("error", (error) => {
+							if (!settled) reject(error);
+						});
+					}
+				);
 				request.once("error", reject);
 				request.end();
 			});
 			if ([301, 302, 303, 307, 308].includes(response.status) && response.headers.location) {
-				if (redirects >= MAX_REDIRECTS) throw new SandboxError("network_failed", `Web request exceeded ${MAX_REDIRECTS} redirects`);
+				if (redirects >= MAX_REDIRECTS)
+					throw new SandboxError("network_failed", `Web request exceeded ${MAX_REDIRECTS} redirects`);
 				const next = validateWebUrl(new URL(response.headers.location, url).toString());
 				if (options.redirectOrigin && next.origin !== options.redirectOrigin) {
 					throw new SandboxError("network_denied", "Search provider attempted a cross-origin redirect");

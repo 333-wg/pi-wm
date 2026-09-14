@@ -1,0 +1,33 @@
+{
+	"evaluatedAt": "2026-09-06T12:07:51.656Z",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"scope": "isolated read-only real-model skill routing and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "recovery-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "Turn timed out",
+			"failureKind": "provider_timeout",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		}
+	]
+}

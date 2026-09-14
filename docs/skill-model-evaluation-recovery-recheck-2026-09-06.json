@@ -1,0 +1,58 @@
+{
+	"evaluatedAt": "2026-09-06T11:58:53.258Z",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"scope": "isolated read-only real-model skill routing and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "debug-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 10873,
+				"outputTokens": 690,
+				"cacheReadTokens": 7244,
+				"cacheWriteTokens": 0,
+				"totalTokens": 18807,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "recovery-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		}
+	]
+}

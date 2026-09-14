@@ -1,4 +1,24 @@
-import type { GoalReviewPhase, GoalReviewRecord, ProgressEvent, RunFailureKind, SessionSnapshot, TranscriptItem, Usage, UsageRequestSummary, UsageToolSummary, UserContentPart } from "@wuming/protocol";
+import type { CapabilityPlan } from "@wuming/capability-kernel";
+import type { ContextPlan } from "@wuming/context-engine";
+import type {
+	AutomationSchedule,
+	ContextUsageState,
+	GoalExecutionMode,
+	GoalPlanFailurePolicy,
+	GoalPlanPhase,
+	GoalPlanSpec,
+	GoalReviewPhase,
+	GoalReviewRecord,
+	MemorySummary,
+	ProgressEvent,
+	RunFailureKind,
+	SessionSnapshot,
+	TranscriptItem,
+	Usage,
+	UsageRequestSummary,
+	UsageToolSummary,
+	UserContentPart,
+} from "@wuming/protocol";
 
 export type StructuredLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -13,7 +33,14 @@ export interface TurnOperationPayload {
 	mode: TurnMode;
 	userItemId: string;
 	content: UserContentPart[];
+	/**
+	 * Optional provider-facing prompt for internal orchestration. The visible
+	 * transcript always uses `content`; this field is never rendered as a user
+	 * message.
+	 */
+	runtimeContent?: UserContentPart[];
 	skills?: string[];
+	goalId?: string;
 	/**
 	 * Set on a subagent turn whose result is handed back to the parent model as a
 	 * tool result rather than appended to the parent transcript by the durable
@@ -48,6 +75,39 @@ export interface DurableOperation {
 	retryHistory?: RuntimeRetryEvent[];
 	approvalId?: string;
 	approvalToolCallId?: string;
+	capabilityPlan?: CapabilityPlan;
+	contextPlan?: ContextPlan;
+}
+
+export interface DurableGoalReview {
+	successCriteria: string;
+	maxRounds: number;
+	round: number;
+	phase: GoalReviewPhase;
+	runs: Array<{ round: number; workerSessionId: string; reviewerSessionId?: string }>;
+	history: GoalReviewRecord[];
+	failure?: string;
+}
+
+export interface DurableGoalPlanStep {
+	id: string;
+	title: string;
+	objective: string;
+	dependsOn: string[];
+	goalId?: string;
+	skippedAt?: number;
+	skipReason?: string;
+	successCriteria?: string;
+	maxRounds?: number;
+	costBudgetUsd?: number;
+	tokenBudget?: number;
+}
+
+export interface DurableGoalPlan {
+	phase: GoalPlanPhase;
+	maxParallel: number;
+	failurePolicy: GoalPlanFailurePolicy;
+	steps: DurableGoalPlanStep[];
 }
 
 export interface DurableGoal {
@@ -55,19 +115,56 @@ export interface DurableGoal {
 	parentSessionId: string;
 	title: string;
 	objective: string;
+	skillId?: string;
+	executionMode?: GoalExecutionMode;
 	createdAt: number;
 	updatedAt: number;
+	startedAt?: number;
 	runSessionId?: string;
+	operationId?: string;
 	cancelledAt?: number;
-	review?: {
-		successCriteria: string;
-		maxRounds: number;
-		round: number;
-		phase: GoalReviewPhase;
-		runs: Array<{ round: number; workerSessionId: string; reviewerSessionId?: string }>;
-		history: GoalReviewRecord[];
-		failure?: string;
+	pausedAt?: number;
+	accumulatedRunMs?: number;
+	review?: DurableGoalReview;
+	plan?: DurableGoalPlan;
+	ownerGoalId?: string;
+	planStepId?: string;
+}
+
+export interface DurableGoalAutomation {
+	id: string;
+	parentSessionId: string;
+	title: string;
+	objective: string;
+	schedule: AutomationSchedule;
+	enabled: boolean;
+	createdAt: number;
+	updatedAt: number;
+	nextRunAt?: number;
+	lastRunAt?: number;
+	successCriteria?: string;
+	maxRounds?: number;
+	plan?: GoalPlanSpec;
+}
+
+export interface DurableAutomationRun {
+	id: string;
+	automationId: string;
+	parentSessionId: string;
+	trigger: "schedule" | "manual";
+	triggerKey: string;
+	scheduledFor: number;
+	triggeredAt: number;
+	updatedAt: number;
+	spec: {
+		title: string;
+		objective: string;
+		successCriteria?: string;
+		maxRounds?: number;
+		plan?: GoalPlanSpec;
 	};
+	goalId?: string;
+	dispatchError?: string;
 }
 
 export type ApprovalExecutionMode = "preflight" | "failure_retry";
@@ -90,6 +187,7 @@ export interface RuntimeTurnResult {
 	tools?: UsageToolSummary[];
 	requests?: UsageRequestSummary[];
 	skills?: string[];
+	compactions?: RuntimeCompactionRecord[];
 	failure?: {
 		code: "runtime_error" | "cost_budget_exceeded";
 		message: string;
@@ -109,17 +207,40 @@ export interface RuntimeRetryEvent {
 export interface RuntimeCompactionResult {
 	summary: string;
 	usage?: Usage;
+	tokensBefore?: number;
+	estimatedTokensAfter?: number;
 }
 
+export interface RuntimeCompactionRecord extends RuntimeCompactionResult {
+	reason: "threshold" | "overflow";
+}
+
+export type DurableMemory = MemorySummary;
+
 export interface AgentRuntime {
+	resolveCapabilities?(input: {
+		operation: DurableOperation & { payload: TurnOperationPayload };
+		snapshot: SessionSnapshot;
+		signal: AbortSignal;
+	}): Promise<CapabilityPlan>;
+	resolveContext?(input: {
+		operation: DurableOperation & { payload: TurnOperationPayload };
+		snapshot: SessionSnapshot;
+		signal: AbortSignal;
+		onProgress?: ((event: ProgressEvent) => void) | undefined;
+		capabilityPlan?: CapabilityPlan;
+	}): Promise<ContextPlan>;
 	executeTurn(input: {
 		operation: DurableOperation & { payload: TurnOperationPayload };
 		snapshot: SessionSnapshot;
 		signal: AbortSignal;
 		onProgress: (event: ProgressEvent) => void;
+		onContextUsage?: (usage: ContextUsageState) => void;
 		onRetry?: (event: RuntimeRetryEvent) => void;
 		costBudgetUsd?: number;
 		tokenBudget?: number;
+		capabilityPlan?: CapabilityPlan;
+		contextPlan?: ContextPlan;
 	}): Promise<RuntimeTurnResult>;
 	compact?(input: {
 		snapshot: SessionSnapshot;
@@ -130,6 +251,8 @@ export interface AgentRuntime {
 		operation: DurableOperation & { payload: TurnOperationPayload };
 		snapshot: SessionSnapshot;
 		signal: AbortSignal;
+		capabilityPlan?: CapabilityPlan;
+		contextPlan?: ContextPlan;
 	}): Promise<void>;
 	forceTerminate?(sessionId: string): Promise<void>;
 }

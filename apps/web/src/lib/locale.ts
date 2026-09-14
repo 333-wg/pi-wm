@@ -1,0 +1,432 @@
+import {
+	createContext,
+	createElement,
+	useCallback,
+	useContext,
+	useEffect,
+	useMemo,
+	useState,
+	type ReactNode,
+} from "react";
+
+export type Locale = "zh" | "en";
+
+export const LOCALE_STORAGE_KEY = "wuming.locale";
+
+const zh = {
+	settings: "设置",
+	settingsNavigation: "设置分类",
+	generalSettings: "常规",
+	generalSettingsHint: "外观与语言",
+	generalSettingsDescription: "管理界面外观和显示语言。",
+	modelSettings: "模型",
+	modelSettingsHint: "服务与可用模型",
+	modelSettingsDescription: "管理模型服务、访问凭据和已添加模型。",
+	usageSettings: "用量统计",
+	usageSettingsHint: "Token 与费用",
+	usageSettingsDescription: "查看当前工作区的 Token、费用和会话调用明细。",
+	usageWorkspace: "当前工作区",
+	usageRange: "统计周期",
+	usageLastDays: "近 {days} 天",
+	usageRefresh: "刷新用量统计",
+	usageToday: "今天",
+	usagePeriod: "近 {days} 天",
+	usageMonth: "本月",
+	usageAllTime: "历史累计",
+	usageCalendarMonth: "按自然月统计",
+	usageRequestsTurns: "{requests} 次请求 · {turns} 轮",
+	usageTrend: "每日趋势",
+	usageTrendHint: "最近 {days} 天的 Token 使用变化。",
+	usageTrendAria: "最近 {days} 天 Token 用量趋势",
+	usageUpdatedAt: "更新于 {time}",
+	usageComposition: "Token 构成",
+	usageCompositionHint: "最近 {days} 天各类 Token 的占比。",
+	usageInput: "输入",
+	usageOutput: "输出",
+	usageCacheRead: "缓存读取",
+	usageCacheWrite: "缓存写入",
+	usageSessionModels: "当前会话 · 模型",
+	usageCurrentSessionSummary: "{tokens} Token · {cost}",
+	usageNoActiveSession: "当前工作区没有打开的会话。",
+	usageModelTurns: "{count} 轮",
+	usageNoModelData: "当前会话还没有模型用量。",
+	usageSessionTools: "当前会话 · 工具",
+	usageSessionToolsHint: "按调用次数展示当前会话最常用的工具。",
+	usageBuiltInTool: "内置工具",
+	usageToolCalls: "{count} 次调用",
+	usageNoToolData: "当前会话还没有工具调用。",
+	usageNoWorkspace: "选择工作区后即可查看用量。",
+	usageLoading: "正在统计",
+	usageLoadFailed: "用量统计读取失败",
+	connectionSettings: "连接与执行",
+	connectionSettingsHint: "网关与运行位置",
+	connectionSettingsDescription: "查看命令实际运行的位置，并管理网关连接。",
+	firstSetup: "首次设置",
+	completeSetup: "完成设置",
+	close: "关闭",
+	appearance: "外观",
+	appearanceHint: "深浅主题会记在本机；选择“跟随系统”时随操作系统实时切换。",
+	language: "语言",
+	languageHint: "选择界面显示语言。",
+	theme: "主题",
+	system: "跟随系统",
+	light: "浅色",
+	dark: "深色",
+	executionLocation: "命令执行位置",
+	executionLocalHint: "文件、命令、终端和预览由这台用户电脑上的本地端处理；Shell：{shell}",
+	executionServerHint: "当前连接的是服务器端。服务器宿主 Shell 默认禁用；要操作用户电脑，请在用户电脑启动本地端。",
+	executionUnknownHint: "连接本地端后会显示命令实际运行的位置。",
+	userComputer: "用户电脑",
+	remoteServer: "远程服务器",
+	unknownLocation: "位置未知",
+	onboardingConnected: "连接成功",
+	onboardingConnectedHint: "密码已保存在这台设备上。接下来可配置大模型，完成后关闭此窗口。",
+	accessPassword: "访问密码",
+	connectService: "连接服务",
+	firstConnectionHint: "首次使用请输入访问密码。验证成功后，这台设备会自动记住连接。",
+	connectionFailed: "密码不正确或服务暂时不可用，请检查后重试。",
+	connectionSuccess: "连接成功，密码已记住。",
+	connecting: "连接中",
+	connect: "连接",
+	reconnect: "重新连接",
+	defaultModel: "大模型",
+	defaultModelControl: "默认模型",
+	defaultModelHint: "选择新会话默认使用的模型。",
+	defaultModelEmpty: "请先添加并验证模型",
+	gatewayConnection: "网关连接",
+	gatewayConnectionHint: "更新访问密码并重新连接当前服务。",
+	customModels: "自定义模型",
+	customModelsHint: "模型服务和 API 凭据加密保存在服务端，可随时继续添加该服务下的模型。",
+	customModelsUnavailable: "当前服务未启用自定义模型配置",
+	savedServices: "已保存服务",
+	addedModels: "已添加模型",
+	credentialSaved: "密钥已加密保存 · {count} 个模型",
+	refreshModels: "刷新并管理模型",
+	deleteService: "删除模型服务",
+	deleteServiceBlocked: "请先删除该服务下的模型",
+	editModel: "编辑模型",
+	testModel: "测试模型",
+	deleteModel: "删除模型",
+	cancelEdit: "取消编辑",
+	modelService: "模型服务",
+	name: "名称",
+	contextLength: "上下文长度",
+	maxOutput: "最大输出",
+	supportImages: "支持图片",
+	saving: "正在保存...",
+	saveChanges: "保存修改",
+	addModelService: "添加模型服务",
+	baseUrl: "Base URL",
+	apiKey: "API Key",
+	newApiKey: "输入新服务的 API Key",
+	savingAndFetching: "正在保存并获取...",
+	saveServiceAndFetch: "保存服务并获取模型",
+	addServiceModels: "添加服务模型",
+	customModelList: "模型",
+	closeModelList: "关闭模型列表",
+	selectedModels: "已选择 {count} 个",
+	filterModels: "筛选模型",
+	searchModels: "搜索模型",
+	selectUnadded: "选择未添加",
+	clear: "清空",
+	alreadyAdded: "已添加",
+	noModelMatches: "没有匹配的模型",
+	optional: "可选",
+	advancedSettings: "高级设置",
+	apiProtocol: "接口协议",
+	adding: "正在添加...",
+	addModels: "添加 {count} 个模型",
+	addModel: "添加模型",
+	serviceSaved: "模型服务已加密保存，获取到 {count} 个模型",
+	serviceRefreshed: "已使用保存的密钥获取 {count} 个模型",
+	serviceDeleted: "模型服务已删除",
+	modelsAdded: "已添加 {count} 个模型",
+	modelTested: "{id} 测试成功，耗时 {duration}ms",
+	modelUpdated: "{name} 已更新",
+	modelDeleted: "{id} 已删除，模型服务仍然保留",
+	fillBaseUrlAndKey: "请填写 Base URL 和 API Key",
+	getModelsFirst: "请先获取模型并至少选择一个模型",
+	newChat: "新对话",
+	newChatBusy: "正在新建…",
+	projects: "项目",
+	recent: "最近",
+	openProject: "打开项目",
+	files: "文件",
+	changes: "更改",
+	terminal: "终端",
+	tools: "工具",
+	skills: "技能",
+	mcp: "MCP",
+	connected: "已连接",
+	noProject: "无项目",
+	agentConversation: "智能体对话",
+	archived: "已归档",
+	startTask: "开始一个新任务",
+	projectTaskPrompt: "你想在 {project} 中完成什么？",
+	describeTask: "描述你想完成的事情，Wuming 会读取当前工作目录并开始处理。",
+	describeActiveTask: "描述你想完成的事情，Wuming 会读代码、改文件并自己验证。",
+	quoteWorkspaceFiles: "引用工作区文件",
+	quickCommands: "调用快捷命令",
+	lineBreak: "换行",
+	activeTaskInstruction: "为当前任务补充指令",
+	sendTaskPlaceholder: "给 Wuming 发送任务或问题（@ 引用文件，/ 快捷命令）",
+	switchTheme: "切换深浅主题",
+	currentTheme: "当前：{theme}",
+	openSettings: "打开设置",
+	closeNavigation: "关闭导航",
+	openNavigation: "打开导航",
+	commandPalette: "命令面板",
+	showOrHideRail: "显示或隐藏运行面板",
+	noProjects: "暂无项目",
+	workspaceViews: "工作区视图",
+	chat: "对话",
+} as const;
+
+const en: Record<keyof typeof zh, string> = {
+	settings: "Settings",
+	settingsNavigation: "Settings categories",
+	generalSettings: "General",
+	generalSettingsHint: "Appearance and language",
+	generalSettingsDescription: "Manage the interface appearance and display language.",
+	modelSettings: "Models",
+	modelSettingsHint: "Services and available models",
+	modelSettingsDescription: "Manage model services, credentials, and added models.",
+	usageSettings: "Usage",
+	usageSettingsHint: "Tokens and cost",
+	usageSettingsDescription: "Review tokens, costs, and session activity for the current workspace.",
+	usageWorkspace: "Current workspace",
+	usageRange: "Usage range",
+	usageLastDays: "Last {days} days",
+	usageRefresh: "Refresh usage",
+	usageToday: "Today",
+	usagePeriod: "Last {days} days",
+	usageMonth: "This month",
+	usageAllTime: "All time",
+	usageCalendarMonth: "Calendar month",
+	usageRequestsTurns: "{requests} requests · {turns} turns",
+	usageTrend: "Daily trend",
+	usageTrendHint: "Token usage over the last {days} days.",
+	usageTrendAria: "Token usage trend for the last {days} days",
+	usageUpdatedAt: "Updated {time}",
+	usageComposition: "Token composition",
+	usageCompositionHint: "Token categories over the last {days} days.",
+	usageInput: "Input",
+	usageOutput: "Output",
+	usageCacheRead: "Cache read",
+	usageCacheWrite: "Cache write",
+	usageSessionModels: "Current session · Models",
+	usageCurrentSessionSummary: "{tokens} tokens · {cost}",
+	usageNoActiveSession: "No session is open in this workspace.",
+	usageModelTurns: "{count} turns",
+	usageNoModelData: "No model usage in the current session yet.",
+	usageSessionTools: "Current session · Tools",
+	usageSessionToolsHint: "The most frequently used tools in the current session.",
+	usageBuiltInTool: "Built-in tool",
+	usageToolCalls: "{count} calls",
+	usageNoToolData: "No tool calls in the current session yet.",
+	usageNoWorkspace: "Select a workspace to view usage.",
+	usageLoading: "Calculating",
+	usageLoadFailed: "Unable to load usage",
+	connectionSettings: "Connection & execution",
+	connectionSettingsHint: "Gateway and runtime location",
+	connectionSettingsDescription: "See where commands run and manage the gateway connection.",
+	firstSetup: "Initial setup",
+	completeSetup: "Finish setup",
+	close: "Close",
+	appearance: "Appearance",
+	appearanceHint:
+		"Your theme choice is saved on this device. “Follow system” tracks the operating system in real time.",
+	language: "Language",
+	languageHint: "Choose the language used by the interface.",
+	theme: "Theme",
+	system: "Follow system",
+	light: "Light",
+	dark: "Dark",
+	executionLocation: "Command execution",
+	executionLocalHint: "Files, commands, terminals, and previews run on this computer; Shell: {shell}",
+	executionServerHint:
+		"You are connected to the server. The server host shell is disabled by default; start the local agent on your computer to work with local files.",
+	executionUnknownHint: "The actual command location will appear after the local agent connects.",
+	userComputer: "This computer",
+	remoteServer: "Remote server",
+	unknownLocation: "Unknown location",
+	onboardingConnected: "Connected",
+	onboardingConnectedHint: "The password is saved on this device. Configure a model next, then close this window.",
+	accessPassword: "Access password",
+	connectService: "Connect service",
+	firstConnectionHint:
+		"Enter the access password the first time. After verification, this device will remember the connection.",
+	connectionFailed: "The password is incorrect or the service is temporarily unavailable. Check it and try again.",
+	connectionSuccess: "Connected successfully. The password is remembered.",
+	connecting: "Connecting",
+	connect: "Connect",
+	reconnect: "Reconnect",
+	defaultModel: "Default model",
+	defaultModelControl: "Default model",
+	defaultModelHint: "Choose the model used for new sessions.",
+	defaultModelEmpty: "Add and verify a model first",
+	gatewayConnection: "Gateway connection",
+	gatewayConnectionHint: "Update the access password and reconnect to the current service.",
+	customModels: "Custom models",
+	customModelsHint:
+		"Model services and API credentials are encrypted on the server. You can add more models from a service at any time.",
+	customModelsUnavailable: "Custom model configuration is not enabled by this service",
+	savedServices: "Saved services",
+	addedModels: "Added models",
+	credentialSaved: "Credential encrypted · {count} models",
+	refreshModels: "Refresh and manage models",
+	deleteService: "Delete model service",
+	deleteServiceBlocked: "Delete the models under this service first",
+	editModel: "Edit model",
+	testModel: "Test model",
+	deleteModel: "Delete model",
+	cancelEdit: "Cancel editing",
+	modelService: "Model service",
+	name: "Name",
+	contextLength: "Context length",
+	maxOutput: "Max output",
+	supportImages: "Image input",
+	saving: "Saving...",
+	saveChanges: "Save changes",
+	addModelService: "Add model service",
+	baseUrl: "Base URL",
+	apiKey: "API key",
+	newApiKey: "Enter the new service API key",
+	savingAndFetching: "Saving and fetching...",
+	saveServiceAndFetch: "Save service and fetch models",
+	addServiceModels: "Add service models",
+	customModelList: "Models",
+	closeModelList: "Close model list",
+	selectedModels: "{count} selected",
+	filterModels: "Filter models",
+	searchModels: "Search models",
+	selectUnadded: "Select unadded",
+	clear: "Clear",
+	alreadyAdded: "Added",
+	noModelMatches: "No matching models",
+	optional: "optional",
+	advancedSettings: "Advanced settings",
+	apiProtocol: "API protocol",
+	adding: "Adding...",
+	addModels: "Add {count} models",
+	addModel: "Add model",
+	serviceSaved: "Model service encrypted and saved; fetched {count} models",
+	serviceRefreshed: "Fetched {count} models with the saved key",
+	serviceDeleted: "Model service deleted",
+	modelsAdded: "Added {count} models",
+	modelTested: "{id} passed the test in {duration}ms",
+	modelUpdated: "{name} updated",
+	modelDeleted: "{id} deleted; the model service was kept",
+	fillBaseUrlAndKey: "Enter both the Base URL and API key",
+	getModelsFirst: "Fetch models first and select at least one model",
+	newChat: "New chat",
+	newChatBusy: "Starting…",
+	projects: "Projects",
+	recent: "Recent",
+	openProject: "Open project",
+	files: "Files",
+	changes: "Changes",
+	terminal: "Terminal",
+	tools: "Tools",
+	skills: "Skills",
+	mcp: "MCP",
+	connected: "Connected",
+	noProject: "No project",
+	agentConversation: "Agent conversation",
+	archived: "Archived",
+	startTask: "Start a new task",
+	projectTaskPrompt: "What do you want to accomplish in {project}?",
+	describeTask: "Describe what you want to accomplish. Wuming will read the current working directory and get started.",
+	describeActiveTask: "Describe what you want to accomplish. Wuming will read code, edit files, and verify the result.",
+	quoteWorkspaceFiles: "Reference workspace files",
+	quickCommands: "Run a quick command",
+	lineBreak: "New line",
+	activeTaskInstruction: "Add instructions to the current task",
+	sendTaskPlaceholder: "Send a task or question to Wuming (@ references files, / quick commands)",
+	switchTheme: "Switch light/dark theme",
+	currentTheme: "Current: {theme}",
+	openSettings: "Open settings",
+	closeNavigation: "Close navigation",
+	openNavigation: "Open navigation",
+	commandPalette: "Command palette",
+	showOrHideRail: "Show or hide run panel",
+	noProjects: "No projects",
+	workspaceViews: "Workspace views",
+	chat: "Chat",
+};
+
+export type LocaleKey = keyof typeof zh;
+export type Translate = (key: LocaleKey, vars?: Record<string, string | number>) => string;
+
+export function isLocale(value: unknown): value is Locale {
+	return value === "zh" || value === "en";
+}
+
+export function readStoredLocale(storage: Pick<Storage, "getItem"> | undefined): Locale {
+	if (!storage) return "zh";
+	try {
+		const value = storage.getItem(LOCALE_STORAGE_KEY);
+		return isLocale(value) ? value : "zh";
+	} catch {
+		return "zh";
+	}
+}
+
+export function localeLabel(locale: Locale): string {
+	return locale === "en" ? "English" : "中文";
+}
+
+export function applyLocale(locale: Locale): void {
+	if (typeof document === "undefined") return;
+	document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
+	document.documentElement.dataset.locale = locale;
+}
+
+const LocaleContext = createContext<{
+	locale: Locale;
+	setLocale: (locale: Locale) => void;
+	t: Translate;
+} | null>(null);
+
+export function LanguageProvider({ children }: { children: ReactNode }) {
+	const [locale, setLocaleState] = useState<Locale>(() =>
+		readStoredLocale(typeof window === "undefined" ? undefined : window.localStorage)
+	);
+
+	const setLocale = useCallback((next: Locale) => {
+		setLocaleState(next);
+		try {
+			window.localStorage.setItem(LOCALE_STORAGE_KEY, next);
+		} catch {
+			// A blocked storage slot must not prevent changing the current session.
+		}
+	}, []);
+
+	const t = useCallback<Translate>(
+		(key, vars) => {
+			let value = (locale === "en" ? en : zh)[key];
+			if (vars) {
+				for (const [name, replacement] of Object.entries(vars)) {
+					value = value.replaceAll(`{${name}}`, String(replacement));
+				}
+			}
+			return value;
+		},
+		[locale]
+	);
+
+	useEffect(() => applyLocale(locale), [locale]);
+
+	const value = useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
+	return createElement(LocaleContext.Provider, { value }, children);
+}
+
+export function useLocale(): { locale: Locale; setLocale: (locale: Locale) => void; t: Translate } {
+	const value = useContext(LocaleContext);
+	if (!value) throw new Error("useLocale must be used within LanguageProvider");
+	return value;
+}
+
+export function useT(): Translate {
+	return useLocale().t;
+}

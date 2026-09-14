@@ -2,7 +2,7 @@ import { Fragment, memo, type ReactNode, useMemo } from "react";
 import { type BlockNode, type InlineNode, parseMarkdown } from "../lib/markdown";
 import { CodeBlock } from "./CodeBlock";
 
-function renderInline(nodes: InlineNode[]): ReactNode {
+function renderInline(nodes: InlineNode[], insideLink = false): ReactNode {
 	return nodes.map((node, index) => {
 		switch (node.type) {
 			case "text":
@@ -20,9 +20,10 @@ function renderInline(nodes: InlineNode[]): ReactNode {
 			case "del":
 				return <del key={index}>{renderInline(node.children)}</del>;
 			case "link":
+				if (insideLink) return <Fragment key={index}>{renderInline(node.children, true)}</Fragment>;
 				return (
 					<a href={node.href} target="_blank" rel="noreferrer noopener" key={index}>
-						{renderInline(node.children)}
+						{renderInline(node.children, true)}
 					</a>
 				);
 			case "break":

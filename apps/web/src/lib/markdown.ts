@@ -101,12 +101,24 @@ function matchLink(source: string, start: number): { node: InlineNode; next: num
 		}
 	}
 	if (parens !== 0) return null;
-	const target = (source.slice(index + 2, end).trim().split(/\s+/)[0] ?? "").replace(/^<|>$/g, "");
+	const target = (
+		source
+			.slice(index + 2, end)
+			.trim()
+			.split(/\s+/)[0] ?? ""
+	).replace(/^<|>$/g, "");
 	if (!SAFE_HREF.test(target)) return null;
-	return { node: { type: "link", href: target, children: parseInline(source.slice(start + 1, index)) }, next: end + 1 };
+	return {
+		node: {
+			type: "link",
+			href: target,
+			children: parseInlineNodes(source.slice(start + 1, index), false),
+		},
+		next: end + 1,
+	};
 }
 
-export function parseInline(source: string): InlineNode[] {
+function parseInlineNodes(source: string, allowLinks: boolean): InlineNode[] {
 	const nodes: InlineNode[] = [];
 	let pending = "";
 	let index = 0;
@@ -146,7 +158,10 @@ export function parseInline(source: string): InlineNode[] {
 			const end = findClosing(source, index + 2, "~~");
 			if (end >= 0) {
 				flush();
-				nodes.push({ type: "del", children: parseInline(source.slice(index + 2, end)) });
+				nodes.push({
+					type: "del",
+					children: parseInlineNodes(source.slice(index + 2, end), allowLinks),
+				});
 				index = end + 2;
 				continue;
 			}
@@ -161,7 +176,7 @@ export function parseInline(source: string): InlineNode[] {
 			const end = intraword ? -1 : findClosing(source, index + marker.length, marker);
 			if (end >= 0) {
 				flush();
-				const children = parseInline(source.slice(index + marker.length, end));
+				const children = parseInlineNodes(source.slice(index + marker.length, end), allowLinks);
 				nodes.push(doubled ? { type: "strong", children } : { type: "em", children });
 				index = end + marker.length;
 				continue;
@@ -170,7 +185,7 @@ export function parseInline(source: string): InlineNode[] {
 			index += 1;
 			continue;
 		}
-		if (char === "[") {
+		if (allowLinks && char === "[") {
 			const link = matchLink(source, index);
 			if (link) {
 				flush();
@@ -183,7 +198,7 @@ export function parseInline(source: string): InlineNode[] {
 			continue;
 		}
 		const autolink = /^(?:<((?:https?:\/\/|mailto:)[^>\s]+)>|(https?:\/\/[^\s<>()[\]]+))/.exec(source.slice(index));
-		if (autolink && (char === "<" || char === "h")) {
+		if (allowLinks && autolink && (char === "<" || char === "h")) {
 			const raw = (autolink[1] ?? autolink[2] ?? "").replace(/[.,;:!?]+$/, "");
 			flush();
 			nodes.push({ type: "link", href: raw, children: [{ type: "text", value: raw }] });
@@ -195,6 +210,10 @@ export function parseInline(source: string): InlineNode[] {
 	}
 	flush();
 	return nodes;
+}
+
+export function parseInline(source: string): InlineNode[] {
+	return parseInlineNodes(source, true);
 }
 
 function splitTableRow(line: string): string[] {
@@ -263,7 +282,12 @@ function readFence(lines: string[], start: number): { block: BlockNode; next: nu
 	}
 	while (body.length > 0 && !(body[body.length - 1] ?? "").trim()) body.pop();
 	return {
-		block: { type: "code", lang: (fence?.[3] ?? "").toLowerCase(), text: body.join("\n"), open: !closed },
+		block: {
+			type: "code",
+			lang: (fence?.[3] ?? "").toLowerCase(),
+			text: body.join("\n"),
+			open: !closed,
+		},
 		next: cursor,
 	};
 }
@@ -284,9 +308,9 @@ function readList(lines: string[], start: number): { block: BlockNode; next: num
 			const continues =
 				next.trim().length > 0 &&
 				((BULLET.test(next) || ORDERED.test(next)
-					? (BULLET.exec(next) ?? ORDERED.exec(next))?.[1]?.length ?? 0
+					? ((BULLET.exec(next) ?? ORDERED.exec(next))?.[1]?.length ?? 0)
 					: Number.POSITIVE_INFINITY) <= baseIndent ||
-					(next.length - next.trimStart().length) > baseIndent);
+					next.length - next.trimStart().length > baseIndent);
 			if (!continues) break;
 			tight = false;
 			pendingBlank = true;
@@ -312,7 +336,13 @@ function readList(lines: string[], start: number): { block: BlockNode; next: num
 	}
 	const start1 = ordered ? Number.parseInt(first?.[2] ?? "1", 10) : 1;
 	return {
-		block: { type: "list", ordered, start: Number.isFinite(start1) ? start1 : 1, items: items.map(parseBlocks), tight },
+		block: {
+			type: "list",
+			ordered,
+			start: Number.isFinite(start1) ? start1 : 1,
+			items: items.map(parseBlocks),
+			tight,
+		},
 		next: cursor,
 	};
 }
@@ -335,7 +365,11 @@ function parseBlocks(lines: string[]): BlockNode[] {
 		}
 		const heading = HEADING.exec(line);
 		if (heading) {
-			blocks.push({ type: "heading", level: (heading[1] ?? "#").length, children: parseInline(heading[2] ?? "") });
+			blocks.push({
+				type: "heading",
+				level: (heading[1] ?? "#").length,
+				children: parseInline(heading[2] ?? ""),
+			});
 			index += 1;
 			continue;
 		}

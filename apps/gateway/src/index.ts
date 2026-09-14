@@ -3,3 +3,7 @@ export * from "./server.js";
 export * from "./logging.js";
 export * from "./tools.js";
 export * from "./projects.js";
+export * from "./skill-router.js";
+export * from "./skill-manager.js";
+export * from "./managed-skill-catalog.js";
+export * from "./execution-placement.js";

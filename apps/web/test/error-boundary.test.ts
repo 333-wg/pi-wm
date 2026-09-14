@@ -23,7 +23,13 @@ describe("crash summary", () => {
 		circular.self = circular;
 		expect(crashSummary(circular)).toBe("[object Object]");
 		expect(crashSummary({ toJSON: () => undefined })).toBe("[object Object]");
-		expect(crashSummary({ get boom(): never { throw new Error("getter"); } })).toBe("[object Object]");
+		expect(
+			crashSummary({
+				get boom(): never {
+					throw new Error("getter");
+				},
+			})
+		).toBe("[object Object]");
 	});
 
 	it("still says something when nothing was thrown but the render failed", () => {
@@ -37,7 +43,9 @@ describe("crash report", () => {
 		const error = new Error("boom");
 		error.stack = "Error: boom\n    at Markdown (Markdown.tsx:12:3)";
 		const report = crashReport(error, "\n    at Markdown\n    at TranscriptItemView");
-		expect(report).toBe("Error: boom\n    at Markdown (Markdown.tsx:12:3)\n\n组件栈:\n    at Markdown\n    at TranscriptItemView");
+		expect(report).toBe(
+			"Error: boom\n    at Markdown (Markdown.tsx:12:3)\n\n组件栈:\n    at Markdown\n    at TranscriptItemView"
+		);
 	});
 
 	it("omits the component stack section when React did not provide one", () => {
@@ -55,6 +63,10 @@ describe("crash report", () => {
 describe("error boundary state", () => {
 	it("records the failure and clears the previous copy result", () => {
 		const error = new Error("boom");
-		expect(ErrorBoundary.getDerivedStateFromError(error)).toEqual({ crashed: true, error, copy: "idle" });
+		expect(ErrorBoundary.getDerivedStateFromError(error)).toEqual({
+			crashed: true,
+			error,
+			copy: "idle",
+		});
 	});
 });

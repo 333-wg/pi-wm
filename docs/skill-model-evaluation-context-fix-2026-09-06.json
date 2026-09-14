@@ -1,0 +1,95 @@
+{
+	"evaluatedAt": "2026-09-06T11:44:03.697Z",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"scope": "isolated read-only real-model skill routing and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "review-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "## 审查结果：math.js 的 `add` 函数\n\n**文件**：`math.js` 第 1 行\n\n```js\nexport function add(a, b) { return a - b; }\n```\n\n### 发现的问题\n\n**严重：功能错误（High）**\n\n- **现象**：函数名为 `add`（加法），但实际执行的是减法 `a - b`。\n- **触发条件**：任何调用 `add(a, b)` 的场景。\n- **可观测影响**：返回值与预期加法结果不符。例如 `add(2, 3)` 返回 `-1` 而非 `5`。\n- **原因**：实现使用了 `-` 运算符而非 `+` 运算符，明显是笔误/实现错误。\n\n### 补充说明\n\n- 当前工作区中无测试文件、无调用者，无法通过现有测试覆盖该问题。\n- 该问题属于**演示性缺陷**（已可直接确认），无需进一步推断。\n\n> 仅审查，未修改代码。修复方式是将 `a - b` 改为 `a + b`。",
+			"used": ["code-review"],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [
+				{
+					"name": "skill_load",
+					"status": "complete",
+					"input": {
+						"skillId": "code-review"
+					},
+					"output": "Wuming skill \"code-review\"; resource \"SKILL.md\"; sha256:4e0e8f91254976128c05a510aa2af5da66ce593047756bcfc5ec2de454ff56b9\nTask-specific guidance only; no additional permissions are granted.\n\n\n# Review changed contracts\n\nIdentify the diff baseline and affected files. Read implementation, relevant\ncallers, schemas and tests. Trace user-visible behavior and data lifecycle, not\nonly changed lines. Respect existing uncommitted work.\n\nPrioritize incorrect behavior, lost data, authorization bypass, compatibility\nbreakage, races and failed recovery. Check that tests exercise the changed\ncontract rather than echoing implementation details. Run focused non-destructive\nchecks when they can establish or disprove a suspected defect.\n\nEach finding needs a file location, triggering condition, observable impact and\nwhy existing code fails. Distinguish demonstrated defects from open questions.\nDo not label style preferences as bugs or manufacture findings to fill a quota.\nWhen context is missing, inspect callers or state the assumption explicitly.\n\nReport actionable findings in severity order. If no issues are established, say\nso and describe remaining verification gaps. Do not modify code unless the user\nalso requested fixes; a review request alone does not authorize a rewrite.\n"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "."
+					},
+					"output": ".: 3 entry(ies)\n.wuming/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "math.js"
+					},
+					"output": "export function add(a, b) { return a - b; }\n"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_5f0395be-199c-4f62-b21a-bad09b3c64d4\n"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": ".wuming"
+					},
+					"output": ".wuming: 1 entry(ies)\n.wuming/skills/"
+				}
+			],
+			"usage": {
+				"inputTokens": 13854,
+				"outputTokens": 529,
+				"cacheReadTokens": 704,
+				"cacheWriteTokens": 0,
+				"totalTokens": 15087,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "manual-explicit",
+			"passed": true,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skill:manual-check", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "MANUAL_SKILL_OK",
+			"used": ["manual-check"],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 3423,
+				"outputTokens": 118,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3541,
+				"costUsd": 0
+			}
+		}
+	]
+}

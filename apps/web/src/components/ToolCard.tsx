@@ -1,7 +1,10 @@
 import {
 	Activity,
+	AppWindow,
 	Bot,
 	Braces,
+	Bug,
+	Camera,
 	ChevronRight,
 	CircleAlert,
 	CircleCheck,
@@ -16,15 +19,21 @@ import {
 	FolderTree,
 	Globe,
 	ListChecks,
+	MousePointerClick,
+	PanelTopClose,
 	Plug,
+	ScanSearch,
 	Search,
 	ShieldAlert,
 	SquareTerminal,
 	Wrench,
+	Image,
+	Video,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import type { ArtifactRef, ContentPart } from "@wuming/protocol";
 import { CodeBlock } from "./CodeBlock";
+import { ImageViewer } from "./ImageViewer.js";
 import { DiffStat, EditDiff, editDiffStat } from "./DiffView";
 
 export type ToolStatusValue = "pending" | "awaiting_approval" | "running" | "complete" | "error" | "aborted";
@@ -127,8 +136,16 @@ function readEdits(input: unknown): EditBlock[] {
 
 type PlanStepStatus = "pending" | "in_progress" | "completed";
 
-const planStatusText: Record<PlanStepStatus, string> = { pending: "待办", in_progress: "进行中", completed: "已完成" };
-const planStatusMark: Record<PlanStepStatus, string> = { pending: "○", in_progress: "▸", completed: "✓" };
+const planStatusText: Record<PlanStepStatus, string> = {
+	pending: "待办",
+	in_progress: "进行中",
+	completed: "已完成",
+};
+const planStatusMark: Record<PlanStepStatus, string> = {
+	pending: "○",
+	in_progress: "▸",
+	completed: "✓",
+};
 
 /** Reads `update_plan`'s steps, tolerating a partially streamed argument object. */
 function readPlan(input: Record<string, unknown>): Array<{ step: string; status: PlanStepStatus }> {
@@ -140,7 +157,10 @@ function readPlan(input: Record<string, unknown>): Array<{ step: string; status:
 		const step = asText(record.step);
 		if (step === undefined) continue;
 		const status = asText(record.status);
-		steps.push({ step, status: status === "completed" || status === "in_progress" ? status : "pending" });
+		steps.push({
+			step,
+			status: status === "completed" || status === "in_progress" ? status : "pending",
+		});
 	}
 	return steps;
 }
@@ -161,6 +181,17 @@ export interface ToolDescription {
 export function describeTool(toolName: string, input: unknown): ToolDescription {
 	const args = asRecord(input);
 	const size = 15;
+	if (toolName === "media_model_status") {
+		return { icon: <Image size={size} />, verb: "查看生成模型配置", quiet: true };
+	}
+	if (toolName === "generate_image" || toolName === "generate_video" || toolName === "get_generated_video") {
+		return {
+			icon: toolName === "generate_image" ? <Image size={size} /> : <Video size={size} />,
+			verb: toolName === "generate_image" ? "生成图片" : toolName === "generate_video" ? "生成视频" : "获取视频",
+			target: asText(args.prompt) ?? asText(args.jobId) ?? "",
+			fallbackArgs: true,
+		};
+	}
 	if (toolName === "read_file") {
 		const path = asText(args.path) ?? "";
 		const offset = typeof args.offset === "number" ? args.offset : undefined;
@@ -173,7 +204,14 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 					: limit !== undefined
 						? `前 ${limit} 行`
 						: undefined;
-		return { icon: <FileText size={size} />, verb: "读取", target: shortPath(path), title: path, meta: range, quiet: true };
+		return {
+			icon: <FileText size={size} />,
+			verb: "读取",
+			target: shortPath(path),
+			title: path,
+			meta: range,
+			quiet: true,
+		};
 	}
 	if (toolName === "write_file") {
 		const path = asText(args.path) ?? "";
@@ -230,19 +268,35 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 			verb: "检索",
 			target: pattern,
 			title: pattern,
-			meta: [scope, mode === "files" ? "仅路径" : mode === "count" ? "仅计数" : undefined].filter(Boolean).join(" · ") || undefined,
+			meta:
+				[scope, mode === "files" ? "仅路径" : mode === "count" ? "仅计数" : undefined].filter(Boolean).join(" · ") ||
+				undefined,
 			quiet: true,
 		};
 	}
 	if (toolName === "glob") {
 		const pattern = asText(args.pattern) ?? "";
 		const scope = asText(args.path);
-		return { icon: <FolderSearch size={size} />, verb: "匹配", target: pattern, title: pattern, meta: scope, quiet: true };
+		return {
+			icon: <FolderSearch size={size} />,
+			verb: "匹配",
+			target: pattern,
+			title: pattern,
+			meta: scope,
+			quiet: true,
+		};
 	}
 	if (toolName === "ls") {
 		const path = asText(args.path) ?? ".";
 		const depth = typeof args.depth === "number" ? args.depth : undefined;
-		return { icon: <FolderTree size={size} />, verb: "列出", target: shortPath(path), title: path, meta: depth !== undefined && depth > 1 ? `${depth} 层` : undefined, quiet: true };
+		return {
+			icon: <FolderTree size={size} />,
+			verb: "列出",
+			target: shortPath(path),
+			title: path,
+			meta: depth !== undefined && depth > 1 ? `${depth} 层` : undefined,
+			quiet: true,
+		};
 	}
 	if (toolName === "exec") {
 		const command = asText(args.command) ?? "";
@@ -251,6 +305,18 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		return {
 			icon: <SquareTerminal size={size} />,
 			verb: "执行",
+			target: first,
+			title: command,
+			body: multiline ? <CodeBlock code={command} lang="bash" /> : undefined,
+		};
+	}
+	if (toolName === "shell") {
+		const command = asText(args.command) ?? asText(args.cmd) ?? "";
+		const first = command.split("\n")[0] ?? "";
+		const multiline = command.includes("\n");
+		return {
+			icon: <SquareTerminal size={size} />,
+			verb: "shell",
 			target: first,
 			title: command,
 			body: multiline ? <CodeBlock code={command} lang="bash" /> : undefined,
@@ -273,6 +339,82 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const query = asText(args.query) ?? asText(args.q) ?? "";
 		return { icon: <Search size={size} />, verb: "搜索", target: query, title: query, quiet: true };
 	}
+	if (toolName === "browser_open") {
+		const url = asText(args.url) ?? "";
+		const viewport =
+			typeof args.width === "number" && typeof args.height === "number" ? `${args.width}x${args.height}` : undefined;
+		return {
+			icon: <AppWindow size={size} />,
+			verb: "打开页面",
+			target: url,
+			title: url,
+			meta: viewport,
+			quiet: true,
+		};
+	}
+	if (toolName === "browser_snapshot") {
+		const selector = asText(args.selector);
+		return {
+			icon: <ScanSearch size={size} />,
+			verb: "检查页面",
+			...(selector ? { target: selector, title: selector } : {}),
+			quiet: true,
+		};
+	}
+	if (toolName === "browser_action") {
+		const action = asText(args.action) ?? "操作";
+		const target =
+			asText(args.ref) ??
+			asText(args.tab_id) ??
+			asText(args.selector) ??
+			asText(args.name) ??
+			asText(args.text) ??
+			asText(args.url);
+		return {
+			icon: <MousePointerClick size={size} />,
+			verb: `页面 · ${action}`,
+			...(target ? { target, title: target } : {}),
+		};
+	}
+	if (toolName === "browser_screenshot") {
+		return {
+			icon: <Camera size={size} />,
+			verb: "页面截图",
+			meta: args.full_page === true ? "完整页面" : "当前视口",
+			quiet: true,
+		};
+	}
+	if (toolName === "browser_diagnostics") {
+		return {
+			icon: <Bug size={size} />,
+			verb: "浏览器诊断",
+			meta: args.clear === true ? "读取后清空" : undefined,
+			quiet: true,
+		};
+	}
+	if (toolName === "browser_tabs") {
+		return { icon: <AppWindow size={size} />, verb: "查看标签页", quiet: true };
+	}
+	if (toolName === "browser_close") {
+		return { icon: <PanelTopClose size={size} />, verb: "关闭浏览器", quiet: true };
+	}
+	if (toolName === "preview_start") {
+		const command = asText(args.command) ?? "";
+		const url = asText(args.url);
+		return {
+			icon: <SquareTerminal size={size} />,
+			verb: "启动预览",
+			target: command,
+			title: command,
+			meta: url,
+		};
+	}
+	if (toolName === "preview_status") {
+		return { icon: <Activity size={size} />, verb: "预览状态", quiet: true };
+	}
+	if (toolName === "preview_stop") {
+		return { icon: <PanelTopClose size={size} />, verb: "停止预览", quiet: true };
+	}
 	if (toolName === "weather") {
 		const location = asText(args.location) ?? asText(args.city) ?? "";
 		return { icon: <CloudSun size={size} />, verb: "天气", target: location, quiet: true };
@@ -287,21 +429,26 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 			verb: "计划",
 			...(active === undefined ? {} : { target: active.step, title: active.step }),
 			meta: steps.length > 0 ? `${done}/${steps.length}` : undefined,
-			body: steps.length > 0 || explanation ? (
-				<>
-					{explanation ? <p className="tool-plain">{explanation}</p> : null}
-					{steps.length > 0 ? (
-						<ol className="tool-plan">
-							{steps.map((step, index) => (
-								<li className={`tool-plan-step ${step.status}`} key={index} aria-label={`${planStatusText[step.status]}：${step.step}`}>
-									<span aria-hidden="true">{planStatusMark[step.status]}</span>
-									<span>{step.step}</span>
-								</li>
-							))}
-						</ol>
-					) : null}
-				</>
-			) : undefined,
+			body:
+				steps.length > 0 || explanation ? (
+					<>
+						{explanation ? <p className="tool-plain">{explanation}</p> : null}
+						{steps.length > 0 ? (
+							<ol className="tool-plan">
+								{steps.map((step, index) => (
+									<li
+										className={`tool-plan-step ${step.status}`}
+										key={index}
+										aria-label={`${planStatusText[step.status]}：${step.step}`}
+									>
+										<span aria-hidden="true">{planStatusMark[step.status]}</span>
+										<span>{step.step}</span>
+									</li>
+								))}
+							</ol>
+						) : null}
+					</>
+				) : undefined,
 		};
 	}
 	if (toolName === "subagent") {
@@ -330,7 +477,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 	return { icon: <Wrench size={size} />, verb: toolName, fallbackArgs: true };
 }
 
-function StatusBadge({ status }: { status: ToolStatusValue }) {
+function StatusIndicator({ status }: { status: ToolStatusValue }) {
 	const icon =
 		status === "complete" ? (
 			<CircleCheck size={12} />
@@ -343,11 +490,8 @@ function StatusBadge({ status }: { status: ToolStatusValue }) {
 		) : (
 			<Clock size={12} />
 		);
-	// `tool-pill`, not `tool-status`: the Agent tool directory in the workbench
-	// already owns `.tool-status` for its inline row labels, and sharing the name
-	// leaked this pill's fill onto them.
 	return (
-		<span className={`tool-pill ${status}`}>
+		<span className={`tool-state ${status}`}>
 			{icon}
 			<span>{statusText[status]}</span>
 		</span>
@@ -364,18 +508,122 @@ export function resultEchoesCard(toolName: string, isError?: boolean): boolean {
 	return toolName === "update_plan" && isError !== true;
 }
 
+export function isPreviewableImageArtifact(artifact: ArtifactRef): boolean {
+	return ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(artifact.mimeType.toLowerCase());
+}
+
+export function isPreviewableMediaArtifact(artifact: ArtifactRef): boolean {
+	return isPreviewableImageArtifact(artifact) || ["video/mp4", "video/webm"].includes(artifact.mimeType.toLowerCase());
+}
+
+export function ArtifactMediaPreview({
+	artifact,
+	onLoad,
+	onDownload,
+	showDownload = true,
+}: {
+	artifact: ArtifactRef;
+	onLoad: (artifact: ArtifactRef) => Promise<Blob>;
+	onDownload?: ((artifact: ArtifactRef) => void) | undefined;
+	showDownload?: boolean;
+}) {
+	const [url, setUrl] = useState<string>();
+	const [failed, setFailed] = useState(false);
+	const [expanded, setExpanded] = useState(false);
+	useEffect(() => {
+		let disposed = false;
+		let objectUrl: string | undefined;
+		setUrl(undefined);
+		setFailed(false);
+		setExpanded(false);
+		void onLoad(artifact)
+			.then((blob) => {
+				objectUrl = URL.createObjectURL(blob);
+				if (disposed) URL.revokeObjectURL(objectUrl);
+				else setUrl(objectUrl);
+			})
+			.catch(() => {
+				if (!disposed) setFailed(true);
+			});
+		return () => {
+			disposed = true;
+			if (objectUrl) URL.revokeObjectURL(objectUrl);
+		};
+	}, [artifact.id, onLoad]);
+	if (failed)
+		return (
+			<div className="media-model-error" role="alert">
+				{showDownload ? "媒体预览加载失败，可下载文件查看。" : "媒体预览加载失败。"}
+				{showDownload && isPreviewableImageArtifact(artifact) && onDownload && (
+					<button
+						type="button"
+						className="image-download"
+						title="下载图片"
+						aria-label="下载图片"
+						onClick={() => onDownload(artifact)}
+					>
+						<Download size={15} />
+					</button>
+				)}
+			</div>
+		);
+	return url ? (
+		artifact.mimeType.toLowerCase().startsWith("video/") ? (
+			<video
+				className="tool-video-preview"
+				src={url}
+				controls
+				playsInline
+				preload="metadata"
+				aria-label={artifact.name}
+				onError={() => setFailed(true)}
+			/>
+		) : (
+			<div className="image-preview">
+				<button
+					type="button"
+					className="image-thumbnail"
+					title={`查看 ${artifact.name}`}
+					aria-label={`查看 ${artifact.name}`}
+					onClick={() => setExpanded(true)}
+				>
+					<img
+						className="tool-image-preview"
+						src={url}
+						alt={artifact.name}
+						loading="lazy"
+						onError={() => setFailed(true)}
+					/>
+				</button>
+				{showDownload && (
+					<a className="image-download" href={url} download={artifact.name} title="下载图片" aria-label="下载图片">
+						<Download size={15} />
+					</a>
+				)}
+				{expanded && (
+					<ImageViewer url={url} name={artifact.name} showDownload={showDownload} onClose={() => setExpanded(false)} />
+				)}
+			</div>
+		)
+	) : (
+		<div className="tool-image-loading" aria-label={`正在载入 ${artifact.name}`} />
+	);
+}
+
 export function ToolResult({
 	parts,
 	toolName,
 	input,
 	isError,
 	onDownload,
+	onLoadArtifact,
 }: {
 	parts: ContentPart[];
 	toolName: string;
 	input?: unknown;
 	isError?: boolean;
 	onDownload?: (artifact: ArtifactRef) => void;
+	onLoadArtifact?: (artifact: ArtifactRef) => Promise<Blob>;
 }) {
 	const path = asText(asRecord(input).path);
 	const lang = toolName === "read_file" && path ? languageFromPath(path) : "";
@@ -383,7 +631,12 @@ export function ToolResult({
 	const nodes: ReactNode[] = [];
 	for (const [index, part] of parts.entries()) {
 		if (part.type === "text") {
-			if (echoesInput || part.text.trim() === "") continue;
+			if (
+				echoesInput ||
+				part.text.trim() === "" ||
+				(toolName === "browser_screenshot" && part.text.startsWith("[Image result: image/"))
+			)
+				continue;
 			nodes.push(
 				lang ? (
 					<CodeBlock code={part.text} lang={lang} key={index} />
@@ -391,11 +644,22 @@ export function ToolResult({
 					<pre className="tool-output" key={index}>
 						{part.text}
 					</pre>
-				),
+				)
 			);
 			continue;
 		}
 		if (part.type === "artifact") {
+			if (onLoadArtifact && isPreviewableMediaArtifact(part.artifact)) {
+				nodes.push(
+					<ArtifactMediaPreview
+						artifact={part.artifact}
+						onLoad={onLoadArtifact}
+						onDownload={onDownload}
+						key={`preview-${index}`}
+					/>
+				);
+				if (isPreviewableImageArtifact(part.artifact)) continue;
+			}
 			nodes.push(
 				<div className="artifact-line" key={index}>
 					<FileText size={14} /> <span>{part.artifact.name}</span>
@@ -404,7 +668,7 @@ export function ToolResult({
 							<Download size={14} />
 						</button>
 					) : null}
-				</div>,
+				</div>
 			);
 		}
 	}
@@ -426,18 +690,20 @@ export function ToolCard({
 	const description = describeTool(toolName, input);
 	const failed = status === "error" || status === "aborted";
 	const hasDetail = Boolean(description.body) || Boolean(children) || Boolean(description.fallbackArgs);
-	const [open, setOpen] = useState(() => failed || (!description.quiet && hasDetail));
+	// Keep intermediate tool attempts compact. The final assistant failure is
+	// rendered at the end of the turn; raw tool diagnostics stay on demand.
+	const [open, setOpen] = useState(() => status === "awaiting_approval");
 	const expandable = hasDetail;
 	const args = asRecord(input);
 	const argEntries = description.fallbackArgs ? Object.entries(args) : [];
 	useEffect(() => {
-		if (failed || (!description.quiet && hasDetail)) setOpen(true);
-	}, [description.quiet, failed, hasDetail]);
+		if (status === "awaiting_approval") setOpen(true);
+	}, [status]);
 	return (
-		<div className={`tool-card ${status}${open ? " open" : ""}`}>
+		<div className={`tool-trace ${status}${open ? " open" : ""}`}>
 			<button
 				type="button"
-				className="tool-card-head"
+				className="tool-trace-summary"
 				onClick={() => expandable && setOpen(!open)}
 				aria-expanded={expandable ? open : undefined}
 				disabled={!expandable}
@@ -451,10 +717,10 @@ export function ToolCard({
 					</span>
 				) : null}
 				{description.meta ? <span className="tool-meta">{description.meta}</span> : null}
-				<StatusBadge status={status} />
+				<StatusIndicator status={status} />
 			</button>
 			{open ? (
-				<div className="tool-card-body">
+				<div className="tool-trace-detail">
 					{argEntries.length > 0 ? (
 						<dl className="tool-args">
 							{argEntries.map(([key, value]) => (

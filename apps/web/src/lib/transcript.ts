@@ -22,6 +22,20 @@ export function messageText(parts: ContentPart[]): string {
 }
 
 /**
+ * Whether a transcript item still has something user-facing to render.
+ * Thinking deltas are intentionally excluded: they are internal model output,
+ * while tool calls and artifacts have their own transcript affordances.
+ */
+export function hasVisibleContent(parts: ContentPart[], renderedToolCalls?: Set<string>): boolean {
+	return parts.some((part) => {
+		if (part.type === "text") return part.text.trim() !== "";
+		if (part.type === "thinking") return false;
+		if (part.type === "artifact") return true;
+		return renderedToolCalls?.has(part.toolCallId) !== true;
+	});
+}
+
+/**
  * The item a fork has to stop at for the new session to end *before* `itemId` —
  * what re-sending an edited message needs, since the edited text replaces the
  * original rather than following it.

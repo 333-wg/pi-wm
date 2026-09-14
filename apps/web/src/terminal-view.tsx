@@ -5,7 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import type { ServerMessage, TerminalServerMessage } from "@wuming/protocol";
 import { terminalTheme } from "./lib/terminal-theme.js";
 
-function id(): string { return crypto.randomUUID(); }
+function id(): string {
+	return crypto.randomUUID();
+}
 
 function bearerProtocol(token: string): string {
 	const bytes = new TextEncoder().encode(token);
@@ -77,9 +79,23 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 			handshake = { requestId, mode };
 			if (mode === "create") {
 				terminalExists = true;
-				send({ type: "terminal.create", requestId, terminalId, workspaceId, cols: term.cols, rows: term.rows });
+				send({
+					type: "terminal.create",
+					requestId,
+					terminalId,
+					workspaceId,
+					cols: term.cols,
+					rows: term.rows,
+				});
 			} else {
-				send({ type: "terminal.attach", requestId, terminalId, sinceSeq: lastSeq, cols: term.cols, rows: term.rows });
+				send({
+					type: "terminal.attach",
+					requestId,
+					terminalId,
+					sinceSeq: lastSeq,
+					cols: term.cols,
+					rows: term.rows,
+				});
 			}
 		};
 		const connect = () => {
@@ -94,7 +110,11 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 			current.addEventListener("message", (raw) => {
 				if (disposed || socket !== current) return;
 				let message: ServerMessage | TerminalServerMessage;
-				try { message = JSON.parse(String(raw.data)) as ServerMessage | TerminalServerMessage; } catch { return; }
+				try {
+					message = JSON.parse(String(raw.data)) as ServerMessage | TerminalServerMessage;
+				} catch {
+					return;
+				}
 				if (message.type === "hello") {
 					if (!message.capabilities.includes("terminal")) {
 						reconnectEnabled = false;
@@ -136,12 +156,22 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 					term.writeln(`\r\n[进程已退出：${message.exitCode ?? "未知"}]`);
 				} else if (message.type === "terminal.error" && (!message.terminalId || message.terminalId === terminalId)) {
 					const currentHandshake = handshake;
-					if (currentHandshake && currentHandshake.requestId === message.requestId && currentHandshake.mode === "attach" && message.code === "not_found") {
+					if (
+						currentHandshake &&
+						currentHandshake.requestId === message.requestId &&
+						currentHandshake.mode === "attach" &&
+						message.code === "not_found"
+					) {
 						terminalExists = false;
 						startHandshake("create");
 						return;
 					}
-					if (currentHandshake && currentHandshake.requestId === message.requestId && currentHandshake.mode === "create" && message.code === "conflict") {
+					if (
+						currentHandshake &&
+						currentHandshake.requestId === message.requestId &&
+						currentHandshake.mode === "create" &&
+						message.code === "conflict"
+					) {
 						terminalExists = true;
 						startHandshake("attach");
 						return;
@@ -169,7 +199,8 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 			reconnectEnabled = false;
 			readyRef.current = false;
 			if (reconnectTimer) clearTimeout(reconnectTimer);
-			if (socket?.readyState === WebSocket.OPEN && terminalExists) send({ type: "terminal.close", requestId: id(), terminalId });
+			if (socket?.readyState === WebSocket.OPEN && terminalExists)
+				send({ type: "terminal.close", requestId: id(), terminalId });
 			socket?.close();
 			observer.disconnect();
 			themeObserver.disconnect();
@@ -180,7 +211,22 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 
 	return (
 		<section className="terminal-workbench" aria-label="终端">
-			<header className="terminal-heading"><strong>终端</strong><span className={`terminal-status terminal-${status}`}>{({ connecting: "连接中", reconnecting: "重新连接中", ready: "就绪", closed: "已关闭", error: "错误" } as const)[status]}</span></header>
+			<header className="terminal-heading">
+				<strong>终端</strong>
+				<span className={`terminal-status terminal-${status}`}>
+					{
+						(
+							{
+								connecting: "连接中",
+								reconnecting: "重新连接中",
+								ready: "就绪",
+								closed: "已关闭",
+								error: "错误",
+							} as const
+						)[status]
+					}
+				</span>
+			</header>
 			<div className="terminal-surface" ref={containerRef} />
 			{error && <div className="terminal-error">{error}</div>}
 		</section>

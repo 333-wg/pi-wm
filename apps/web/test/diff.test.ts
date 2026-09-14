@@ -47,11 +47,26 @@ describe("diffLines", () => {
 		// comes back as replaced.
 		expect(countChanges(rows)).toEqual({ added: 1, removed: 1 });
 		expect(rows).toHaveLength(2001);
-		expect(rows[998]).toEqual({ kind: "context", text: "line 999", oldNumber: 999, newNumber: 999 });
+		expect(rows[998]).toEqual({
+			kind: "context",
+			text: "line 999",
+			oldNumber: 999,
+			newNumber: 999,
+		});
 		expect(rows[999]).toEqual({ kind: "del", text: "line 1000", oldNumber: 1000 });
 		expect(rows[1000]).toEqual({ kind: "add", text: "line 1000 edited", newNumber: 1000 });
-		expect(rows[1001]).toEqual({ kind: "context", text: "line 1001", oldNumber: 1001, newNumber: 1001 });
-		expect(rows[2000]).toEqual({ kind: "context", text: "line 2000", oldNumber: 2000, newNumber: 2000 });
+		expect(rows[1001]).toEqual({
+			kind: "context",
+			text: "line 1001",
+			oldNumber: 1001,
+			newNumber: 1001,
+		});
+		expect(rows[2000]).toEqual({
+			kind: "context",
+			text: "line 2000",
+			oldNumber: 2000,
+			newNumber: 2000,
+		});
 	});
 
 	it("does not let the tail claim a line the head already took", () => {
@@ -72,7 +87,10 @@ describe("diffLines", () => {
 	});
 
 	it("still degrades to a block replacement when the changed middle is huge", () => {
-		const rows = diffLines(["head", ...body(600, "old"), "tail"].join("\n"), ["head", ...body(600, "new"), "tail"].join("\n"));
+		const rows = diffLines(
+			["head", ...body(600, "old"), "tail"].join("\n"),
+			["head", ...body(600, "new"), "tail"].join("\n")
+		);
 		expect(countChanges(rows)).toEqual({ added: 600, removed: 600 });
 		// Numbering stays anchored to the file, not to the trimmed middle.
 		expect(rows[1]).toEqual({ kind: "del", text: "old 1", oldNumber: 2 });
@@ -160,7 +178,9 @@ describe("parseUnifiedDiff", () => {
 	});
 
 	it("reports a binary patch instead of inventing lines for it", () => {
-		expect(parseUnifiedDiff("diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n")).toEqual({ hunks: [], binary: true });
+		expect(
+			parseUnifiedDiff("diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n")
+		).toEqual({ hunks: [], binary: true });
 	});
 
 	it("accepts a header without line counts and normalises CRLF", () => {

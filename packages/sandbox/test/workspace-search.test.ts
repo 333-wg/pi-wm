@@ -55,7 +55,10 @@ describe("WorkspaceSearcher ignore handling", () => {
 	});
 
 	it("walks everything except the built-in names when gitignore is not followed", async () => {
-		const root = await workspace("no-ignore", { ...ignoreFixture, "node_modules/pkg/index.js": "vendored\n" });
+		const root = await workspace("no-ignore", {
+			...ignoreFixture,
+			"node_modules/pkg/index.js": "vendored\n",
+		});
 		const searcher = await WorkspaceSearcher.create(root, { followGitignore: false });
 
 		const paths = (await searcher.glob("**/*")).paths;
@@ -84,7 +87,12 @@ describe("WorkspaceSearcher.glob", () => {
 		});
 		const searcher = await WorkspaceSearcher.create(root);
 
-		expect((await searcher.glob("*.{ts,tsx}")).paths.slice().sort()).toEqual(["a.ts", "b.tsx", "src/deep/leaf.ts", "src/index.ts"]);
+		expect((await searcher.glob("*.{ts,tsx}")).paths.slice().sort()).toEqual([
+			"a.ts",
+			"b.tsx",
+			"src/deep/leaf.ts",
+			"src/index.ts",
+		]);
 		expect((await searcher.glob("src/**/*.ts")).paths.slice().sort()).toEqual(["src/deep/leaf.ts", "src/index.ts"]);
 		expect((await searcher.glob("src/*.ts")).paths).toEqual(["src/index.ts"]);
 		expect((await searcher.glob("?.ts")).paths).toEqual(["a.ts"]);
@@ -113,8 +121,16 @@ describe("WorkspaceSearcher.grep", () => {
 		const searcher = await WorkspaceSearcher.create(await workspace("grep", grepFixture));
 
 		const result = await searcher.grep("needle", { context: 1 });
-		expect(result).toMatchObject({ filesSearched: 3, filesMatched: 2, totalMatches: 3, truncated: false });
-		expect(result.counts).toEqual([{ path: "src/b.ts", count: 2 }, { path: "src/a.ts", count: 1 }]);
+		expect(result).toMatchObject({
+			filesSearched: 3,
+			filesMatched: 2,
+			totalMatches: 3,
+			truncated: false,
+		});
+		expect(result.counts).toEqual([
+			{ path: "src/b.ts", count: 2 },
+			{ path: "src/a.ts", count: 1 },
+		]);
 		expect(result.matches.find((match) => match.path === "src/a.ts")).toEqual({
 			path: "src/a.ts",
 			line: 3,
@@ -128,10 +144,16 @@ describe("WorkspaceSearcher.grep", () => {
 		const searcher = await WorkspaceSearcher.create(await workspace("grep-modes", grepFixture));
 
 		expect((await searcher.grep("needle", { caseInsensitive: true })).totalMatches).toBe(4);
-		expect((await searcher.grep("needle", { glob: "*.md" }))).toMatchObject({ filesSearched: 1, totalMatches: 0 });
+		expect(await searcher.grep("needle", { glob: "*.md" })).toMatchObject({
+			filesSearched: 1,
+			totalMatches: 0,
+		});
 		expect((await searcher.grep("n..dle")).totalMatches).toBe(3);
 		expect((await searcher.grep("n..dle", { literal: true })).totalMatches).toBe(0);
-		expect((await searcher.grep("needle", { path: "src/b.ts" }))).toMatchObject({ filesSearched: 1, totalMatches: 2 });
+		expect(await searcher.grep("needle", { path: "src/b.ts" })).toMatchObject({
+			filesSearched: 1,
+			totalMatches: 2,
+		});
 	});
 
 	it("caps returned matches while still counting them, and rejects an invalid pattern", async () => {
@@ -171,7 +193,10 @@ describe("WorkspaceSearcher.list", () => {
 		const searcher = await WorkspaceSearcher.create(await workspace("list", listFixture));
 
 		expect(await searcher.list()).toMatchObject({ path: ".", truncated: false });
-		expect((await searcher.list()).entries.map((entry) => `${entry.kind[0]}:${entry.path}`)).toEqual(["d:src", "f:readme.md"]);
+		expect((await searcher.list()).entries.map((entry) => `${entry.kind[0]}:${entry.path}`)).toEqual([
+			"d:src",
+			"f:readme.md",
+		]);
 		expect((await searcher.list(".", 3)).entries.map((entry) => entry.path).sort()).toEqual([
 			"readme.md",
 			"src",
@@ -189,7 +214,9 @@ describe("WorkspaceSearcher.list", () => {
 			entries: [{ path: "readme.md", kind: "file", size: 5 }],
 		});
 
-		const bounded = await WorkspaceSearcher.create(await workspace("list-budget", listFixture), { maxFiles: 1 });
+		const bounded = await WorkspaceSearcher.create(await workspace("list-budget", listFixture), {
+			maxFiles: 1,
+		});
 		const listing = await bounded.list(".", 5);
 		expect(listing.truncated).toBe(true);
 		expect(listing.entries).toHaveLength(1);
@@ -200,7 +227,11 @@ describe("WorkspaceSearcher.list", () => {
 
 		await expect(searcher.list("../outside")).rejects.toMatchObject({ code: "path_escape" });
 		await expect(searcher.list("/etc")).rejects.toMatchObject({ code: "path_invalid" });
-		await expect(searcher.glob("*", { path: "C:/Windows" })).rejects.toMatchObject({ code: "path_invalid" });
-		await expect(searcher.grep("x", { path: "src/../../escape" })).rejects.toMatchObject({ code: "path_escape" });
+		await expect(searcher.glob("*", { path: "C:/Windows" })).rejects.toMatchObject({
+			code: "path_invalid",
+		});
+		await expect(searcher.grep("x", { path: "src/../../escape" })).rejects.toMatchObject({
+			code: "path_escape",
+		});
 	});
 });

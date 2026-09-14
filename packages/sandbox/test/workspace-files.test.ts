@@ -27,7 +27,9 @@ describe("WorkspaceFileExecutor", () => {
 			content: "beta",
 			truncated: true,
 		});
-		await expect(files.editText("src/example.txt", "beta", "gamma")).rejects.toMatchObject({ code: "edit_conflict" });
+		await expect(files.editText("src/example.txt", "beta", "gamma")).rejects.toMatchObject({
+			code: "edit_conflict",
+		});
 		await files.editText("src/example.txt", "beta", "gamma", { replaceAll: true });
 		expect((await files.readText("src/example.txt")).content).toBe("alpha\ngamma\ngamma\n");
 	});
@@ -41,9 +43,15 @@ describe("WorkspaceFileExecutor", () => {
 		const files = await WorkspaceFileExecutor.create(root);
 
 		await expect(files.readText("../secret.txt")).rejects.toMatchObject({ code: "path_escape" });
-		await expect(files.writeText(join(outside, "absolute.txt"), "no")).rejects.toMatchObject({ code: "path_invalid" });
-		await expect(files.readText("escape/secret.txt")).rejects.toMatchObject({ code: "path_escape" });
-		await expect(files.writeText("escape/new.txt", "no")).rejects.toMatchObject({ code: "path_escape" });
+		await expect(files.writeText(join(outside, "absolute.txt"), "no")).rejects.toMatchObject({
+			code: "path_invalid",
+		});
+		await expect(files.readText("escape/secret.txt")).rejects.toMatchObject({
+			code: "path_escape",
+		});
+		await expect(files.writeText("escape/new.txt", "no")).rejects.toMatchObject({
+			code: "path_escape",
+		});
 	});
 
 	it("enforces read and write byte ceilings", async () => {
@@ -52,7 +60,9 @@ describe("WorkspaceFileExecutor", () => {
 		const files = await WorkspaceFileExecutor.create(root, { maxReadBytes: 5, maxWriteBytes: 5 });
 		const result = await files.readText("large.txt");
 		expect(result).toMatchObject({ content: "12345", totalBytes: 10, truncated: true });
-		await expect(files.writeText("too-large.txt", "123456")).rejects.toMatchObject({ code: "file_too_large" });
+		await expect(files.writeText("too-large.txt", "123456")).rejects.toMatchObject({
+			code: "file_too_large",
+		});
 	});
 
 	it("atomically replaces files and rejects a stale conditional write", async () => {
@@ -62,7 +72,9 @@ describe("WorkspaceFileExecutor", () => {
 		const expected = createHash("sha256").update("first").digest("hex");
 		await writeFile(join(root, "state.txt"), "changed externally", "utf8");
 
-		await expect(files.writeTextIfUnchanged("state.txt", "replacement", expected)).rejects.toMatchObject({ code: "edit_conflict" });
+		await expect(files.writeTextIfUnchanged("state.txt", "replacement", expected)).rejects.toMatchObject({
+			code: "edit_conflict",
+		});
 		expect((await files.readText("state.txt")).content).toBe("changed externally");
 		expect((await readdir(root)).filter((name) => name.includes(".wuming-") && name.endsWith(".tmp"))).toEqual([]);
 	});

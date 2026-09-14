@@ -24,7 +24,11 @@ describe("terminalTheme", () => {
 	it("trims the value the browser hands back", () => {
 		// Custom properties keep the whitespace they were authored with, so a token
 		// can arrive padded; every slot has to survive that, not just the parsed one.
-		const padded = reader({ "--term-bg": " #17201a", "--term-text": "#e7eee9 ", "--term-ready": " #a8d6b5 " });
+		const padded = reader({
+			"--term-bg": " #17201a",
+			"--term-text": "#e7eee9 ",
+			"--term-ready": " #a8d6b5 ",
+		});
 		expect(terminalTheme(padded)).toStrictEqual(RESOLVED);
 	});
 
@@ -32,7 +36,9 @@ describe("terminalTheme", () => {
 		// Not a fallback colour: xterm's own default is the honest answer when the
 		// stylesheet has nothing to say.
 		expect(terminalTheme(reader({}))).toStrictEqual({});
-		expect(terminalTheme(reader({ "--term-bg": "#17201a", "--term-text": "   " }))).toStrictEqual({ background: "#17201a" });
+		expect(terminalTheme(reader({ "--term-bg": "#17201a", "--term-text": "   " }))).toStrictEqual({
+			background: "#17201a",
+		});
 	});
 
 	it("passes an unwashable accent through but skips the selection", () => {

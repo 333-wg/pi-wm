@@ -53,7 +53,11 @@ function optionFor(value: PermissionValue): PermissionOption {
 	return OPTIONS.find((option) => option.id === permissionMode(value)) ?? OPTIONS[1]!;
 }
 
-export function PermissionPicker({ value, disabled, onChange }: {
+export function PermissionPicker({
+	value,
+	disabled,
+	onChange,
+}: {
 	value: PermissionValue;
 	disabled: boolean;
 	onChange: (value: PermissionValue) => Promise<void>;
@@ -113,7 +117,10 @@ export function PermissionPicker({ value, disabled, onChange }: {
 				aria-expanded={open}
 				aria-busy={saving}
 				title={disabled ? "会话空闲时可更改权限" : selected.description}
-				onClick={() => { setError(undefined); setOpen((current) => !current); }}
+				onClick={() => {
+					setError(undefined);
+					setOpen((current) => !current);
+				}}
 			>
 				<span className="permission-trigger-icon">{selected.icon}</span>
 				<span className="permission-trigger-label">{selected.label}</span>
@@ -121,7 +128,10 @@ export function PermissionPicker({ value, disabled, onChange }: {
 			</button>
 			{open && (
 				<div className="permission-menu" role="menu" aria-label="工具权限模式">
-					<div className="permission-menu-heading"><span>应如何批准 Wuming 操作？</span><span>会话权限</span></div>
+					<div className="permission-menu-heading">
+						<span>应如何批准 Wuming 操作？</span>
+						<span>所有项目和对话</span>
+					</div>
 					<div className="permission-options">
 						{OPTIONS.map((option) => (
 							<button
@@ -134,12 +144,19 @@ export function PermissionPicker({ value, disabled, onChange }: {
 								onClick={() => void select(option)}
 							>
 								<span className="permission-option-icon">{option.icon}</span>
-								<span className="permission-option-copy"><strong>{option.label}</strong><span>{option.description}</span></span>
+								<span className="permission-option-copy">
+									<strong>{option.label}</strong>
+									<span>{option.description}</span>
+								</span>
 								{option.id === selected.id && <Check className="permission-check" size={17} />}
 							</button>
 						))}
 					</div>
-					{error && <div className="permission-error" role="alert">{error}</div>}
+					{error && (
+						<div className="permission-error" role="alert">
+							{error}
+						</div>
+					)}
 				</div>
 			)}
 		</div>

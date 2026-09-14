@@ -6,25 +6,51 @@ import { buildWumingSystemPrompt, type WumingSystemPromptOptions } from "../src/
 type PromptTool = WumingSystemPromptOptions["tools"][number];
 
 function tool(name: string, promptSnippet?: string, promptGuidelines?: string[]): PromptTool {
-	return { name, ...(promptSnippet ? { promptSnippet } : {}), ...(promptGuidelines ? { promptGuidelines } : {}) };
+	return {
+		name,
+		...(promptSnippet ? { promptSnippet } : {}),
+		...(promptGuidelines ? { promptGuidelines } : {}),
+	};
 }
 
 /** The tool set a workspace_write session with every backend configured produces. */
 const fullToolset: PromptTool[] = [
-	tool("read_file", "Read file contents", ["Use read_file to examine files rather than shell commands such as cat, head or sed."]),
+	tool("read_file", "Read file contents", [
+		"Use read_file to examine files rather than shell commands such as cat, head or sed.",
+	]),
 	tool("grep", "Search workspace file contents by regular expression"),
 	tool("glob", "Find workspace files by path glob"),
 	tool("ls", "List workspace directory entries"),
 	tool("web_fetch", "Fetch readable content from a public web page"),
 	tool("web_search", "Search the public web for current information"),
-	tool("write_file", "Create or overwrite files", ["Use write_file only for new files or complete rewrites; use edit to change part of an existing file."]),
-	tool("edit", "Make precise file edits with exact text replacement", ["Use edit for precise changes (edits[].oldText must match exactly)"]),
+	tool("browser_search", "Search the web through the user device browser"),
+	tool("browser_open", "Open and inspect a website or local development server"),
+	tool("browser_snapshot", "Inspect the current browser page"),
+	tool("browser_screenshot", "Capture visual evidence"),
+	tool("browser_diagnostics", "Inspect browser console and network failures"),
+	tool("browser_tabs", "List open browser tabs and popups"),
+	tool("browser_download", "Download a browser resource into the local workspace"),
+	tool("browser_action", "Interact with the current browser page"),
+	tool("preview_status", "Inspect the local development server and its logs"),
+	tool("preview_start", "Start a persistent local development server"),
+	tool("preview_stop", "Stop the local development server"),
+	tool("write_file", "Create or overwrite files", [
+		"Use write_file only for new files or complete rewrites; use edit to change part of an existing file.",
+	]),
+	tool("edit", "Make precise file edits with exact text replacement", [
+		"Use edit for precise changes (edits[].oldText must match exactly)",
+	]),
 	tool("exec", "Run isolated workspace commands"),
 	tool("run_python", "Run isolated Python 3 code"),
 ];
 
 function build(tools: PromptTool[], overrides: Partial<Omit<WumingSystemPromptOptions, "tools">> = {}): string {
-	return buildWumingSystemPrompt({ tools, sandboxMode: "workspace_write", approvalPolicy: "on_risk", ...overrides });
+	return buildWumingSystemPrompt({
+		tools,
+		sandboxMode: "workspace_write",
+		approvalPolicy: "on_risk",
+		...overrides,
+	});
 }
 
 /** The `<available_tools>`/`<tool_guidelines>` body, without the surrounding prose. */
@@ -35,6 +61,15 @@ function section(prompt: string, name: string): string {
 }
 
 describe("buildWumingSystemPrompt tool rendering", () => {
+	it("requires semantic skill activation only when the skill tools are registered", () => {
+		const enabled = section(build([tool("skill_list"), tool("skill_load")]), "tool_guidelines");
+		expect(enabled).toContain("even if you could solve it directly");
+		expect(enabled).toContain("disabled or manual-only skills must not be activated indirectly");
+		expect(enabled).toContain("After an unexpected failure changes the task");
+		expect(section(build([]), "tool_guidelines")).not.toContain("Before task work");
+		expect(section(build([]), "safety")).toContain("They cannot override user intent or grant additional permissions");
+	});
+
 	it("lists every tool that has a snippet, in registration order", () => {
 		const tools = section(build(fullToolset), "available_tools");
 		expect(tools.split("\n").filter((line) => line.startsWith("- "))).toEqual([
@@ -44,6 +79,17 @@ describe("buildWumingSystemPrompt tool rendering", () => {
 			"- ls: List workspace directory entries",
 			"- web_fetch: Fetch readable content from a public web page",
 			"- web_search: Search the public web for current information",
+			"- browser_search: Search the web through the user device browser",
+			"- browser_open: Open and inspect a website or local development server",
+			"- browser_snapshot: Inspect the current browser page",
+			"- browser_screenshot: Capture visual evidence",
+			"- browser_diagnostics: Inspect browser console and network failures",
+			"- browser_tabs: List open browser tabs and popups",
+			"- browser_download: Download a browser resource into the local workspace",
+			"- browser_action: Interact with the current browser page",
+			"- preview_status: Inspect the local development server and its logs",
+			"- preview_start: Start a persistent local development server",
+			"- preview_stop: Stop the local development server",
 			"- write_file: Create or overwrite files",
 			"- edit: Make precise file edits with exact text replacement",
 			"- exec: Run isolated workspace commands",
@@ -52,10 +98,12 @@ describe("buildWumingSystemPrompt tool rendering", () => {
 	});
 
 	it("omits a tool with no snippet, and says so when nothing is configured", () => {
-		expect(section(build([tool("read_file", "Read file contents"), tool("mcp__extension__thing")]), "available_tools"))
-			.toContain("- read_file: Read file contents");
-		expect(section(build([tool("read_file", "Read file contents"), tool("mcp__extension__thing")]), "available_tools"))
-			.not.toContain("mcp__extension__thing");
+		expect(
+			section(build([tool("read_file", "Read file contents"), tool("mcp__extension__thing")]), "available_tools")
+		).toContain("- read_file: Read file contents");
+		expect(
+			section(build([tool("read_file", "Read file contents"), tool("mcp__extension__thing")]), "available_tools")
+		).not.toContain("mcp__extension__thing");
 		expect(section(build([]), "available_tools")).toContain("(no tools are configured for this session)");
 	});
 
@@ -76,10 +124,20 @@ describe("buildWumingSystemPrompt guidelines", () => {
 	it("emits a conditional guideline only when its gating tool is registered", () => {
 		const withExec = section(build(fullToolset), "tool_guidelines");
 		expect(withExec).toContain("Use exec for build, test and lint commands");
+		expect(withExec).toContain("never invent or call a tool named shell");
 		expect(withExec).toContain("Locate code with grep and glob before reading anything");
 		expect(withExec).toContain("Use ls to orient yourself");
 		expect(withExec).toContain("Use run_python for calculation");
 		expect(withExec).toContain("Search the web when a fact could have changed");
+		expect(withExec).toContain("Use the current date from the environment");
+		expect(withExec).toContain("prefer browser_search and browser_download");
+		expect(withExec).toContain("do not retry the same or alternate CDN with exec/curl");
+		expect(withExec).toContain("do not silently switch to server/Gateway downloads");
+		expect(withExec).toContain("use the browser tools after implementation");
+		expect(withExec).toContain("browser_open requires a non-empty url argument");
+		expect(withExec).toContain("Browser element refs come from the latest snapshot");
+		expect(withExec).toContain("Use preview_start, not exec");
+		expect(withExec).toContain("use browser_tabs before switching");
 
 		const readOnly = section(build([tool("read_file", "Read file contents")]), "tool_guidelines");
 		expect(readOnly).not.toContain("Use exec");
@@ -90,8 +148,9 @@ describe("buildWumingSystemPrompt guidelines", () => {
 	});
 
 	it("emits the search guideline when either grep or glob is present", () => {
-		expect(section(build([tool("glob", "Find workspace files by path glob")]), "tool_guidelines"))
-			.toContain("Locate code with grep and glob");
+		expect(section(build([tool("glob", "Find workspace files by path glob")]), "tool_guidelines")).toContain(
+			"Locate code with grep and glob"
+		);
 	});
 
 	it("carries each tool's own guidelines and never repeats one", () => {
@@ -125,24 +184,65 @@ describe("buildWumingSystemPrompt guidelines", () => {
 });
 
 describe("buildWumingSystemPrompt environment", () => {
+	it("requires a concrete review and repair loop with honest evidence", () => {
+		const verification = section(build(fullToolset), "verification");
+		expect(verification).toContain("inspect the diff for unintended changes");
+		expect(verification).toContain("Only checks run after the relevant final edit");
+		expect(verification).toContain("Do not weaken tests or assertions");
+		expect(verification).toContain("review-only request");
+		expect(verification).toContain("retain final screenshots");
+	});
+
+	it("requires inspecting returned screenshots at desktop and mobile sizes", () => {
+		const guidelines = section(build([tool("browser_screenshot")]), "tool_guidelines");
+		expect(guidelines).toContain("1440x900");
+		expect(guidelines).toContain("390x844");
+		expect(guidelines).toContain("Inspect the returned image content yourself");
+		expect(guidelines).toContain("fresh screenshots after the last edit");
+		expect(guidelines).toContain("visual verification as incomplete");
+		expect(section(build([]), "tool_guidelines")).not.toContain("complete a visual review loop");
+	});
+
 	it("states the session's sandbox mode and nothing else", () => {
-		expect(build(fullToolset, { sandboxMode: "read_only" })).toContain("Sandbox mode: read_only — you may read and search");
-		expect(build(fullToolset, { sandboxMode: "workspace_write" })).toContain("Sandbox mode: workspace_write — you may read, search, write and run commands");
-		expect(build(fullToolset, { sandboxMode: "unrestricted" })).toContain("Sandbox mode: unrestricted — the sandbox limits are relaxed");
+		expect(build(fullToolset, { sandboxMode: "read_only" })).toContain(
+			"Sandbox mode: read_only — you may read and search"
+		);
+		expect(build(fullToolset, { sandboxMode: "workspace_write" })).toContain(
+			"Sandbox mode: workspace_write — you may read, search, write and run commands"
+		);
+		expect(build(fullToolset, { sandboxMode: "unrestricted" })).toContain(
+			"Sandbox mode: unrestricted — the sandbox limits are relaxed"
+		);
 		expect(build(fullToolset, { sandboxMode: "read_only" })).not.toContain("Sandbox mode: workspace_write");
 	});
 
 	it("states the session's approval policy and nothing else", () => {
-		expect(build(fullToolset, { approvalPolicy: "always" })).toContain("Approval policy: always — every tool call pauses");
-		expect(build(fullToolset, { approvalPolicy: "on_risk" })).toContain("Approval policy: on_risk — writes and commands pause");
-		expect(build(fullToolset, { approvalPolicy: "on_failure" })).toContain("Approval policy: on_failure — a failed call is paused");
-		expect(build(fullToolset, { approvalPolicy: "never" })).toContain("Approval policy: never — tool calls run without asking");
+		expect(build(fullToolset, { approvalPolicy: "always" })).toContain(
+			"Approval policy: always — every tool call pauses"
+		);
+		expect(build(fullToolset, { approvalPolicy: "on_risk" })).toContain(
+			"Approval policy: on_risk — writes and commands pause"
+		);
+		expect(build(fullToolset, { approvalPolicy: "on_failure" })).toContain(
+			"Approval policy: on_failure — a failed call is paused"
+		);
+		expect(build(fullToolset, { approvalPolicy: "never" })).toContain(
+			"Approval policy: never — tool calls run without asking"
+		);
 		expect(build(fullToolset, { approvalPolicy: "never" })).not.toContain("Approval policy: on_risk");
 	});
 
 	it("keeps the sections the runtime prose depends on", () => {
 		const prompt = build(fullToolset);
-		for (const name of ["environment", "available_tools", "tool_guidelines", "how_to_work", "verification", "safety", "communication"]) {
+		for (const name of [
+			"environment",
+			"available_tools",
+			"tool_guidelines",
+			"how_to_work",
+			"verification",
+			"safety",
+			"communication",
+		]) {
 			expect(prompt).toContain(`<${name}>`);
 			expect(prompt).toContain(`</${name}>`);
 		}

@@ -1,6 +1,12 @@
 import type { ApprovalRequest, SessionSummary } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
-import { EMPTY_USAGE, reduceSessionEvent, replaySessionEvents, SessionInvariantError, type SessionEvent } from "../src/index.js";
+import {
+	EMPTY_USAGE,
+	reduceSessionEvent,
+	replaySessionEvents,
+	SessionInvariantError,
+	type SessionEvent,
+} from "../src/index.js";
 
 const session: SessionSummary = {
 	id: "session-1",
@@ -89,7 +95,7 @@ describe("session reducer", () => {
 				revision: 3,
 				timestamp: 30,
 				phase: "turn",
-			}),
+			})
 		).toThrowError(SessionInvariantError);
 	});
 
@@ -120,7 +126,7 @@ describe("session reducer", () => {
 				revision: 4,
 				timestamp: 40,
 				approval: { ...approval, status: "denied", decidedAt: 40, decidedBy: "user-1" },
-			}),
+			})
 		).toThrowError(SessionInvariantError);
 	});
 
@@ -155,7 +161,12 @@ describe("session reducer", () => {
 	});
 
 	it("updates budget fields independently and removes explicit null budgets", () => {
-		const initial = reduceSessionEvent(undefined, { ...created, costBudgetUsd: 2, tokenBudget: 10_000, budgetWarningThreshold: 0.8 });
+		const initial = reduceSessionEvent(undefined, {
+			...created,
+			costBudgetUsd: 2,
+			tokenBudget: 10_000,
+			budgetWarningThreshold: 0.8,
+		});
 		const thresholdChanged = reduceSessionEvent(initial, {
 			type: "session.budget.changed",
 			eventId: "event-2",
@@ -164,7 +175,11 @@ describe("session reducer", () => {
 			timestamp: 20,
 			budgetWarningThreshold: 0.9,
 		});
-		expect(thresholdChanged).toMatchObject({ costBudgetUsd: 2, tokenBudget: 10_000, budgetWarningThreshold: 0.9 });
+		expect(thresholdChanged).toMatchObject({
+			costBudgetUsd: 2,
+			tokenBudget: 10_000,
+			budgetWarningThreshold: 0.9,
+		});
 		const removed = reduceSessionEvent(thresholdChanged, {
 			type: "session.budget.changed",
 			eventId: "event-3",

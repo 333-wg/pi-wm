@@ -9,7 +9,9 @@ import { highlight, resolveLanguage } from "../src/lib/highlight.js";
 
 /** Every token as `kind:value`, flattened across lines. */
 function shape(code: string, lang: string): string[] {
-	return highlight(code, lang).flat().map((token) => `${token.kind}:${token.value}`);
+	return highlight(code, lang)
+		.flat()
+		.map((token) => `${token.kind}:${token.value}`);
 }
 
 /** Only the tokens that carry a colour, so whitespace runs stay out of the way. */
@@ -107,10 +109,20 @@ describe("the shared tokenizer", () => {
 	});
 
 	it("reads a comment to the end of the line and a block to its terminator", () => {
-		expect(marked('const a = "x"; // note', "ts")).toEqual(["keyword:const", "punct:=", 'string:"x"', "punct:;", "comment:// note"]);
+		expect(marked('const a = "x"; // note', "ts")).toEqual([
+			"keyword:const",
+			"punct:=",
+			'string:"x"',
+			"punct:;",
+			"comment:// note",
+		]);
 		expect(highlight("/* a\nb */ 1", "ts")).toEqual([
 			[{ kind: "comment", value: "/* a" }],
-			[{ kind: "comment", value: "b */" }, { kind: "plain", value: " " }, { kind: "number", value: "1" }],
+			[
+				{ kind: "comment", value: "b */" },
+				{ kind: "plain", value: " " },
+				{ kind: "number", value: "1" },
+			],
 		]);
 		// An unterminated block takes the rest rather than falling back to punctuation.
 		expect(marked("/* a", "ts")).toEqual(["comment:/* a"]);
@@ -135,7 +147,10 @@ describe("the shared tokenizer", () => {
 		// The escaped quote does not end the string, so this is one token.
 		expect(marked(escaped, "ts")).toEqual([`string:${escaped}`]);
 		// A typo in one line must not paint the rest of the block as a string...
-		expect(highlight("'oops\nnext", "ts")).toEqual([[{ kind: "string", value: "'oops" }], [{ kind: "plain", value: "next" }]]);
+		expect(highlight("'oops\nnext", "ts")).toEqual([
+			[{ kind: "string", value: "'oops" }],
+			[{ kind: "plain", value: "next" }],
+		]);
 		// ...but a template literal is allowed to span lines.
 		expect(highlight("`a\nb`", "ts")).toEqual([[{ kind: "string", value: "`a" }], [{ kind: "string", value: "b`" }]]);
 	});
@@ -147,7 +162,14 @@ describe("the shared tokenizer", () => {
 	});
 
 	it("uses the grammar it was given, not one shared word list", () => {
-		expect(marked("def run(self):", "python")).toEqual(["keyword:def", "function:run", "punct:(", "builtin:self", "punct:)", "punct::"]);
+		expect(marked("def run(self):", "python")).toEqual([
+			"keyword:def",
+			"function:run",
+			"punct:(",
+			"builtin:self",
+			"punct:)",
+			"punct::",
+		]);
 		expect(marked("git status # ok", "bash")).toEqual(["builtin:git", "comment:# ok"]);
 		expect(marked('{"a": 1, "b": true}', "json")).toEqual([
 			"punct:{",
@@ -160,7 +182,14 @@ describe("the shared tokenizer", () => {
 			"keyword:true",
 			"punct:}",
 		]);
-		expect(marked(".card { color: red; }", "css")).toEqual(["punct:.", "punct:{", "property:color", "punct::", "punct:;", "punct:}"]);
+		expect(marked(".card { color: red; }", "css")).toEqual([
+			"punct:.",
+			"punct:{",
+			"property:color",
+			"punct::",
+			"punct:;",
+			"punct:}",
+		]);
 	});
 });
 
@@ -180,7 +209,15 @@ describe("markup", () => {
 	});
 
 	it("leaves the text between tags alone", () => {
-		expect(shape("<b>hi</b>", "html")).toEqual(["punct:<", "tag:b", "punct:>", "plain:hi", "punct:</", "tag:b", "punct:>"]);
+		expect(shape("<b>hi</b>", "html")).toEqual([
+			"punct:<",
+			"tag:b",
+			"punct:>",
+			"plain:hi",
+			"punct:</",
+			"tag:b",
+			"punct:>",
+		]);
 	});
 
 	it("keeps a self-closing tag and a comment in one piece", () => {

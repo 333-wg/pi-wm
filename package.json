@@ -1,41 +1,63 @@
 {
-  "name": "wuming-web",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
-  "engines": {
-    "node": ">=22.19.0"
-  },
-  "scripts": {
-    "build": "tsc -b && npm run build --workspace @wuming/web",
-    "check": "tsc -b --pretty false && npm run check --workspace @wuming/web && npm run check:e2e && npm run check:tests && npm run check:contrast",
-    "check:contrast": "node scripts/token-contrast.mjs",
-    "check:e2e": "tsc -p e2e/tsconfig.json --noEmit --pretty false",
-    "check:tests": "node scripts/check-tests.mjs",
-    "clean": "tsc -b --clean",
-    "dev": "concurrently -k -n gateway,web -c green,cyan \"npm run dev --workspace @wuming/gateway\" \"npm run dev --workspace @wuming/web\"",
-    "dev:gateway": "npm run dev --workspace @wuming/gateway",
-    "dev:web": "npm run dev --workspace @wuming/web",
-    "test": "npm run test --workspaces --if-present",
-    "test:e2e": "npm run build && playwright test",
-    "test:e2e:install": "playwright install chromium",
-    "shots": "node scripts/ui-shots.mjs",
-    "verify:contrast": "node scripts/contrast-crawl.mjs",
-    "verify:pi-provider": "tsx scripts/verify-pi-provider.ts",
-    "verify:pi-tools": "tsx scripts/verify-pi-tools.ts",
-    "verify:pi-approval-restart": "npm run build && tsx scripts/verify-pi-approval-restart.ts",
-    "verify:pi-fault-recovery": "npm run build && tsx scripts/verify-pi-fault-recovery.ts"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.62.1",
-    "@types/node": "22.19.19",
-    "concurrently": "10.0.5",
-    "tsx": "4.23.12",
-    "typescript": "5.9.3",
-    "vitest": "4.1.9"
-  }
+	"name": "wuming-web",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	],
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"scripts": {
+		"build": "tsc -b && npm run build --workspace @wuming/web",
+		"check": "tsc -b --pretty false && npm run check --workspace @wuming/web && npm run check:e2e && npm run check:tests && npm run check:contrast",
+		"check:contrast": "node scripts/token-contrast.mjs",
+		"check:e2e": "tsc -p e2e/tsconfig.json --noEmit --pretty false",
+		"check:tests": "node scripts/check-tests.mjs && tsc -p scripts/tsconfig.test.json",
+		"clean": "tsc -b --clean",
+		"dev": "concurrently -k -n gateway,web -c green,cyan \"npm run dev --workspace @wuming/gateway\" \"npm run dev --workspace @wuming/web\"",
+		"dev:gateway": "npm run dev --workspace @wuming/gateway",
+		"dev:web": "npm run dev --workspace @wuming/web",
+		"format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+		"format:check": "prettier --check \"**/*.{ts,tsx,json,md}\"",
+		"lint": "oxlint .",
+		"lint:fix": "oxlint --fix .",
+		"local": "node scripts/start-local.mjs",
+		"prepare": "husky",
+		"test": "npm run test --workspaces --if-present && npm run test:acceptance",
+		"test:acceptance": "node --import tsx --test scripts/lib/plan-acceptance.test.ts scripts/lib/gateway-process.test.ts scripts/lib/saved-model-source.test.ts scripts/lib/file-acceptance.test.ts && npm run test:provider-wire",
+		"test:provider-wire": "tsc -b && vitest run scripts/lib/provider-file-round-trip.test.ts scripts/lib/provider-skill-round-trip.test.ts scripts/lib/model-request-pacer.test.ts",
+		"test:e2e": "npm run build && playwright test",
+		"test:e2e:install": "playwright install chromium",
+		"shots": "node scripts/ui-shots.mjs",
+		"verify:contrast": "node scripts/contrast-crawl.mjs",
+		"verify:pi-provider": "tsx scripts/verify-pi-provider.ts",
+		"verify:pi-files": "tsc -b && tsx scripts/verify-pi-files.ts",
+		"verify:pi-tools": "tsx scripts/verify-pi-tools.ts",
+		"verify:pi-approval-restart": "npm run build && tsx scripts/verify-pi-approval-restart.ts",
+		"verify:pi-fault-recovery": "npm run build && tsx scripts/verify-pi-fault-recovery.ts"
+	},
+	"devDependencies": {
+		"@playwright/test": "^1.62.1",
+		"@types/node": "22.19.19",
+		"concurrently": "10.0.5",
+		"husky": "^9.1.7",
+		"lint-staged": "^17.5.0",
+		"oxlint": "^1.81.0",
+		"prettier": "^3.9.6",
+		"tsx": "4.23.12",
+		"typescript": "5.9.3",
+		"vitest": "4.1.9"
+	},
+	"lint-staged": {
+		"*.{ts,tsx}": [
+			"oxlint --fix",
+			"prettier --write"
+		],
+		"*.{json,md}": [
+			"prettier --write"
+		]
+	}
 }

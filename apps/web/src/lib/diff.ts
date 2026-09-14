@@ -49,12 +49,22 @@ export function diffLines(before: string, after: string): DiffLine[] {
 	const { head, tail } = commonEdges(a, b);
 	const lines: DiffLine[] = [];
 	for (let index = 0; index < head; index += 1) {
-		lines.push({ kind: "context", text: a[index] as string, oldNumber: index + 1, newNumber: index + 1 });
+		lines.push({
+			kind: "context",
+			text: a[index] as string,
+			oldNumber: index + 1,
+			newNumber: index + 1,
+		});
 	}
 	for (const line of diffMiddle(a.slice(head, a.length - tail), b.slice(head, b.length - tail), head)) lines.push(line);
 	for (let index = 0; index < tail; index += 1) {
 		const oldIndex = a.length - tail + index;
-		lines.push({ kind: "context", text: a[oldIndex] as string, oldNumber: oldIndex + 1, newNumber: b.length - tail + index + 1 });
+		lines.push({
+			kind: "context",
+			text: a[oldIndex] as string,
+			oldNumber: oldIndex + 1,
+			newNumber: b.length - tail + index + 1,
+		});
 	}
 	return lines;
 }
@@ -67,7 +77,7 @@ function diffMiddle(a: readonly string[], b: readonly string[], offset: number):
 			...b.map((text, index) => ({ kind: "add" as const, text, newNumber: offset + index + 1 })),
 		];
 	}
-	const table: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+	const table: number[][] = Array.from({ length: a.length + 1 }, () => Array.from({ length: b.length + 1 }, () => 0));
 	for (let i = a.length - 1; i >= 0; i -= 1) {
 		for (let j = b.length - 1; j >= 0; j -= 1) {
 			const row = table[i] as number[];
@@ -80,7 +90,12 @@ function diffMiddle(a: readonly string[], b: readonly string[], offset: number):
 	let j = 0;
 	while (i < a.length && j < b.length) {
 		if (a[i] === b[j]) {
-			rows.push({ kind: "context", text: a[i] as string, oldNumber: offset + i + 1, newNumber: offset + j + 1 });
+			rows.push({
+				kind: "context",
+				text: a[i] as string,
+				oldNumber: offset + i + 1,
+				newNumber: offset + j + 1,
+			});
 			i += 1;
 			j += 1;
 			continue;
@@ -107,10 +122,14 @@ function diffMiddle(a: readonly string[], b: readonly string[], offset: number):
 }
 
 export function collapseContext(lines: DiffLine[], context = 3): DiffRow[] {
-	const keep = new Array<boolean>(lines.length).fill(false);
+	const keep = Array.from({ length: lines.length }, () => false);
 	for (let index = 0; index < lines.length; index += 1) {
 		if (lines[index]?.kind === "context") continue;
-		for (let offset = Math.max(0, index - context); offset <= Math.min(lines.length - 1, index + context); offset += 1) {
+		for (
+			let offset = Math.max(0, index - context);
+			offset <= Math.min(lines.length - 1, index + context);
+			offset += 1
+		) {
 			keep[offset] = true;
 		}
 	}
@@ -146,6 +165,26 @@ export interface DiffHunk {
 	lines: DiffLine[];
 }
 
+export function splitDiffRows(lines: DiffLine[]): Array<[DiffLine | undefined, DiffLine | undefined]> {
+	const rows: Array<[DiffLine | undefined, DiffLine | undefined]> = [];
+	let removed: DiffLine[] = [];
+	let added: DiffLine[] = [];
+	const flush = () => {
+		for (let i = 0; i < Math.max(removed.length, added.length); i++) rows.push([removed[i], added[i]]);
+		removed = [];
+		added = [];
+	};
+	for (const line of lines) {
+		if (line.kind === "context") {
+			flush();
+			rows.push([line, line]);
+		} else if (line.kind === "del") removed.push(line);
+		else added.push(line);
+	}
+	flush();
+	return rows;
+}
+
 export interface ParsedDiff {
 	hunks: DiffHunk[];
 	binary: boolean;
@@ -160,6 +199,10 @@ export function parseUnifiedDiff(patch: string): ParsedDiff {
 	let newNumber = 0;
 	let binary = false;
 	for (const raw of lines) {
+		if (raw.startsWith("diff --git ") || raw.startsWith("--- ") || raw.startsWith("+++ ")) {
+			if (raw.startsWith("diff --git ")) current = undefined;
+			if (!current) continue;
+		}
 		if (raw.startsWith("Binary files") || raw.startsWith("GIT binary patch")) {
 			binary = true;
 			continue;
@@ -183,6 +226,7 @@ export function parseUnifiedDiff(patch: string): ParsedDiff {
 			oldNumber += 1;
 			continue;
 		}
+		if (!raw.startsWith(" ")) continue;
 		current.lines.push({ kind: "context", text: raw.slice(1), oldNumber, newNumber });
 		oldNumber += 1;
 		newNumber += 1;

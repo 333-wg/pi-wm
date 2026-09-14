@@ -1,17 +1,21 @@
 # Wuming Web
 
-Web control plane for a Pi-based coding agent. The current vertical slice has a
-React workbench, authenticated WebSocket gateway, durable SQLite orchestration,
-and a pinned Pi `AgentSession` adapter. This directory is deliberately separate
-from the upstream research clones in the workspace.
+Local-first coding agent built around Pi. The React workbench connects to a
+loopback Wuming host on the user's computer; that local host owns the workspace,
+Shell, terminal, previews, environment detection, approvals, and durable SQLite
+state. A separately deployed server may provide accounts or model access, but it
+must not silently substitute its own host Shell for the user's computer.
 
 See:
 
 - `docs/architecture.md` for service boundaries and ownership.
 - `docs/protocol-v1.md` for ordering, replay, and command semantics.
 - `docs/artifacts.md` for authenticated attachments and validation limits.
+- `docs/media-generation.md` for default image/video models, official/relay compatibility, and inline media.
 - `docs/workspace-inspection.md` for file browsing and Git inspection boundaries.
 - `docs/terminal.md` for PTY execution modes and terminal protocol security.
+- `docs/skill-management.md` for builtin skills, local installation and invocation controls.
+- `docs/skill-system-research.md` and `docs/skill-evaluation-status.md` for source research and acceptance evidence.
 - `packages/protocol` for the executable TypeBox contract.
 
 ## Run locally
@@ -20,21 +24,63 @@ Requires Node.js 22.19 or newer.
 
 ```sh
 npm install --legacy-peer-deps
-npm run dev
+npm run local
 ```
 
-Open `http://127.0.0.1:5173/`. The zero-configuration development password is
-`wuming`; it is only suitable while the gateway is bound to loopback. The browser
-remembers it after the first successful connection.
+This starts the UI and local host on loopback and opens `http://127.0.0.1:5173/`.
+The zero-configuration development password is `wuming`; it is only suitable
+while the Gateway is bound to loopback. The browser remembers it after the first
+successful connection. Use `npm run dev` when automatic browser opening is not
+wanted.
+
+`npm run local` explicitly starts `WUMING_DEPLOYMENT_MODE=local_device`: process
+tools default to the user's Shell, the terminal defaults to the host PTY, and
+previews default to the user's workspace. Every unmarked Gateway is treated as
+`server`, even when it binds loopback, because a reverse proxy may expose a
+loopback server publicly. Server mode disables host process execution, host
+terminal, and host preview by default. Explicit attempts to combine server mode
+with `WUMING_PROCESS_MODE=local`, `WUMING_TERMINAL_MODE=host`, or host previews
+fail at startup instead of executing on the server by mistake.
 
 The default runtime is Pi. On the first successful connection, configure a real
-model service in the setup dialog; its API key is encrypted on the Gateway and
-never returned to the browser. A model already stored in `.wuming-data` is loaded
-automatically.
+model service in the setup dialog; its API key is encrypted on the local Gateway
+and never returned to the browser. By default Wuming stores durable state in the
+current OS user's application-data directory (`%LOCALAPPDATA%\Wuming` on
+Windows, `~/Library/Application Support/Wuming` on macOS, and
+`~/.local/share/Wuming` on Linux). Set `WUMING_DATA_DIR` only when a deployment
+or portable build needs an explicit location.
 The composer accepts validated images and UTF-8 text/source attachments; the
 same artifact path is used in demo and Pi modes.
 The Run rail shows recent durable operations with queue/run status, attempt,
-duration, stop requests, and failure details.
+duration, stop requests, failure details, and the bounded context plan used for
+each model request. In Pi mode, Wuming assembles `AGENTS.md`,
+`.wuming/context.md`, `README.md`, and selected Skills under the configured model
+budget; Pi's parallel implicit context-file loading is disabled.
+Each new run also records a body-free SHA-256-chained execution trajectory. The
+Run rail exposes its integrity and structural score, while an authorized
+`session.run.trajectory.get` request returns the bounded replay report. This
+score covers execution evidence and policy signals only; semantic correctness
+is deliberately reported as unevaluated.
+Terminal runs can also be evaluated from the Run rail with an immediate
+trajectory check or a reusable workspace-scoped regression dataset. Datasets
+combine trajectory thresholds, integrity-checked artifact assertions, and
+optional command graders. Command graders use the configured Docker process
+sandbox and have no host fallback; they are unavailable for read-only sessions
+or deployments without that executor. Results persist only bounded evidence and
+content digests, never raw command output. A passing result can be exported with
+an Ed25519 attestation over the evaluation and trajectory head. The export is
+self-verifying, but deployment identity is established only when a verifier pins
+the Gateway's `keyId` or public key out of band.
+Pi threshold and overflow compaction is enabled by default. Wuming captures each
+successful automatic or manual compaction as a digest-verified, session-scoped
+memory with source item citations and accounts for the summarization request's
+usage. `session.memory.list` returns at most 20 active authorized memories; the
+Pi-only `memory_search` tool performs bounded lexical retrieval inside its
+current session and accepts no session ID. The Run rail can pin a memory against
+automatic supersession, release it, or forget it. Forgetting physically removes
+the summary and leaves only a body-free audit tombstone; Run history still shows
+how many memories an operation created. Set
+`WUMING_PI_AUTO_COMPACTION=false` only when another layer owns compaction.
 The Agents tab creates independent durable child sessions that inherit the
 parent model, sandbox, and approval policy. Each child has its own transcript,
 operation, approvals, and optional cost/token limits; it continues in the
@@ -47,13 +93,22 @@ levels; cancelling an ancestor first cancels its active descendants.
 The Goals tab creates durable objectives without starting model work
 immediately. Starting a goal runs one independent child session in the
 background; its status, approvals, usage, result, and cancellation state remain
-available after navigation or restart. Multi-step plans and scheduled triggers
-are deferred beyond this increment.
+available after navigation or restart. Multi-step plans remain deferred beyond
+this increment.
 Goals can optionally include `successCriteria` and a bounded `maxRounds` value.
 The backend then runs independent reviewer sessions, records per-criterion
 pass/fail evidence and the reviewer's actual tool trace, and starts a corrected
 worker round when required. The Web Goals view configures the loop and exposes
 its durable evidence history.
+The Automations tab schedules the same durable Goal workflow for one absolute
+time or a fixed interval. Plans can be paused, resumed, or triggered immediately;
+each trigger snapshots its objective and review policy into an immutable run
+record before creating the Goal. Scheduled claims are atomic and idempotent
+across restarts. A missed fixed interval creates one catch-up run and advances to
+the first future slot instead of replaying an unbounded backlog. Archived parent
+sessions retain their plans but do not trigger until restored. Run history links
+to the child conversation for approvals and tool-level inspection. Configure the
+single-node scan cadence with `WUMING_AUTOMATION_POLL_MS` (default 30000ms).
 Provider failures marked retryable use bounded retries (`WUMING_MAX_RETRIES` and
 `WUMING_RETRY_BASE_DELAY_MS`). Set `WUMING_COST_BUDGET_USD` for a default
 per-session budget, or send `costBudgetUsd` when creating a session; all model
@@ -95,8 +150,9 @@ $env:WUMING_MODELS_JSON = '[{"provider":"anthropic","id":"model-a","name":"Model
 npm run dev
 ```
 
-Workspace paths remain server-side and may be absolute or relative to the
-gateway working directory. Workspace and model IDs must be unique. A model with
+Workspace paths belong to the machine running the connected Gateway. In the
+recommended local-device setup that is the user's computer, not a Wuming server.
+Workspace and model IDs must be unique. A model with
 `authenticated: false` is shown but cannot be selected. Workspace selection
 controls the session list, files, changes, uploads, and terminal; model
 selection applies when creating the next session and does not mutate existing
@@ -107,10 +163,33 @@ On a loopback deployment, the gateway opens the operating system picker and
 stores a reference to the selected local path in
 `WUMING_DATA_DIR/projects/projects.json`; project contents are not copied or
 uploaded. Selecting a file uses its parent directory as the session workspace.
-When the browser connects to a remote gateway, the same UI falls back to an
-authenticated upload into `WUMING_DATA_DIR/projects`. Imported projects are
-restored after a gateway restart and each project keeps an independent session
-list.
+When the browser connects to a remote Gateway, uploaded projects belong to that
+remote workspace and host Shell execution stays disabled. To work on files and
+tools already installed on a user's computer, run the local-device host there.
+
+## Skills
+
+Every workspace has seven bundled workflows: code-change, code-review, debug,
+research, run-app, verify-app and skill-authoring. The model receives bounded
+descriptions and can load applicable instructions or references on demand with
+skill_load, including after a tool failure. Selection is model-driven, not a
+guarantee that every model will choose the expected procedure.
+
+The Skills workbench's management dialog installs packages from a directory
+inside the workspace, previews content, toggles enabled state and uninstalls
+user packages. User-installed and user-authored skills live on the user's
+machine under that workspace; only bundled system skills ship with Wuming. A
+package needs SKILL.md with name/description YAML metadata; optional references,
+scripts and assets are copied but never executed at install time. Remote
+repository and ZIP installers are not implemented. Manual-only invocation policy
+from Claude/Codex formats is supported without granting tools or permissions.
+See `docs/skill-management.md` for limits and supported fields.
+
+Run history records successful skill loads and observed recovery evidence.
+Ordinary skill source inspection is not activation. Disabled/manual-only loads
+are rejected, and source-data notices discourage indirect invocation; these
+notices are not a general prompt-injection sandbox. Consult the retained
+real-model reports before treating a behavior as fully accepted.
 
 ## Configure Pi from the environment
 
@@ -133,20 +212,24 @@ failed-attempt usage.
 Wuming exposes `read_file`, `write_file`, and multi-block `edit` while reusing
 Pi's corresponding tool definitions and algorithms with workspace-scoped
 Wuming file operations, durable approval, and authenticated artifact handling
-underneath. To
-enable process execution, build the reference image and configure it by digest:
+underneath. Process execution uses the user's local environment by default only
+in `local_device` mode. Docker is not required. To explicitly use the optional
+Docker backend, build the reference image and configure it by digest:
 
 ```powershell
 docker build -f docker/wuming-sandbox.Dockerfile -t wuming-runner:local .
 $env:WUMING_DOCKER_IMAGE = "your-registry/wuming-runner@sha256:<digest>"
+$env:WUMING_PROCESS_MODE = "docker"
 ```
 
-The `exec` and `run_python` tools have no host-process fallback. They use Docker
-with a read-only container root, dropped Linux capabilities, no new privileges,
+The default `exec` and `run_python` backend in `local_device` mode uses the
+user's existing local environment. Docker is optional and is enabled only with
+`WUMING_PROCESS_MODE=docker`.
+The Docker backend uses a read-only container root, dropped Linux capabilities, no new privileges,
 networking disabled, and bounded CPU, memory, PIDs, output, and wall time. The
 workspace bind mount, `/tmp`, and `$HOME` are the only writable paths, so the
 toolchain has to be present in the image rather than installed per command.
-Docker must be installed on the gateway host.
+Docker is required only when `WUMING_PROCESS_MODE=docker`.
 
 The defaults suit a real build (2 CPUs, 2 GiB, a 5-minute default and 30-minute
 maximum per command) and every limit is tunable: `WUMING_DOCKER_CPUS`,
@@ -183,52 +266,122 @@ Search credentials remain server-side and are never exposed in tool arguments
 or results. `WUMING_WEB_TIMEOUT_MS` and `WUMING_WEB_MAX_RESPONSE_BYTES` control
 the shared network limits.
 
+### Browser-driven verification
+
+In Pi mode, Wuming registers a persistent Playwright Chromium session for each
+agent conversation. The agent can open a public page or a loopback development
+server, read an accessibility snapshot with element references, click and type
+through a workflow, capture PNG evidence, and inspect console errors, uncaught
+exceptions, failed requests, and HTTP 4xx/5xx responses. Frontend work can
+therefore run an implementation-to-browser verification loop instead of treating
+a successful build as proof that the interface works.
+
+Run `npm run test:e2e:install` once to install bundled Chromium. Browser automation
+is enabled and headless by default. Set `WUMING_BROWSER_HEADLESS=false` to show the
+controlled browser window, `WUMING_BROWSER_ENABLED=false` to disable the tools, or
+configure `WUMING_BROWSER_CHANNEL=chrome` / `WUMING_BROWSER_EXECUTABLE` to use a
+system installation. Browser contexts are isolated from personal profiles and from
+each other, expire when idle, allow public destinations and `localhost`, and reject
+other private-network destinations. Browser sessions track tabs and popups with
+stable IDs; the agent can list, switch, create, and close them without losing the
+other pages' cookies or diagnostics.
+
+For a complete edit-to-browser loop, preview management is enabled by default;
+set `WUMING_PREVIEW_ENABLED=false` to disable it. This adds
+`preview_start`, `preview_status`, and `preview_stop`: the agent can launch a
+long-lived dev server in a workspace-relative directory, wait for an explicit
+`localhost` readiness URL, inspect bounded logs, and clean up the process tree
+after verification. Preview commands run in the user's local workspace and use
+the same session permission policy as other process operations.
+
 ### Configure MCP servers
 
-The gateway discovers workspace-local stdio MCP servers from
-`.wuming/mcp.json`. Each server must have a safe ID and command; tools are
-listed in the Web MCP tab and exposed to Pi with the `mcp__<server>__<tool>`
-name. Every call is routed through the durable approval broker. Mark a server
-`readOnly: true` only when its tools are genuinely read-only; unmarked servers
-use high-risk approval.
+The gateway discovers MCP servers from the workspace-local
+`.wuming/mcp.json`. It accepts the original `servers` array and the
+`mcpServers`/`mcp_servers` map used by common MCP clients. `stdio` and modern
+`streamable-http` transports are supported. Tools are listed in the Web MCP
+tab and exposed to Pi with a stable `mcp__<server>__<tool>` name; names that
+need normalization or truncation receive an identity hash so they cannot
+silently collide. Legacy `sse` endpoints are accepted for compatibility, while
+new deployments should prefer Streamable HTTP. Every call is routed through
+the durable approval broker.
+Mark a server `readOnly: true` only when its tools are genuinely read-only;
+unmarked servers use high-risk approval.
 
 ```json
 {
-  "servers": [
-    {
-      "id": "docs",
-      "name": "Documentation MCP",
-      "command": "node",
-      "args": ["./tools/docs-mcp.cjs"],
-      "readOnly": true
-    }
-  ]
+	"servers": [
+		{
+			"id": "docs",
+			"name": "Documentation MCP",
+			"command": "node",
+			"args": ["./tools/docs-mcp.cjs"],
+			"readOnly": true
+		}
+	]
 }
 ```
 
-Workspace configuration alone never authorizes a host process. The deployment
-must separately trust each workspace/server pair before the Gateway will start
-it. For the default workspace above:
+The map form can also express lifecycle and exposure policy. The camelCase and
+snake_case spellings below are both accepted for compatibility with existing
+client configuration:
 
-```powershell
-$env:WUMING_MCP_TRUSTED_SERVERS_JSON = '[{"workspaceId":"local-workspace","serverId":"docs"}]'
+```json
+{
+	"mcpServers": {
+		"docs": {
+			"type": "stdio",
+			"command": "node",
+			"args": ["./tools/docs-mcp.cjs"],
+			"cwd": ".",
+			"env": { "DOCS_MODE": "workspace" },
+			"enabled_tools": ["search"],
+			"disabled_tools": ["delete_index"],
+			"request_timeout_ms": 30000,
+			"readOnly": true
+		},
+		"remote": {
+			"type": "streamable-http",
+			"url": "https://mcp.example.com/mcp",
+			"headers": { "X-Workspace": "local-workspace" },
+			"enabled": false
+		}
+	}
+}
 ```
 
-Untrusted entries remain visible in the MCP tab with zero tools, but discovery
-does not execute their command. When `WUMING_WORKSPACES_JSON` is configured, use
-the corresponding workspace ID in the trust entry.
+Workspace configuration alone never authorizes a host process. In
+`local_device` mode, a user can ask Wuming to configure or trust an MCP server;
+after explicit approval the Gateway writes `.wuming/mcp.json` and records local
+trust in `.wuming/mcp-permissions.json`. Trust is bound to the normalized server
+configuration digest, so editing the command, args, URL, env, headers, or tool
+filters makes the server untrusted again until the user re-approves it. Server
+mode does not expose user MCP configuration or management tools.
 
-The adapter keeps one initialized stdio connection per workspace/server and
-reuses it across `tools/list` and `tools/call`. Requests have bounded output and
-startup/request deadlines; cancelling a tool call terminates the server process
-and the next request reconnects cleanly. For local safety, `.wuming` and
-`.wuming/mcp.json` must not be symbolic links, and commands/arguments are
-strictly validated. HTTP transport, OAuth, and remote server management are
-deferred to a later production increment.
+Untrusted entries remain visible in the MCP tab with zero tools, but discovery
+does not execute their command or connect to their URL. Entries with
+`enabled: false` are also visible but never start or connect. The deployment
+variable `WUMING_MCP_TRUSTED_SERVERS_JSON` remains available only for managed
+single-tenant deployments that intentionally pre-trust a workspace/server pair;
+it is not needed for normal local-device use.
+
+The adapter keeps one initialized connection per workspace/server and reuses it
+across `tools/list` and `tools/call`. Tool-list notifications invalidate the
+cache, configuration changes close old connections, and failed calls reconnect
+on the next request. Requests have bounded output and per-server
+startup/request deadlines; cancelling a stdio tool call terminates the server
+process. For local safety, `.wuming`, `.wuming/mcp.json`, and
+`.wuming/mcp-permissions.json` must not be symbolic links, commands/arguments
+are strictly validated, remote URLs must use HTTPS or loopback HTTP, and URL
+credentials are rejected. Rich MCP results are converted to bounded text with
+structured-content diagnostics; raw binary media is not copied into the
+transcript.
 
 MCP child processes inherit only basic OS path, locale, home, and temporary
-directory variables. Gateway/provider credentials are not inherited; explicit
-MCP credential configuration is deferred until a dedicated secret store exists.
+directory variables. Gateway/provider credentials are not inherited. Explicit
+MCP `env` and HTTP `headers` are workspace configuration and must be treated as
+secrets by operators; OAuth and automatic secret-store lookup are not part of
+this increment.
 
 ### Verify a real Pi provider
 

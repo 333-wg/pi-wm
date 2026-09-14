@@ -31,15 +31,31 @@ describe("permission preference", () => {
 	it("falls back when the stored value is missing, invalid, or inaccessible", () => {
 		expect(readStoredPermission(readableStorage(null))).toEqual(DEFAULT_PERMISSION);
 		expect(readStoredPermission(readableStorage("not json"))).toEqual(DEFAULT_PERMISSION);
-		expect(readStoredPermission(readableStorage(JSON.stringify({ sandboxMode: "unrestricted", approvalPolicy: "always" })))).toEqual(DEFAULT_PERMISSION);
+		expect(
+			readStoredPermission(readableStorage(JSON.stringify({ sandboxMode: "unrestricted", approvalPolicy: "always" })))
+		).toEqual(DEFAULT_PERMISSION);
 		expect(readStoredPermission(readableStorage(null, true))).toEqual(DEFAULT_PERMISSION);
 		expect(readStoredPermission(undefined)).toEqual(DEFAULT_PERMISSION);
 	});
 
 	it("writes a valid selection and tolerates blocked storage", () => {
 		const entries = new Map<string, string>();
-		writeStoredPermission({ setItem: (key, value) => entries.set(key, value) }, { sandboxMode: "unrestricted", approvalPolicy: "never" });
-		expect(entries.get(PERMISSION_STORAGE_KEY)).toBe(JSON.stringify({ sandboxMode: "unrestricted", approvalPolicy: "never" }));
-		expect(() => writeStoredPermission({ setItem: () => { throw new Error("storage is blocked"); } }, DEFAULT_PERMISSION)).not.toThrow();
+		writeStoredPermission(
+			{ setItem: (key, value) => entries.set(key, value) },
+			{ sandboxMode: "unrestricted", approvalPolicy: "never" }
+		);
+		expect(entries.get(PERMISSION_STORAGE_KEY)).toBe(
+			JSON.stringify({ sandboxMode: "unrestricted", approvalPolicy: "never" })
+		);
+		expect(() =>
+			writeStoredPermission(
+				{
+					setItem: () => {
+						throw new Error("storage is blocked");
+					},
+				},
+				DEFAULT_PERMISSION
+			)
+		).not.toThrow();
 	});
 });

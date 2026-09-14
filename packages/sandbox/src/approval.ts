@@ -1,13 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { reduceSessionEvent, type SessionEvent } from "@wuming/domain";
 import type { SqliteOrchestratorStore } from "@wuming/orchestrator";
-import type {
-	ApprovalRequest,
-	ApprovalStatus,
-	CommandResult,
-	SessionSnapshot,
-	ToolCapability,
-} from "@wuming/protocol";
+import type { ApprovalRequest, ApprovalStatus, CommandResult, SessionSnapshot, ToolCapability } from "@wuming/protocol";
 import { SandboxError } from "./errors.js";
 
 export interface ApprovalBrokerOptions {
@@ -20,6 +14,8 @@ export interface ApprovalBrokerOptions {
 }
 
 export interface ApprovalAuthorization {
+	/** Sensitive inspection must never inherit automatic read authorization. */
+	requireExplicitApproval?: boolean;
 	sessionId: string;
 	toolCallId: string;
 	risk: ApprovalRequest["risk"];
@@ -47,10 +43,12 @@ function decisionHash(sessionId: string, approvalId: string, decision: "approve"
 function capabilityAllowed(snapshot: SessionSnapshot, capability: ToolCapability): boolean {
 	if (snapshot.sandboxMode === "unrestricted") return true;
 	if (snapshot.sandboxMode === "read_only") {
-		return capability.type === "filesystem.read" ||
+		return (
+			capability.type === "filesystem.read" ||
 			capability.type === "network.connect" ||
 			capability.type === "secret.use" ||
-			(capability.type === "mcp.call" && capability.readOnly);
+			(capability.type === "mcp.call" && capability.readOnly)
+		);
 	}
 	return (
 		capability.type === "filesystem.read" ||
@@ -58,11 +56,18 @@ function capabilityAllowed(snapshot: SessionSnapshot, capability: ToolCapability
 		capability.type === "process.exec" ||
 		capability.type === "network.connect" ||
 		capability.type === "secret.use" ||
-		capability.type === "mcp.call"
+		capability.type === "mcp.call" ||
+		capability.type === "mcp.manage" ||
+		capability.type === "skill.manage"
 	);
 }
 
 function requiresApproval(snapshot: SessionSnapshot, request: ApprovalAuthorization): boolean {
+	if (request.requireExplicitApproval) return true;
+	// Full access is the user's explicit decision to let the agent operate in the
+	// existing environment. Keep the explicit "always ask" policy meaningful,
+	// but do not re-prompt for ordinary risky tools in this mode.
+	if (snapshot.sandboxMode === "unrestricted" && snapshot.approvalPolicy !== "always") return false;
 	switch (snapshot.approvalPolicy) {
 		case "always":
 			return true;
@@ -118,11 +123,20 @@ export class ApprovalBroker {
 	async authorize(request: ApprovalAuthorization): Promise<ApprovalPermit | undefined> {
 		const snapshot = this.#store.loadSnapshot(request.sessionId);
 		if (!snapshot) throw new SandboxError("approval_denied", `Session ${request.sessionId} does not exist`);
+		if (
+			request.requireExplicitApproval &&
+			(snapshot.approvalPolicy === "never" || snapshot.approvalPolicy === "on_failure")
+		) {
+			throw new SandboxError(
+				"approval_denied",
+				"Skill source inspection requires human approval. Use an approval-enabled session to review or edit source; use skill_load for invocation. Do not read another copy to bypass this restriction."
+			);
+		}
 		for (const capability of request.capabilities) {
 			if (!capabilityAllowed(snapshot, capability)) {
 				throw new SandboxError(
 					"approval_denied",
-					`Capability ${capability.type} exceeds sandbox mode ${snapshot.sandboxMode}`,
+					`Capability ${capability.type} exceeds sandbox mode ${snapshot.sandboxMode}`
 				);
 			}
 		}
@@ -141,14 +155,21 @@ export class ApprovalBroker {
 		if (!snapshot) throw new SandboxError("approval_denied", `Session ${request.sessionId} does not exist`);
 		for (const capability of request.capabilities) {
 			if (!capabilityAllowed(snapshot, capability)) {
-				throw new SandboxError("approval_denied", `Capability ${capability.type} exceeds sandbox mode ${snapshot.sandboxMode}`);
+				throw new SandboxError(
+					"approval_denied",
+					`Capability ${capability.type} exceeds sandbox mode ${snapshot.sandboxMode}`
+				);
 			}
 		}
 		if (snapshot.approvalPolicy !== "on_failure") throw new SandboxError("process_failed", request.failure);
-		const status = await this.#requestDecision(snapshot, {
-			...request,
-			summary: `${request.summary} failed: ${request.failure}. Approve one retry?`.slice(0, 2000),
-		}, "failure_retry");
+		const status = await this.#requestDecision(
+			snapshot,
+			{
+				...request,
+				summary: `${request.summary} failed: ${request.failure}. Approve one retry?`.slice(0, 2000),
+			},
+			"failure_retry"
+		);
 		if (status !== "approved") throw new SandboxError("approval_denied", `Retry was ${status}`);
 		const permit = this.#claimApproved(request.sessionId, request.toolCallId);
 		if (!permit) throw new SandboxError("approval_denied", "Approved retry could not be claimed");
@@ -169,9 +190,18 @@ export class ApprovalBroker {
 			if (!snapshot) continue;
 			for (const approval of snapshot.pendingApprovals) {
 				const execution = this.#store.getApprovalExecution(approval.id);
-				if (!execution || execution.operationId !== operation.id || execution.state !== "waiting" || this.#pending.has(approval.id)) continue;
+				if (
+					!execution ||
+					execution.operationId !== operation.id ||
+					execution.state !== "waiting" ||
+					this.#pending.has(approval.id)
+				)
+					continue;
 				const remaining = approval.expiresAt - now;
-				const timer = setTimeout(() => void this.#settleSystem(approval.sessionId, approval.id, "expired"), Math.max(0, remaining));
+				const timer = setTimeout(
+					() => void this.#settleSystem(approval.sessionId, approval.id, "expired"),
+					Math.max(0, remaining)
+				);
 				this.#pending.set(approval.id, { resolve: () => {}, timer, recovered: true });
 				recovered += 1;
 			}
@@ -184,7 +214,11 @@ export class ApprovalBroker {
 		return claimed ? { approvalId: claimed.approvalId } : undefined;
 	}
 
-	async #requestDecision(snapshot: SessionSnapshot, authorization: ApprovalAuthorization, mode: "preflight" | "failure_retry"): Promise<ApprovalStatus> {
+	async #requestDecision(
+		snapshot: SessionSnapshot,
+		authorization: ApprovalAuthorization,
+		mode: "preflight" | "failure_retry"
+	): Promise<ApprovalStatus> {
 		const now = this.#clock();
 		const approval: ApprovalRequest = {
 			id: this.#idFactory(),
@@ -202,12 +236,21 @@ export class ApprovalBroker {
 		const decision = new Promise<ApprovalStatus>((resolve) => {
 			resolveDecision = resolve;
 		});
-		const timer = setTimeout(() => void this.#settleSystem(approval.sessionId, approval.id, "expired"), this.#defaultTimeoutMs);
+		const timer = setTimeout(
+			() => void this.#settleSystem(approval.sessionId, approval.id, "expired"),
+			this.#defaultTimeoutMs
+		);
 		const abort = authorization.signal
 			? () => void this.#settleSystem(approval.sessionId, approval.id, "cancelled")
 			: undefined;
 		if (abort) authorization.signal?.addEventListener("abort", abort, { once: true });
-		this.#pending.set(approval.id, { resolve: resolveDecision, timer, recovered: false, ...(abort ? { abort } : {}), ...(authorization.signal ? { signal: authorization.signal } : {}) });
+		this.#pending.set(approval.id, {
+			resolve: resolveDecision,
+			timer,
+			recovered: false,
+			...(abort ? { abort } : {}),
+			...(authorization.signal ? { signal: authorization.signal } : {}),
+		});
 
 		try {
 			await this.#serialize(approval.sessionId, () => {
@@ -288,14 +331,17 @@ export class ApprovalBroker {
 				approval,
 			};
 			const afterApproval = reduceSessionEvent(snapshot, event);
-			const phaseEvent: SessionEvent | undefined = afterApproval.pendingApprovals.length === 0 ? {
-				type: "session.phase.changed",
-				eventId: this.#idFactory(),
-				sessionId: input.sessionId,
-				revision: snapshot.revision + 2,
-				timestamp: now,
-				phase: "turn",
-			} : undefined;
+			const phaseEvent: SessionEvent | undefined =
+				afterApproval.pendingApprovals.length === 0
+					? {
+							type: "session.phase.changed",
+							eventId: this.#idFactory(),
+							sessionId: input.sessionId,
+							revision: snapshot.revision + 2,
+							timestamp: now,
+							phase: "turn",
+						}
+					: undefined;
 			const events = phaseEvent ? [event, phaseEvent] : [event];
 			const next = phaseEvent ? reduceSessionEvent(afterApproval, phaseEvent) : afterApproval;
 			const result = { type: "approval.accepted", approval } as const;
@@ -305,7 +351,10 @@ export class ApprovalBroker {
 				expectedRevision: snapshot.revision,
 				events,
 				snapshot: next,
-				settleApprovalExecution: { approvalId: approval.id, state: input.decision === "approve" ? "approved" : "cancelled" },
+				settleApprovalExecution: {
+					approvalId: approval.id,
+					state: input.decision === "approve" ? "approved" : "cancelled",
+				},
 				idempotency: {
 					principalId: input.principalId,
 					key: input.idempotencyKey,
@@ -330,7 +379,12 @@ export class ApprovalBroker {
 				const pending = snapshot?.pendingApprovals.find((approval) => approval.id === approvalId);
 				if (!snapshot || !pending) return;
 				const now = this.#clock();
-				const approval: ApprovalRequest = { ...pending, status, decidedAt: now, decidedBy: "system" };
+				const approval: ApprovalRequest = {
+					...pending,
+					status,
+					decidedAt: now,
+					decidedBy: "system",
+				};
 				const event: SessionEvent = {
 					type: "approval.settled",
 					eventId: this.#idFactory(),
@@ -340,10 +394,17 @@ export class ApprovalBroker {
 					approval,
 				};
 				const afterApproval = reduceSessionEvent(snapshot, event);
-				const phaseEvent: SessionEvent | undefined = afterApproval.pendingApprovals.length === 0 ? {
-					type: "session.phase.changed", eventId: this.#idFactory(), sessionId,
-					revision: snapshot.revision + 2, timestamp: now, phase: "turn",
-				} : undefined;
+				const phaseEvent: SessionEvent | undefined =
+					afterApproval.pendingApprovals.length === 0
+						? {
+								type: "session.phase.changed",
+								eventId: this.#idFactory(),
+								sessionId,
+								revision: snapshot.revision + 2,
+								timestamp: now,
+								phase: "turn",
+							}
+						: undefined;
 				const next = phaseEvent ? reduceSessionEvent(afterApproval, phaseEvent) : afterApproval;
 				const pendingDecision = this.#pending.get(approvalId);
 				this.#store.commitMutation({

@@ -1,0 +1,187 @@
+{
+	"evaluatedAt": "2026-09-06T13:07:49.041Z",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"casePauseMs": 0,
+	"requestPacing": {
+		"intervalMs": 20000,
+		"contextPreparations": 6,
+		"requestedDelayMs": 79814
+	},
+	"turnTimeoutMs": 300000,
+	"maxTokens": 4096,
+	"skillVersions": [
+		{
+			"id": "code-change",
+			"digest": "afe7947790c1a6ef71e18c9e5abfc2f9b1c9c50606c0be0900523bfb771804f4"
+		},
+		{
+			"id": "code-review",
+			"digest": "7a9a0a832075c8ffe3a5ecfea282a8a12261bfaaa3dd3564694fa32bc74d174a"
+		},
+		{
+			"id": "debug",
+			"digest": "0a184543f2fa80ac35425813574daf3347e8be84808a0dbaccc1d4b3c7d247e0"
+		},
+		{
+			"id": "research",
+			"digest": "cea581570d9090c5a53f4029c60d13fa81f0d19f9ae2fa2103013d8b51b7f099"
+		},
+		{
+			"id": "run-app",
+			"digest": "95ac9dd98e3ffecb033a6dfc05c8c9e2c1be249d86af99360c7747e26bad532c"
+		},
+		{
+			"id": "skill-authoring",
+			"digest": "f7e4a45164b06a39c1f840d8563d7e7976c127bd4ac5af8bb6c876cab506bc2e"
+		},
+		{
+			"id": "verify-app",
+			"digest": "f5a6bdee1bd7208152b3da0c73588dc3e25269601b97f29fdfb669179710ae08"
+		},
+		{
+			"id": "fixture-audit",
+			"digest": "9aae4fca94a42b8c41cb43fd44e4ec01d4d5b635107f4f4af2b032940de481e9"
+		},
+		{
+			"id": "manual-check",
+			"digest": "5b90714da28a32f1b135ee7ed45a582888e5af9463e85c7c7062964d8ba7fffc"
+		}
+	],
+	"plannedCases": [
+		"greeting-zh",
+		"translation-zh",
+		"debug-zh",
+		"debug-en",
+		"review-zh",
+		"recovery-zh",
+		"manual-explicit",
+		"installed-auto-zh",
+		"installed-disabled-zh"
+	],
+	"notRun": ["review-zh", "recovery-zh", "manual-explicit", "installed-auto-zh", "installed-disabled-zh"],
+	"scope": "isolated read-only real-model skill routing, installation and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "greeting-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "你好！有什么我可以帮你的吗？",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 3223,
+				"outputTokens": 9,
+				"cacheReadTokens": 128,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3360,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "translation-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "Tomorrow we will discuss this plan.",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 3462,
+				"outputTokens": 90,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3552,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"finishReason": "error",
+			"error": "Connection error.",
+			"failureKind": "provider_network",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {},
+					"output": ".: 4 entry(ies)\n.wuming/\npackages/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_14fa968d-40b6-4876-a149-b9f88f981eb5\n"
+				}
+			],
+			"usage": {
+				"inputTokens": 6165,
+				"outputTokens": 112,
+				"cacheReadTokens": 415,
+				"cacheWriteTokens": 0,
+				"totalTokens": 6692,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-en",
+			"passed": false,
+			"operationStatus": "failed",
+			"finishReason": "error",
+			"error": "Connection error.",
+			"failureKind": "provider_network",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		}
+	]
+}

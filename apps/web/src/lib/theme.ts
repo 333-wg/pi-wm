@@ -47,7 +47,12 @@ export function toggleChoice(choice: ThemeChoice, systemPrefersDark: boolean): T
 	return resolveTheme(choice, systemPrefersDark) === "dark" ? "light" : "dark";
 }
 
-export function themeLabel(choice: ThemeChoice): string {
+export function themeLabel(choice: ThemeChoice, locale: "zh" | "en" = "zh"): string {
+	if (locale === "en") {
+		if (choice === "light") return "Light";
+		if (choice === "dark") return "Dark";
+		return "Follow system";
+	}
 	if (choice === "light") return "浅色";
 	if (choice === "dark") return "深色";
 	return "跟随系统";

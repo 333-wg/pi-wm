@@ -47,7 +47,9 @@ function record(row: ArtifactRow): ArtifactRecord {
 }
 
 function sameRef(left: ArtifactRef, right: ArtifactRef): boolean {
-	return left.id === right.id && left.name === right.name && left.mimeType === right.mimeType && left.size === right.size;
+	return (
+		left.id === right.id && left.name === right.name && left.mimeType === right.mimeType && left.size === right.size
+	);
 }
 
 export class ArtifactStore implements Disposable {
@@ -84,12 +86,17 @@ export class ArtifactStore implements Disposable {
 		this.#validation = {
 			...(options.maxFileBytes === undefined ? {} : { maxFileBytes: options.maxFileBytes }),
 			...(options.maxImageBytes === undefined ? {} : { maxImageBytes: options.maxImageBytes }),
+			...(options.maxVideoBytes === undefined ? {} : { maxVideoBytes: options.maxVideoBytes }),
 			...(options.maxTextBytes === undefined ? {} : { maxTextBytes: options.maxTextBytes }),
 			...(options.maxImagePixels === undefined ? {} : { maxImagePixels: options.maxImagePixels }),
 		};
 	}
 
-	static async open(databasePath: string, objectRoot: string, options: ArtifactStoreOptions = {}): Promise<ArtifactStore> {
+	static async open(
+		databasePath: string,
+		objectRoot: string,
+		options: ArtifactStoreOptions = {}
+	): Promise<ArtifactStore> {
 		await mkdir(objectRoot, { recursive: true });
 		return new ArtifactStore(databasePath, objectRoot, options);
 	}
@@ -118,33 +125,38 @@ export class ArtifactStore implements Disposable {
 			kind: validated.kind,
 			createdAt: this.#clock(),
 		};
-		this.#db.prepare(
-			"INSERT INTO artifacts(id, workspace_id, owner_id, name, mime_type, size, sha256, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		).run(
-			value.ref.id,
-			value.workspaceId,
-			value.ownerId,
-			value.ref.name,
-			value.ref.mimeType,
-			value.ref.size,
-			value.sha256,
-			value.kind,
-			value.createdAt,
-		);
+		this.#db
+			.prepare(
+				"INSERT INTO artifacts(id, workspace_id, owner_id, name, mime_type, size, sha256, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+			)
+			.run(
+				value.ref.id,
+				value.workspaceId,
+				value.ownerId,
+				value.ref.name,
+				value.ref.mimeType,
+				value.ref.size,
+				value.sha256,
+				value.kind,
+				value.createdAt
+			);
 		return value;
 	}
 
 	get(id: string): ArtifactRecord | undefined {
-		const row = this.#db.prepare(
-			"SELECT id, workspace_id, owner_id, name, mime_type, size, sha256, kind, created_at FROM artifacts WHERE id = ?",
-		).get(id) as unknown as ArtifactRow | undefined;
+		const row = this.#db
+			.prepare(
+				"SELECT id, workspace_id, owner_id, name, mime_type, size, sha256, kind, created_at FROM artifacts WHERE id = ?"
+			)
+			.get(id) as unknown as ArtifactRow | undefined;
 		return row ? record(row) : undefined;
 	}
 
 	assertReference(ref: ArtifactRef, workspaceId: string): ArtifactRecord {
 		const stored = this.get(ref.id);
 		if (!stored) throw new ArtifactError("not_found", `Artifact ${ref.id} does not exist`);
-		if (stored.workspaceId !== workspaceId) throw new ArtifactError("forbidden", "Artifact belongs to another workspace");
+		if (stored.workspaceId !== workspaceId)
+			throw new ArtifactError("forbidden", "Artifact belongs to another workspace");
 		if (!sameRef(stored.ref, ref)) throw new ArtifactError("invalid", `Artifact reference ${ref.id} was modified`);
 		return stored;
 	}
@@ -168,12 +180,26 @@ export class ArtifactStore implements Disposable {
 		return { record: stored, content };
 	}
 
-	async resolve(ref: ArtifactRef, snapshot: SessionSnapshot): Promise<{ data: string; mimeType: string; binary?: boolean; extractedText?: string; extractionNotice?: string }> {
+	async resolve(
+		ref: ArtifactRef,
+		snapshot: SessionSnapshot
+	): Promise<{
+		data: string;
+		mimeType: string;
+		binary?: boolean;
+		extractedText?: string;
+		extractionNotice?: string;
+	}> {
 		this.assertSessionReference(ref, snapshot);
 		const { record: stored, content } = await this.read(ref.id);
-		const extraction = stored.kind === "binary"
-			? await extractArtifact({ name: stored.ref.name, mimeType: stored.ref.mimeType, content }, this.#maxExtractedTextChars, this.#pdfExtraction)
-			: {};
+		const extraction =
+			stored.kind === "binary"
+				? await extractArtifact(
+						{ name: stored.ref.name, mimeType: stored.ref.mimeType, content },
+						this.#maxExtractedTextChars,
+						this.#pdfExtraction
+					)
+				: {};
 		return {
 			data: content.toString("base64"),
 			mimeType: stored.ref.mimeType,

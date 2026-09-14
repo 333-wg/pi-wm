@@ -1,0 +1,205 @@
+{
+	"evaluatedAt": "2026-09-06T11:46:23.404Z",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"scope": "isolated read-only real-model skill routing and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "greeting-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "你好！有什么我可以帮你的吗？",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 2672,
+				"outputTokens": 190,
+				"cacheReadTokens": 704,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3566,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "translation-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "Tomorrow we will discuss this plan.",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 1399,
+				"outputTokens": 62,
+				"cacheReadTokens": 1984,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3445,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-zh",
+			"passed": false,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "排查如下：\n\n工作区根目录下没有 `config.txt` 这个文件，所以读取失败。实际可用的配置文件是 `config.local.txt`，它只包含一行 `proof` 字段。\n\n`proof` 字段原值：\n\n```\nSKILL_PROOF_21652580-deb6-4409-869b-0835d861f0c2\n```\n\n依据：\n\n- 通过 `ls` 列出工作区根目录，仅有 `config.local.txt`、`math.js` 和 `.wuming/` 三个条目，不存在 `config.txt`。\n- 用 `read_file` 读取 `config.local.txt`，内容为单行：`proof=SKILL_PROOF_21652580-deb6-4409-869b-0835d861f0c2`，即 `proof` 的原值。\n\n附：工作区还存在一个手动技能目录 `.wuming/skills/manual-check/SKILL.md`（未加载，因本次任务是排查配置，与该技能无关）。",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": true,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 3
+					},
+					"output": ".: 5 entry(ies)\n.wuming/\n.wuming/skills/\n.wuming/skills/manual-check/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_21652580-deb6-4409-869b-0835d861f0c2\n"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": ".wuming/skills/manual-check"
+					},
+					"output": ".wuming/skills/manual-check: 1 entry(ies)\n.wuming/skills/manual-check/SKILL.md\t187"
+				}
+			],
+			"usage": {
+				"inputTokens": 3286,
+				"outputTokens": 380,
+				"cacheReadTokens": 7123,
+				"cacheWriteTokens": 0,
+				"totalTokens": 10789,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-en",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 7652,
+				"outputTokens": 289,
+				"cacheReadTokens": 10112,
+				"cacheWriteTokens": 0,
+				"totalTokens": 18053,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "review-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "recovery-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "manual-explicit",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skill:manual-check", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		}
+	]
+}

@@ -18,8 +18,8 @@ import {
 	type Usage,
 	UsageSchema,
 	UsageToolSummarySchema,
-	UsageTurnSummarySchema,
 	BudgetWarningSchema,
+	ContextUsageStateSchema,
 } from "@wuming/protocol";
 import Type, { type Static } from "typebox";
 
@@ -49,15 +49,27 @@ export const SessionEventSchema = Type.Union([
 		tokenBudget: Type.Optional(Type.Integer({ exclusiveMinimum: 0 })),
 		budgetWarningThreshold: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 1 })),
 	}),
-	StrictObject({ ...EventBase, type: Type.Literal("session.item.upserted"), item: TranscriptItemSchema }),
-	StrictObject({ ...EventBase, type: Type.Literal("session.phase.changed"), phase: SessionPhaseSchema }),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.item.upserted"),
+		item: TranscriptItemSchema,
+	}),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.phase.changed"),
+		phase: SessionPhaseSchema,
+	}),
 	StrictObject({
 		...EventBase,
 		type: Type.Literal("session.queue.changed"),
 		queuedSteerCount: Type.Integer({ minimum: 0 }),
 		queuedFollowUpCount: Type.Integer({ minimum: 0 }),
 	}),
-	StrictObject({ ...EventBase, type: Type.Literal("session.model.changed"), model: ModelRefSchema }),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.model.changed"),
+		model: ModelRefSchema,
+	}),
 	StrictObject({
 		...EventBase,
 		type: Type.Literal("session.thinking.changed"),
@@ -69,12 +81,55 @@ export const SessionEventSchema = Type.Union([
 		sandboxMode: SandboxModeSchema,
 		approvalPolicy: ApprovalPolicySchema,
 	}),
-	StrictObject({ ...EventBase, type: Type.Literal("approval.requested"), approval: ApprovalRequestSchema }),
-	StrictObject({ ...EventBase, type: Type.Literal("approval.settled"), approval: ApprovalRequestSchema }),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("approval.requested"),
+		approval: ApprovalRequestSchema,
+	}),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("approval.settled"),
+		approval: ApprovalRequestSchema,
+	}),
 	StrictObject({ ...EventBase, type: Type.Literal("session.usage.replaced"), usage: UsageSchema }),
-	StrictObject({ ...EventBase, type: Type.Literal("session.usage.recorded"), turnId: Id, mode: Type.Union([Type.Literal("prompt"), Type.Literal("steer"), Type.Literal("follow_up")]), model: ModelRefSchema, attempt: Type.Integer({ minimum: 1 }), usage: UsageSchema, tools: Type.Array(UsageToolSummarySchema, { maxItems: 100 }), requests: Type.Array(Type.Object({ requestId: Id, model: ModelRefSchema, usage: UsageSchema }, { additionalProperties: false }), { maxItems: 100 }), skills: Type.Optional(Type.Array(Id, { maxItems: 8, uniqueItems: true })) }),
-	StrictObject({ ...EventBase, type: Type.Literal("session.budget.warning"), warning: BudgetWarningSchema }),
-	StrictObject({ ...EventBase, type: Type.Literal("session.budget.changed"), costBudgetUsd: Type.Optional(Type.Union([Type.Number({ exclusiveMinimum: 0 }), Type.Null()])), tokenBudget: Type.Optional(Type.Union([Type.Integer({ exclusiveMinimum: 0 }), Type.Null()])), budgetWarningThreshold: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 1 })) }),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.context.updated"),
+		contextUsage: ContextUsageStateSchema,
+	}),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.usage.recorded"),
+		turnId: Id,
+		mode: Type.Union([Type.Literal("prompt"), Type.Literal("steer"), Type.Literal("follow_up")]),
+		model: ModelRefSchema,
+		attempt: Type.Integer({ minimum: 1 }),
+		usage: UsageSchema,
+		tools: Type.Array(UsageToolSummarySchema, { maxItems: 100 }),
+		requests: Type.Array(
+			Type.Object({ requestId: Id, model: ModelRefSchema, usage: UsageSchema }, { additionalProperties: false }),
+			{ maxItems: 100 }
+		),
+		skills: Type.Optional(Type.Array(Id, { maxItems: 128, uniqueItems: true })),
+	}),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.budget.warning"),
+		warning: BudgetWarningSchema,
+	}),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.verification.missing"),
+		operationId: Id,
+		changedTools: Type.Array(Id, { minItems: 1, maxItems: 20 }),
+	}),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.budget.changed"),
+		costBudgetUsd: Type.Optional(Type.Union([Type.Number({ exclusiveMinimum: 0 }), Type.Null()])),
+		tokenBudget: Type.Optional(Type.Union([Type.Integer({ exclusiveMinimum: 0 }), Type.Null()])),
+		budgetWarningThreshold: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 1 })),
+	}),
 	StrictObject({
 		...EventBase,
 		type: Type.Literal("session.renamed"),

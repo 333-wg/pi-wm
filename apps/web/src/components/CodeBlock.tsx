@@ -53,7 +53,7 @@ export const CodeBlock = memo(function CodeBlock({
 									<span className={`tok tok-${token.kind}`} key={position}>
 										{token.value}
 									</span>
-								),
+								)
 							)}
 							{"\n"}
 						</span>

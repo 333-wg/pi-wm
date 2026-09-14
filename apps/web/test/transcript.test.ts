@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ContentPart, TranscriptItem } from "@wuming/protocol";
-import { anchorBefore, formatItemTime, formatItemTimestamp, latestUserItemIndex, messageText } from "../src/lib/transcript.js";
+import {
+	anchorBefore,
+	formatItemTime,
+	formatItemTimestamp,
+	hasVisibleContent,
+	latestUserItemIndex,
+	messageText,
+} from "../src/lib/transcript.js";
 
 function user(id: string, text: string): TranscriptItem {
 	return { id, createdAt: 1, type: "user", content: [{ type: "text", text }] };
@@ -21,6 +28,26 @@ describe("messageText", () => {
 		expect(messageText([{ type: "text", text: "   " }])).toBe("");
 		expect(messageText([{ type: "thinking", text: "只有推理" }])).toBe("");
 		expect(messageText([])).toBe("");
+	});
+});
+
+describe("hasVisibleContent", () => {
+	it("does not treat internal thinking as transcript content", () => {
+		expect(hasVisibleContent([{ type: "thinking", text: "内部推理" }])).toBe(false);
+	});
+
+	it("keeps artifacts and unrendered tool calls visible", () => {
+		expect(
+			hasVisibleContent([
+				{ type: "artifact", artifact: { id: "a", name: "report.md", mimeType: "text/markdown", size: 1 } },
+			])
+		).toBe(true);
+		expect(
+			hasVisibleContent([{ type: "tool_call", toolCallId: "call-1", toolName: "exec", input: {} }], new Set())
+		).toBe(true);
+		expect(
+			hasVisibleContent([{ type: "tool_call", toolCallId: "call-1", toolName: "exec", input: {} }], new Set(["call-1"]))
+		).toBe(false);
 	});
 });
 
@@ -46,9 +73,29 @@ describe("latestUserItemIndex", () => {
 	it("separates the active turn from earlier transcript history", () => {
 		const transcript: TranscriptItem[] = [
 			user("first-user", "一"),
-			{ id: "first-tool", createdAt: 2, type: "tool", toolCallId: "tool-1", toolName: "read_file", input: {}, content: [], status: "complete", isError: false },
+			{
+				id: "first-tool",
+				createdAt: 2,
+				type: "tool",
+				toolCallId: "tool-1",
+				toolName: "read_file",
+				input: {},
+				content: [],
+				status: "complete",
+				isError: false,
+			},
 			user("latest-user", "二"),
-			{ id: "latest-tool", createdAt: 3, type: "tool", toolCallId: "tool-2", toolName: "ls", input: {}, content: [], status: "complete", isError: false },
+			{
+				id: "latest-tool",
+				createdAt: 3,
+				type: "tool",
+				toolCallId: "tool-2",
+				toolName: "ls",
+				input: {},
+				content: [],
+				status: "complete",
+				isError: false,
+			},
 		];
 
 		expect(latestUserItemIndex(transcript)).toBe(2);

@@ -4,8 +4,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ClientMessage, ServerMessage, SessionSnapshot, TranscriptItem } from "../packages/protocol/src/index.js";
 import WebSocket from "ws";
+import { stopGateway, waitForGatewayPort } from "./lib/gateway-process.js";
+import { verifyPlanArtifacts, verifyPlanTools } from "./lib/plan-acceptance.js";
 
 const token = `pi-tools-${randomUUID()}`;
 const requestTimeoutMs = 120_000;
@@ -29,9 +32,11 @@ function send(ws: WebSocket, message: ClientMessage): void {
 }
 
 function describe(message: ServerMessage): string {
-	if (message.type === "response") return `response:${message.requestId}:${message.ok ? message.result.type : message.error.code}`;
+	if (message.type === "response")
+		return `response:${message.requestId}:${message.ok ? message.result.type : message.error.code}`;
 	if (message.type === "event") {
-		if (message.event.type === "session.phase.changed") return `phase:${message.event.sessionId}:${message.event.phase}`;
+		if (message.event.type === "session.phase.changed")
+			return `phase:${message.event.sessionId}:${message.event.phase}`;
 		if (message.event.type === "session.item.upserted") return `item:${message.event.item.type}`;
 		return `event:${message.event.type}`;
 	}
@@ -55,7 +60,11 @@ class Collector {
 		return new Promise((resolveMessage, reject) => {
 			const timeout = setTimeout(() => {
 				this.#waiters.delete(check);
-				reject(new Error(`Timed out waiting for ${label}; recent messages: ${this.messages.slice(-20).map(describe).join(", ")}`));
+				reject(
+					new Error(
+						`Timed out waiting for ${label}; recent messages: ${this.messages.slice(-20).map(describe).join(", ")}`
+					)
+				);
 			}, requestTimeoutMs);
 			const check = () => {
 				const match = this.messages.find(predicate);
@@ -79,6 +88,9 @@ async function startGateway(workspace: string, dataDir: string): Promise<{ child
 			WUMING_TOKEN: token,
 			WUMING_RUNTIME: "pi",
 			WUMING_WORKSPACE: workspace,
+			WUMING_WORKSPACES_JSON: JSON.stringify([
+				{ id: "local-workspace", name: "Verification workspace", path: workspace },
+			]),
 			WUMING_DATA_DIR: dataDir,
 			WUMING_TERMINAL_MODE: "disabled",
 			WUMING_MAX_RETRIES: "0",
@@ -87,34 +99,10 @@ async function startGateway(workspace: string, dataDir: string): Promise<{ child
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
-	let output = "";
-	let errors = "";
-	child.stdout?.on("data", (chunk) => { output += String(chunk); });
-	child.stderr?.on("data", (chunk) => { errors += String(chunk); });
-	const port = await new Promise<number>((resolvePort, reject) => {
-		const timeout = setTimeout(() => reject(new Error(`Gateway startup timed out\n${output}\n${errors}`)), 30_000);
-		const inspect = () => {
-			const match = output.match(/Wuming gateway listening on http:\/\/127\.0\.0\.1:(\d+)/);
-			if (!match) return;
-			clearTimeout(timeout);
-			resolvePort(Number(match[1]));
-		};
-		child.stdout?.on("data", inspect);
-		child.once("exit", (code) => {
-			clearTimeout(timeout);
-			reject(new Error(`Gateway exited during startup with code ${code}\n${output}\n${errors}`));
-		});
-	});
+	child.stderr?.resume();
+	const port = await waitForGatewayPort(child);
+	child.stdout?.resume();
 	return { child, port };
-}
-
-async function stopGateway(child: ChildProcess): Promise<void> {
-	if (child.exitCode !== null || child.signalCode !== null) return;
-	await new Promise<void>((resolveStop) => {
-		const timeout = setTimeout(() => { child.kill("SIGKILL"); resolveStop(); }, 5_000);
-		child.once("exit", () => { clearTimeout(timeout); resolveStop(); });
-		child.kill("SIGTERM");
-	});
 }
 
 async function openClient(port: number): Promise<{ ws: WebSocket; collector: Collector }> {
@@ -124,13 +112,21 @@ async function openClient(port: number): Promise<{ ws: WebSocket; collector: Col
 		ws.once("error", reject);
 	});
 	const collector = new Collector(ws);
-	send(ws, { type: "hello", protocolVersion: 1, clientId: `pi-tools-${randomUUID()}`, capabilities: ["tools"] });
+	send(ws, {
+		type: "hello",
+		protocolVersion: 1,
+		clientId: `pi-tools-${randomUUID()}`,
+		capabilities: ["tools"],
+	});
 	await collector.waitFor((message) => message.type === "hello", "gateway hello");
 	return { ws, collector };
 }
 
 function toolText(item: Extract<TranscriptItem, { type: "tool" }>): string {
-	return item.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+	return item.content
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("\n");
 }
 
 interface ToolCase {
@@ -139,7 +135,13 @@ interface ToolCase {
 	verify?: (item: Extract<TranscriptItem, { type: "tool" }>) => void | Promise<void>;
 }
 
-async function runCase(ws: WebSocket, collector: Collector, provider: string, modelId: string, test: ToolCase): Promise<{ name: string; usage: SessionSnapshot["usage"] }> {
+async function runCase(
+	ws: WebSocket,
+	collector: Collector,
+	provider: string,
+	modelId: string,
+	test: ToolCase
+): Promise<{ name: string; usage: SessionSnapshot["usage"] }> {
 	const suffix = randomUUID();
 	const createRequestId = `create-${suffix}`;
 	send(ws, {
@@ -157,28 +159,169 @@ async function runCase(ws: WebSocket, collector: Collector, provider: string, mo
 			tokenBudget: 20_000,
 		},
 	});
-	const created = await collector.waitFor((message) => message.type === "response" && message.requestId === createRequestId, `${test.name} session creation`);
-	assert(created.type === "response" && created.ok && created.result.type === "session.created", `${test.name}: session creation failed`);
+	const created = await collector.waitFor(
+		(message) => message.type === "response" && message.requestId === createRequestId,
+		`${test.name} session creation`
+	);
+	assert(
+		created.type === "response" && created.ok && created.result.type === "session.created",
+		`${test.name}: session creation failed`
+	);
 	const sessionId = created.result.snapshot.session.id;
 	const promptRequestId = `prompt-${suffix}`;
-	send(ws, { type: "request", requestId: promptRequestId, idempotencyKey: promptRequestId, command: { type: "turn.prompt", sessionId, content: [{ type: "text", text: test.prompt }] } });
-	const accepted = await collector.waitFor((message) => message.type === "response" && message.requestId === promptRequestId, `${test.name} turn acceptance`);
+	send(ws, {
+		type: "request",
+		requestId: promptRequestId,
+		idempotencyKey: promptRequestId,
+		command: { type: "turn.prompt", sessionId, content: [{ type: "text", text: test.prompt }] },
+	});
+	const accepted = await collector.waitFor(
+		(message) => message.type === "response" && message.requestId === promptRequestId,
+		`${test.name} turn acceptance`
+	);
 	assert(accepted.type === "response" && accepted.ok, `${test.name}: turn was rejected`);
 	await collector.waitFor(
-		(message) => message.type === "event" && message.event.type === "session.phase.changed" && message.event.sessionId === sessionId && message.event.phase === "idle",
-		`${test.name} completion`,
+		(message) =>
+			message.type === "event" &&
+			message.event.type === "session.phase.changed" &&
+			message.event.sessionId === sessionId &&
+			message.event.phase === "idle",
+		`${test.name} completion`
 	);
 	const snapshotRequestId = `snapshot-${suffix}`;
-	send(ws, { type: "request", requestId: snapshotRequestId, idempotencyKey: snapshotRequestId, command: { type: "session.snapshot.get", sessionId } });
-	const response = await collector.waitFor((message) => message.type === "response" && message.requestId === snapshotRequestId, `${test.name} snapshot`);
-	assert(response.type === "response" && response.ok && response.result.type === "session.snapshot", `${test.name}: snapshot query failed`);
-	const calls = response.result.snapshot.transcript.filter((item): item is Extract<TranscriptItem, { type: "tool" }> => item.type === "tool" && item.toolName === test.name);
+	send(ws, {
+		type: "request",
+		requestId: snapshotRequestId,
+		idempotencyKey: snapshotRequestId,
+		command: { type: "session.snapshot.get", sessionId },
+	});
+	const response = await collector.waitFor(
+		(message) => message.type === "response" && message.requestId === snapshotRequestId,
+		`${test.name} snapshot`
+	);
+	assert(
+		response.type === "response" && response.ok && response.result.type === "session.snapshot",
+		`${test.name}: snapshot query failed`
+	);
+	const calls = response.result.snapshot.transcript.filter(
+		(item): item is Extract<TranscriptItem, { type: "tool" }> => item.type === "tool" && item.toolName === test.name
+	);
 	assert(calls.length === 1, `${test.name}: expected exactly one call, received ${calls.length}`);
 	const call = calls[0]!;
-	assert(call.status === "complete" && !call.isError, `${test.name}: tool ended with status=${call.status}, isError=${call.isError}`);
+	assert(
+		call.status === "complete" && !call.isError,
+		`${test.name}: tool ended with status=${call.status}, isError=${call.isError}`
+	);
 	await test.verify?.(call);
 	console.log(`[PASS] ${test.name}`);
 	return { name: test.name, usage: response.result.snapshot.usage };
+}
+
+async function runGoalPlan(ws: WebSocket, collector: Collector, provider: string, modelId: string, workspace: string) {
+	const request = async (command: Extract<ClientMessage, { type: "request" }>["command"]) => {
+		const requestId = randomUUID();
+		send(ws, { type: "request", requestId, idempotencyKey: requestId, command });
+		const message = await collector.waitFor(
+			(candidate) => candidate.type === "response" && candidate.requestId === requestId,
+			command.type
+		);
+		assert(message.type === "response" && message.ok, command.type + " failed");
+		return message.result;
+	};
+	const created = await request({
+		type: "session.create",
+		workspaceId: "local-workspace",
+		name: "Real plan acceptance",
+		model: { provider, id: modelId },
+		thinkingLevel: "off",
+		sandboxMode: "workspace_write",
+		approvalPolicy: "never",
+		tokenBudget: 20000,
+	});
+	assert(created.type === "session.created", "Unexpected session response");
+	const sessionId = created.snapshot.session.id;
+	const goal = await request({
+		type: "goal.create",
+		sessionId,
+		objective:
+			"Create two JSON inputs and merge their numeric values into a verified report. Use only file tools; do not use network or process tools.",
+		plan: {
+			maxParallel: 2,
+			steps: [
+				{
+					id: "left",
+					title: "Left input",
+					objective:
+						'Use write_file to create left.json containing exactly {"value":17}. Return the path and value. Do not create other files.',
+					dependsOn: [],
+				},
+				{
+					id: "right",
+					title: "Right input",
+					objective:
+						'Use write_file to create right.json containing exactly {"value":25}. Return the path and value. Do not create other files.',
+					dependsOn: [],
+				},
+				{
+					id: "merge",
+					title: "Merge inputs",
+					objective:
+						'Use read_file to read left.json and right.json. Add their numeric value fields. Use write_file to create report.json containing exactly {"sum":42,"sources":["left.json","right.json"]}. Verify report.json using read_file and return its path.',
+					dependsOn: ["left", "right"],
+				},
+			],
+		},
+	});
+	assert(goal.type === "goal.created", "Unexpected goal response");
+	await request({ type: "goal.start", sessionId, goalId: goal.goal.id });
+	const deadline = Date.now() + requestTimeoutMs * 3;
+	try {
+		for (;;) {
+			const listed = await request({ type: "goal.list", sessionId });
+			assert(listed.type === "goal.list", "Unexpected goal listing response");
+			const result = listed.goals.find((candidate) => candidate.id === goal.goal.id);
+			assert(result, "Goal disappeared during verification");
+			assert(!["failed", "cancelled"].includes(result.status), "Real plan did not complete successfully");
+			if (result.status === "completed") {
+				assert(
+					result.plan?.steps.length === 3 && result.plan.steps.every((step) => step.status === "completed"),
+					"Not all plan steps completed"
+				);
+				const left = JSON.parse(await readFile(join(workspace, "left.json"), "utf8"));
+				const right = JSON.parse(await readFile(join(workspace, "right.json"), "utf8"));
+				const report = JSON.parse(await readFile(join(workspace, "report.json"), "utf8"));
+				verifyPlanArtifacts(left, right, report);
+				for (const step of result.plan.steps) {
+					assert(step.runSessionId, "Step has no execution session");
+					const snapshot = await request({
+						type: "session.snapshot.get",
+						sessionId: step.runSessionId,
+					});
+					assert(snapshot.type === "session.snapshot", "Step snapshot unavailable");
+					const tools = snapshot.snapshot.transcript.filter((item) => item.type === "tool");
+					verifyPlanTools(step.id, tools, workspace);
+				}
+				return {
+					ok: true,
+					provider,
+					modelId,
+					kind: "goal-plan",
+					usage: result.usage,
+					steps: result.plan.steps.map((step) => ({
+						id: step.id,
+						status: step.status,
+						usage: step.usage,
+					})),
+					artifactChecks: ["left-value", "right-value", "sum", "source-references", "file-tool-traces"],
+				};
+			}
+			assert(Date.now() < deadline, "Real plan verification timed out");
+			await delay(500);
+		}
+	} catch (error) {
+		await request({ type: "goal.cancel", sessionId, goalId: goal.goal.id }).catch(() => {});
+		throw error;
+	}
 }
 
 async function main(): Promise<void> {
@@ -194,19 +337,60 @@ async function main(): Promise<void> {
 	await writeFile(join(workspace, "edit-proof.txt"), "EDIT_BEFORE\n", "utf8");
 
 	const cases: ToolCase[] = [
-		{ name: "read_file", prompt: "Call read_file exactly once with path read-proof.txt. Do not call another tool.", verify: (item) => assert(toolText(item).includes("READ_FILE_OK"), "read_file: proof content missing") },
-		{ name: "write_file", prompt: "Call write_file exactly once to write WRITE_FILE_OK followed by a newline to write-proof.txt. Do not call another tool.", verify: async () => assert(await readFile(join(workspace, "write-proof.txt"), "utf8") === "WRITE_FILE_OK\n", "write_file: file content mismatch") },
-		{ name: "edit", prompt: "Call edit exactly once on edit-proof.txt, replacing EDIT_BEFORE with EDIT_AFTER. Do not call another tool.", verify: async () => assert(await readFile(join(workspace, "edit-proof.txt"), "utf8") === "EDIT_AFTER\n", "edit: file content mismatch") },
-		{ name: "web_search", prompt: "Call web_search exactly once with query OpenAI official website and count 3. Do not call another tool.", verify: (item) => assert(!toolText(item).includes("No search results found"), "web_search: no results returned") },
-		{ name: "web_fetch", prompt: "Call web_fetch exactly once with URL https://example.com and max_chars 4000. Do not call another tool.", verify: (item) => assert(toolText(item).includes("Example Domain"), "web_fetch: expected page content missing") },
+		{
+			name: "read_file",
+			prompt: "Call read_file exactly once with path read-proof.txt. Do not call another tool.",
+			verify: (item) => assert(toolText(item).includes("READ_FILE_OK"), "read_file: proof content missing"),
+		},
+		{
+			name: "write_file",
+			prompt:
+				"Call write_file exactly once to write WRITE_FILE_OK followed by a newline to write-proof.txt. Do not call another tool.",
+			verify: async () =>
+				assert(
+					(await readFile(join(workspace, "write-proof.txt"), "utf8")) === "WRITE_FILE_OK\n",
+					"write_file: file content mismatch"
+				),
+		},
+		{
+			name: "edit",
+			prompt:
+				"Call edit exactly once on edit-proof.txt, replacing EDIT_BEFORE with EDIT_AFTER. Do not call another tool.",
+			verify: async () =>
+				assert(
+					(await readFile(join(workspace, "edit-proof.txt"), "utf8")) === "EDIT_AFTER\n",
+					"edit: file content mismatch"
+				),
+		},
+		{
+			name: "web_search",
+			prompt: "Call web_search exactly once with query OpenAI official website and count 3. Do not call another tool.",
+			verify: (item) => assert(!toolText(item).includes("No search results found"), "web_search: no results returned"),
+		},
+		{
+			name: "web_fetch",
+			prompt: "Call web_fetch exactly once with URL https://example.com and max_chars 4000. Do not call another tool.",
+			verify: (item) => assert(toolText(item).includes("Example Domain"), "web_fetch: expected page content missing"),
+		},
 	];
 	if (process.env.WUMING_DOCKER_IMAGE?.trim()) {
 		cases.push(
-			{ name: "exec", prompt: "Call exec exactly once with command printf EXEC_TOOL_OK and timeout 30. Do not call another tool.", verify: (item) => assert(toolText(item).includes("EXEC_TOOL_OK"), "exec: proof output missing") },
-			{ name: "run_python", prompt: "Call run_python exactly once with code print('PYTHON_TOOL_OK') and timeout 30. Do not call another tool.", verify: (item) => assert(toolText(item).includes("PYTHON_TOOL_OK"), "run_python: proof output missing") },
+			{
+				name: "exec",
+				prompt: "Call exec exactly once with command printf EXEC_TOOL_OK and timeout 30. Do not call another tool.",
+				verify: (item) => assert(toolText(item).includes("EXEC_TOOL_OK"), "exec: proof output missing"),
+			},
+			{
+				name: "run_python",
+				prompt:
+					"Call run_python exactly once with code print('PYTHON_TOOL_OK') and timeout 30. Do not call another tool.",
+				verify: (item) => assert(toolText(item).includes("PYTHON_TOOL_OK"), "run_python: proof output missing"),
+			}
 		);
 	}
-	const selectedNames = process.env.WUMING_PI_TOOL_CASES?.split(",").map((name) => name.trim()).filter(Boolean);
+	const selectedNames = process.env.WUMING_PI_TOOL_CASES?.split(",")
+		.map((name) => name.trim())
+		.filter(Boolean);
 	const selected = selectedNames?.length ? cases.filter((test) => selectedNames.includes(test.name)) : cases;
 	if (selectedNames?.length) {
 		const unknown = selectedNames.filter((name) => !cases.some((test) => test.name === name));
@@ -221,9 +405,25 @@ async function main(): Promise<void> {
 		child = gateway.child;
 		const client = await openClient(gateway.port);
 		ws = client.ws;
+		if (process.env.WUMING_PI_GOAL_PLAN === "1") {
+			console.log(JSON.stringify(await runGoalPlan(ws, client.collector, provider, modelId, workspace), null, 2));
+			return;
+		}
 		const results = [];
 		for (const test of selected) results.push(await runCase(ws, client.collector, provider, modelId, test));
-		console.log(JSON.stringify({ ok: true, provider, modelId, tools: results, skipped: process.env.WUMING_DOCKER_IMAGE?.trim() ? [] : ["exec", "run_python"] }, null, 2));
+		console.log(
+			JSON.stringify(
+				{
+					ok: true,
+					provider,
+					modelId,
+					tools: results,
+					skipped: process.env.WUMING_DOCKER_IMAGE?.trim() ? [] : ["exec", "run_python"],
+				},
+				null,
+				2
+			)
+		);
 	} finally {
 		ws?.close();
 		if (child) await stopGateway(child);

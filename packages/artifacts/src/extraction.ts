@@ -24,7 +24,8 @@ const DOCX_MIMES = new Set([
 
 const PDF_FAILED_NOTICE = "The PDF attachment was uploaded, but its text could not be extracted.";
 const PDF_EMPTY_NOTICE = "The PDF attachment contains no extractable text; it may be image-only.";
-const PDF_TIMEOUT_NOTICE = "The PDF attachment was uploaded, but its text could not be extracted within the time limit.";
+const PDF_TIMEOUT_NOTICE =
+	"The PDF attachment was uploaded, but its text could not be extracted within the time limit.";
 const DEFAULT_PDF_TIMEOUT_MS = 60_000;
 const DEFAULT_PDF_MAX_OLD_SPACE_MB = 1024;
 
@@ -58,7 +59,11 @@ function defaultPdfWorkerPath(): string {
  * event loop free, bounds time, heap, and output, and turns every failure into
  * a notice instead of a dead session.
  */
-async function extractPdf(content: Buffer, maxChars: number, options: PdfExtractionOptions): Promise<ArtifactExtraction> {
+async function extractPdf(
+	content: Buffer,
+	maxChars: number,
+	options: PdfExtractionOptions
+): Promise<ArtifactExtraction> {
 	const worker = options.workerPath ?? defaultPdfWorkerPath();
 	const timeoutMs = options.timeoutMs ?? DEFAULT_PDF_TIMEOUT_MS;
 	const maxOutputBytes = maxChars * 4 + 4096;
@@ -120,7 +125,7 @@ async function extractPdf(content: Buffer, maxChars: number, options: PdfExtract
 export async function extractArtifact(
 	input: { name: string; mimeType: string; content: Buffer },
 	maxChars = 200_000,
-	pdf: PdfExtractionOptions = {},
+	pdf: PdfExtractionOptions = {}
 ): Promise<ArtifactExtraction> {
 	const suffix = extension(input.name);
 	if (DOCX_MIMES.has(input.mimeType) || suffix === ".docx" || suffix === ".docm") {

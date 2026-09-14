@@ -52,7 +52,12 @@ export function crashReport(error: unknown, componentStack?: string | null): str
 }
 
 type BoundaryProps = { children: ReactNode };
-type BoundaryState = { crashed: boolean; error: unknown; componentStack: string; copy: "idle" | "done" | "failed" };
+type BoundaryState = {
+	crashed: boolean;
+	error: unknown;
+	componentStack: string;
+	copy: "idle" | "done" | "failed";
+};
 
 /**
  * Catches a render error anywhere below it.
@@ -102,7 +107,9 @@ export class ErrorBoundary extends Component<BoundaryProps, BoundaryState> {
 		if (!this.state.crashed) return this.props.children;
 		return (
 			<div className="empty-state" role="alert">
-				<div className="empty-icon"><AlertTriangle size={24} /></div>
+				<div className="empty-icon">
+					<AlertTriangle size={24} />
+				</div>
 				<h2>界面渲染出错了</h2>
 				<p>会话内容已经保存在服务端，重新渲染或刷新页面都不会丢失记录。</p>
 				<p>{crashSummary(this.state.error)}</p>
@@ -116,7 +123,9 @@ export class ErrorBoundary extends Component<BoundaryProps, BoundaryState> {
 					</button>
 					<button type="button" onClick={this.copy}>
 						<ClipboardCopy size={13} />
-						<span>{this.state.copy === "done" ? "已复制" : this.state.copy === "failed" ? "复制失败" : "复制错误详情"}</span>
+						<span>
+							{this.state.copy === "done" ? "已复制" : this.state.copy === "failed" ? "复制失败" : "复制错误详情"}
+						</span>
 					</button>
 				</div>
 			</div>

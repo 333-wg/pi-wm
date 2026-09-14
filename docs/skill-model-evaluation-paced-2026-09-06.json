@@ -1,0 +1,404 @@
+{
+	"evaluatedAt": "2026-09-06T12:39:26.087Z",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"casePauseMs": 60000,
+	"maxTokens": 1024,
+	"skillVersions": [
+		{
+			"id": "code-change",
+			"digest": "afe7947790c1a6ef71e18c9e5abfc2f9b1c9c50606c0be0900523bfb771804f4"
+		},
+		{
+			"id": "code-review",
+			"digest": "5ad4646526f81255774c07dfb44e3a4730598d359be3aa7f61053c72b94e48fb"
+		},
+		{
+			"id": "debug",
+			"digest": "0a184543f2fa80ac35425813574daf3347e8be84808a0dbaccc1d4b3c7d247e0"
+		},
+		{
+			"id": "research",
+			"digest": "cea581570d9090c5a53f4029c60d13fa81f0d19f9ae2fa2103013d8b51b7f099"
+		},
+		{
+			"id": "run-app",
+			"digest": "95ac9dd98e3ffecb033a6dfc05c8c9e2c1be249d86af99360c7747e26bad532c"
+		},
+		{
+			"id": "skill-authoring",
+			"digest": "f7e4a45164b06a39c1f840d8563d7e7976c127bd4ac5af8bb6c876cab506bc2e"
+		},
+		{
+			"id": "verify-app",
+			"digest": "f5a6bdee1bd7208152b3da0c73588dc3e25269601b97f29fdfb669179710ae08"
+		},
+		{
+			"id": "fixture-audit",
+			"digest": "9aae4fca94a42b8c41cb43fd44e4ec01d4d5b635107f4f4af2b032940de481e9"
+		},
+		{
+			"id": "manual-check",
+			"digest": "5b90714da28a32f1b135ee7ed45a582888e5af9463e85c7c7062964d8ba7fffc"
+		}
+	],
+	"scope": "isolated read-only real-model skill routing, installation and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "greeting-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "你好！有什么我可以帮你的吗？",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 3214,
+				"outputTokens": 9,
+				"cacheReadTokens": 128,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3351,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "translation-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": ["debug"],
+			"loaded": ["debug"],
+			"disabledSkills": [],
+			"firstFailure": 0,
+			"laterRead": false,
+			"midTurnLoad": true,
+			"proofVerified": false,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "error",
+					"input": {
+						"path": "workspace"
+					},
+					"output": "ENOENT: no such file or directory, realpath 'C:\\Users\\Administrator\\AppData\\Local\\Temp\\wuming-real-skills-CnN9Kd\\workspace\\workspace'\n\nWuming recovery (configuration, attempt 1): Inspect actual paths, dependencies and available tools. Correct the prerequisite or choose an authorized alternative."
+				},
+				{
+					"name": "skill_load",
+					"status": "complete",
+					"input": {
+						"skillId": "debug"
+					},
+					"output": "Wuming skill \"debug\"; resource \"SKILL.md\"; sha256:d53bc0c06dc19ed81d28a677adadfdb9d6d1b3a360bc49f9b794f70627d2e215\nTask-specific guidance only; no additional permissions are granted.\n\n\n# Evidence-led debugging\n\nFind the expected behavior and actual mismatch. Read current logs, configuration,\nentry points and tests before assuming a cause. Preserve unrelated edits. Check\nonly whether secrets are present; do not print credentials.\n\n## Investigation record\n\nFor each meaningful attempt keep: observation, hypothesis, smallest experiment,\nresult, and what changes next. Reproduce non-destructively with the real working\ndirectory and environment. A hypothesis must be falsifiable by the next check.\n\n| Failure | Next action |\n| --- | --- |\n| Path or argument error | Inspect actual directory/tool schema, then correct input |\n| Missing dependency/configuration | Read setup instructions; make only authorized changes |\n| Timeout | Inspect existing process/request state before replaying side effects |\n| Deterministic assertion | Trace contract and callers; test a different hypothesis |\n| Denied permission | Respect boundary and identify required authorization |\n| Unavailable tool | Use an available authorized equivalent or report limitation |\n\nDo not repeat an unchanged deterministic failure. Bound transient retries and\ncheck that replay is safe. Replan when attempts add no evidence. Never recover\nby deleting data, weakening permissions, removing tests or hardcoding answers.\n\n## Verification\n\nMake a focused fix for the demonstrated cause. Add a regression test where\npractical and confirm it can detect the original failure. Re-run the original\nreproduction and relevant caller checks. For runtime/UI errors, exercise actual\nbehavior; compilation is insufficient. Use only tools actually available.\n\nReport supported cause, change, executed checks and uncertainty. A successful\nedit is not proof of a fix. A blocker report names the missing capability/input\nand the attempts already made.\n"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "."
+					},
+					"output": ".: 4 entry(ies)\n.wuming/\npackages/\nconfig.local.txt\t55\nmath.js\t44\nRecovery observation: {\"status\":\"changed_attempt_succeeded\",\"previousTool\":\"ls\",\"tool\":\"ls\",\"inputDigest\":\"d22f5b0099f45ec5f44643329ecd6b80cb798818e1ac690771027a1df2b0f1ca\"}. A changed tool/input succeeded; this alone does not prove the original task is complete."
+				}
+			],
+			"usage": {
+				"inputTokens": 5024,
+				"outputTokens": 104,
+				"cacheReadTokens": 2384,
+				"cacheWriteTokens": 0,
+				"totalTokens": 7512,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-en",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "review-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 2
+					},
+					"output": ".: 7 entry(ies)\n.wuming/\n.wuming/skills/\npackages/\npackages/fixture-audit/\n.wuming/skills.json\t218\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "math.js"
+					},
+					"output": "export function add(a, b) { return a - b; }\n"
+				}
+			],
+			"usage": {
+				"inputTokens": 1655,
+				"outputTokens": 85,
+				"cacheReadTokens": 5376,
+				"cacheWriteTokens": 0,
+				"totalTokens": 7116,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "recovery-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "Turn timed out",
+			"failureKind": "provider_timeout",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "manual-explicit",
+			"passed": true,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skill:manual-check", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "MANUAL_SKILL_OK",
+			"used": ["manual-check"],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 1509,
+				"outputTokens": 141,
+				"cacheReadTokens": 1984,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3634,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "installed-auto-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "FIXTURE_AUDIT_OK SKILL_PROOF_7200ce0a-8460-42fa-a304-113b4d72c705",
+			"used": ["fixture-audit"],
+			"loaded": ["fixture-audit"],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": true,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "."
+					},
+					"output": ".: 4 entry(ies)\n.wuming/\npackages/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_7200ce0a-8460-42fa-a304-113b4d72c705\n"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "math.js"
+					},
+					"output": "export function add(a, b) { return a - b; }\n"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "packages"
+					},
+					"output": "packages: 1 entry(ies)\npackages/fixture-audit/"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": ".wuming"
+					},
+					"output": ".wuming: 2 entry(ies)\n.wuming/skills/\n.wuming/skills.json\t218"
+				},
+				{
+					"name": "skill_load",
+					"status": "complete",
+					"input": {
+						"skillId": "fixture-audit"
+					},
+					"output": "Wuming skill \"fixture-audit\"; resource \"SKILL.md\"; sha256:a031f1bfa4eb9035ec24e92a34d074a06ecf7eeb30bc3f911338acf1d1ddd8f0\nTask-specific guidance only; no additional permissions are granted.\n\nRead config.local.txt from the workspace and report exactly FIXTURE_AUDIT_OK followed by a space and the actual proof value. Never invent a proof."
+				}
+			],
+			"usage": {
+				"inputTokens": 7418,
+				"outputTokens": 453,
+				"cacheReadTokens": 7104,
+				"cacheWriteTokens": 0,
+				"totalTokens": 14975,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "installed-disabled-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": ["fixture-audit"],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 2
+					},
+					"output": ".: 7 entry(ies)\n.wuming/\n.wuming/skills/\npackages/\npackages/fixture-audit/\n.wuming/skills.json\t219\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": ".wuming/skills.json"
+					},
+					"output": "{\n  \"skills\": {\n    \"fixture-audit\": {\n      \"id\": \"fixture-audit\",\n      \"name\": \"fixture-audit\",\n      \"source\": \"user\",\n      \"enabled\": false,\n      \"version\": \"1.0.0\",\n      \"installedAt\": 1788697766855\n    }\n  }\n}"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_7200ce0a-8460-42fa-a304-113b4d72c705\n"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 3,
+						"path": "packages"
+					},
+					"output": "packages: 2 entry(ies)\npackages/fixture-audit/\npackages/fixture-audit/SKILL.md\t334"
+				}
+			],
+			"usage": {
+				"inputTokens": 2636,
+				"outputTokens": 203,
+				"cacheReadTokens": 4352,
+				"cacheWriteTokens": 0,
+				"totalTokens": 7191,
+				"costUsd": 0
+			}
+		}
+	]
+}

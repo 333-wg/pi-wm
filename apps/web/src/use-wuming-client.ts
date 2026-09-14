@@ -1,17 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
 	ApprovalPolicy,
+	AutomationRunSummary,
+	AutomationSchedule,
 	Command,
 	CommandResult,
 	Capability,
 	CustomModelConfig,
 	CustomModelConnection,
 	CustomModelService,
+	MediaKind,
+	MediaModelConfig,
+	MediaModelDiscoveryConnection,
+	EvaluationAttestation,
+	EvaluationDataset,
+	EvaluationGrader,
+	ExecutionEnvironment,
+	GoalExecutionMode,
 	GoalSummary,
+	GoalPlanSpec,
+	GoalAutomationSummary,
 	ArtifactRef,
 	ModelMetadata,
 	ModelRef,
 	RunFailureKind,
+	RunEvaluation,
 	RunSummary,
 	SandboxMode,
 	ServerMessage,
@@ -25,11 +38,14 @@ import type {
 	SkillSummary,
 	McpServer,
 	McpServerSummary,
+	MemoryAction,
+	MemoryRecord,
 	SubagentSummary,
 	ToolStatus,
 } from "@wuming/protocol";
 import { workspaceApi } from "./workspace-api.js";
 import { readStoredPermission, writeStoredPermission } from "./lib/permission-preference.js";
+import { readStoredThinking, thinkingLevelForModel, writeStoredThinking } from "./lib/thinking-preference.js";
 import { isImplicitWorkspace } from "./lib/workspaces.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -42,6 +58,12 @@ export interface LiveAssistant {
 	toolCall: string;
 }
 
+interface BufferedAssistantDelta extends LiveAssistant {
+	sessionId: string;
+}
+
+const STREAM_RENDER_INTERVAL_MS = 30;
+
 export interface LiveTool {
 	toolCallId: string;
 	toolName: string;
@@ -50,6 +72,20 @@ export interface LiveTool {
 	status: "running" | "complete" | "error";
 	preview: string;
 	truncated: boolean;
+	artifact?: ArtifactRef;
+}
+
+export interface LiveGoalActivity {
+	goalId: string;
+	runSessionId: string;
+	order: number;
+	phase: "thinking" | "tool" | "retrying";
+	text: string;
+	thinking: string;
+	toolName?: string;
+	toolStatus?: "running" | "complete" | "error";
+	toolPreview?: string;
+	message?: string;
 }
 
 export interface LiveRetry {
@@ -63,8 +99,10 @@ export interface LiveRetry {
 }
 
 interface ClientState {
+	liveCompaction?: { sessionId: string; status: "running" | "complete" | "failed" | "cancelled" } | undefined;
 	connection: ConnectionStatus;
 	capabilities: Capability[];
+	executionEnvironment: ExecutionEnvironment | undefined;
 	workspaces: WorkspaceSummary[];
 	models: ModelMetadata[];
 	selectedWorkspaceId: string | undefined;
@@ -72,9 +110,12 @@ interface ClientState {
 	sessions: SessionSummary[];
 	usageOverview: UsageOverview | undefined;
 	runs: RunSummary[];
+	memories: MemoryRecord[];
+	evaluationDatasets: EvaluationDataset[];
 	snapshot: SessionSnapshot | undefined;
 	liveAssistants: Record<string, LiveAssistant>;
 	liveTools: Record<string, LiveTool>;
+	liveGoalActivities: Record<string, LiveGoalActivity>;
 	liveRetry: LiveRetry | undefined;
 	skills: SkillSummary[];
 	selectedSkill: Skill | undefined;
@@ -86,6 +127,7 @@ interface ClientState {
 	subagentDepth: number;
 	canCreateSubagent: boolean;
 	goals: GoalSummary[];
+	automations: GoalAutomationSummary[];
 	error: string | undefined;
 }
 
@@ -97,6 +139,7 @@ export interface SessionListOptions {
 const initialState: ClientState = {
 	connection: "connecting",
 	capabilities: [],
+	executionEnvironment: undefined,
 	workspaces: [],
 	models: [],
 	selectedWorkspaceId: undefined,
@@ -104,9 +147,12 @@ const initialState: ClientState = {
 	sessions: [],
 	usageOverview: undefined,
 	runs: [],
+	memories: [],
+	evaluationDatasets: [],
 	snapshot: undefined,
 	liveAssistants: {},
 	liveTools: {},
+	liveGoalActivities: {},
 	liveRetry: undefined,
 	skills: [],
 	selectedSkill: undefined,
@@ -118,6 +164,7 @@ const initialState: ClientState = {
 	subagentDepth: 0,
 	canCreateSubagent: true,
 	goals: [],
+	automations: [],
 	error: undefined,
 };
 
@@ -161,27 +208,153 @@ export function useWumingClient() {
 	const [token, setTokenState] = useState(() => localStorage.getItem("wuming.token") ?? "");
 	const [reconnectAttempt, setReconnectAttempt] = useState(0);
 	const [state, setState] = useState<ClientState>(initialState);
+	useEffect(() => {
+		const notice = state.liveCompaction;
+		if (!notice) return;
+		const stale = notice.sessionId !== state.snapshot?.session.id || state.connection !== "connected";
+		const ended = notice.status === "running" && state.snapshot?.session.phase === "idle";
+		const clear = () =>
+			setState((current) => (current.liveCompaction === notice ? { ...current, liveCompaction: undefined } : current));
+		if (stale || ended) {
+			clear();
+			return;
+		}
+		if (notice.status === "running") return;
+		const timer = window.setTimeout(clear, 4500);
+		return () => window.clearTimeout(timer);
+	}, [state.liveCompaction, state.snapshot?.session.id, state.snapshot?.session.phase, state.connection]);
 	const pending = useRef(
-		new Map<string, { resolve: (result: CommandResult) => void; reject: (error: Error) => void }>(),
+		new Map<string, { resolve: (result: CommandResult) => void; reject: (error: Error) => void }>()
 	);
-	const requestRef = useRef<((command: Command, idempotencyKey?: string) => Promise<CommandResult>) | undefined>(undefined);
+	const requestRef = useRef<((command: Command, idempotencyKey?: string) => Promise<CommandResult>) | undefined>(
+		undefined
+	);
 	const snapshotRef = useRef<SessionSnapshot | undefined>(undefined);
+	const goalMutationVersion = useRef(0);
 	const capabilitiesRef = useRef<Capability[]>([]);
 	const cursorRef = useRef<string | undefined>(localStorage.getItem("wuming.cursor") ?? undefined);
 	const sessionListRef = useRef<SessionListOptions>({ archived: false });
+	const skillSelectionRevision = useRef(0);
+	const skillListRevision = useRef(0);
+	const mcpSelectionRevision = useRef(0);
+	const mcpListRevision = useRef(0);
+	const bufferedAssistantDeltas = useRef(new Map<string, BufferedAssistantDelta>());
+	const assistantDeltaFlushTimer = useRef<number | undefined>(undefined);
+
+	const flushAssistantDeltas = useCallback(() => {
+		if (assistantDeltaFlushTimer.current !== undefined) clearTimeout(assistantDeltaFlushTimer.current);
+		assistantDeltaFlushTimer.current = undefined;
+		const buffered = bufferedAssistantDeltas.current;
+		if (buffered.size === 0) return;
+		bufferedAssistantDeltas.current = new Map();
+		setState((current) => {
+			const sessionId = current.snapshot?.session.id;
+			let liveAssistants = current.liveAssistants;
+			let changed = false;
+			for (const delta of buffered.values()) {
+				if (delta.sessionId !== sessionId) continue;
+				const existing = liveAssistants[delta.id] ?? {
+					id: delta.id,
+					order: delta.order,
+					text: "",
+					thinking: "",
+					toolCall: "",
+				};
+				if (!changed) {
+					liveAssistants = { ...liveAssistants };
+					changed = true;
+				}
+				liveAssistants[delta.id] = {
+					...existing,
+					text: existing.text + delta.text,
+					thinking: existing.thinking + delta.thinking,
+					toolCall: existing.toolCall + delta.toolCall,
+				};
+			}
+			return changed ? { ...current, liveRetry: undefined, liveAssistants } : current;
+		});
+	}, []);
+
+	const scheduleAssistantDeltaFlush = useCallback(() => {
+		if (assistantDeltaFlushTimer.current !== undefined) return;
+		assistantDeltaFlushTimer.current = window.setTimeout(flushAssistantDeltas, STREAM_RENDER_INTERVAL_MS);
+	}, [flushAssistantDeltas]);
+
+	const discardAssistantDeltas = useCallback((sessionId?: string, itemId?: string) => {
+		if (sessionId === undefined && itemId === undefined) bufferedAssistantDeltas.current.clear();
+		else {
+			for (const [key, delta] of bufferedAssistantDeltas.current) {
+				if ((sessionId === undefined || delta.sessionId === sessionId) && (itemId === undefined || key === itemId)) {
+					bufferedAssistantDeltas.current.delete(key);
+				}
+			}
+		}
+		if (bufferedAssistantDeltas.current.size === 0 && assistantDeltaFlushTimer.current !== undefined) {
+			clearTimeout(assistantDeltaFlushTimer.current);
+			assistantDeltaFlushTimer.current = undefined;
+		}
+	}, []);
+
+	const syncStoredPermission = useCallback(async (snapshot: SessionSnapshot): Promise<SessionSnapshot> => {
+		const permission = readStoredPermission(localStorage);
+		if (
+			snapshot.session.phase !== "idle" ||
+			snapshot.session.archivedAt !== undefined ||
+			(snapshot.sandboxMode === permission.sandboxMode && snapshot.approvalPolicy === permission.approvalPolicy)
+		) {
+			return snapshot;
+		}
+		try {
+			const result = await requestRef.current?.({
+				type: "session.policy.set",
+				sessionId: snapshot.session.id,
+				sandboxMode: permission.sandboxMode,
+				approvalPolicy: permission.approvalPolicy,
+			});
+			return result?.type === "session.configured" ? result.snapshot : snapshot;
+		} catch {
+			// A concurrent turn can make the session non-idle. The next idle snapshot retries the global policy.
+			return snapshot;
+		}
+	}, []);
 
 	const refreshSkills = useCallback(async (workspaceId: string) => {
+		const revision = ++skillListRevision.current;
+		++skillSelectionRevision.current;
+		setState((current) =>
+			current.selectedWorkspaceId === workspaceId ? { ...current, selectedSkill: undefined } : current
+		);
 		const result = await requestRef.current?.({ type: "skill.list", workspaceId });
 		const skills = result?.type === "skill.list" ? result.skills : [];
-		setState((current) => ({ ...current, skills, selectedSkill: undefined }));
+		setState((current) =>
+			revision === skillListRevision.current && current.selectedWorkspaceId === workspaceId
+				? { ...current, skills }
+				: current
+		);
 		return skills;
 	}, []);
 
 	const refreshMcp = useCallback(async (workspaceId: string) => {
-		const result = await requestRef.current?.({ type: "mcp.list", workspaceId });
-		const mcpServers = result?.type === "mcp.list" ? result.servers : [];
-		setState((current) => ({ ...current, mcpServers, selectedMcpServer: undefined }));
-		return mcpServers;
+		const revision = ++mcpListRevision.current;
+		++mcpSelectionRevision.current;
+		setState((current) =>
+			current.selectedWorkspaceId === workspaceId
+				? { ...current, mcpServers: [], selectedMcpServer: undefined }
+				: current
+		);
+		try {
+			const result = await requestRef.current?.({ type: "mcp.list", workspaceId });
+			const mcpServers = result?.type === "mcp.list" ? result.servers : [];
+			setState((current) =>
+				revision === mcpListRevision.current && current.selectedWorkspaceId === workspaceId
+					? { ...current, mcpServers, selectedMcpServer: undefined }
+					: current
+			);
+			return mcpServers;
+		} catch (error) {
+			if (revision !== mcpListRevision.current) return [];
+			throw error;
+		}
 	}, []);
 
 	const refreshTools = useCallback(async (workspaceId: string) => {
@@ -199,37 +372,45 @@ export function useWumingClient() {
 		const result = await requestRef.current?.({ type: "model.list" });
 		const models = result?.type === "model.list" ? result.models : [];
 		setState((current) => {
-			const selectedModel = models.find((candidate) => candidate.authenticated && sameModel(current.selectedModel, candidate.model))?.model
-				?? models.find((candidate) => candidate.authenticated && candidate.model.provider.startsWith("custom-"))?.model
-				?? models.find((candidate) => candidate.authenticated)?.model
-				?? models[0]?.model;
+			const selectedModel =
+				models.find((candidate) => candidate.authenticated && sameModel(current.selectedModel, candidate.model))
+					?.model ??
+				models.find((candidate) => candidate.authenticated && candidate.model.provider.startsWith("custom-"))?.model ??
+				models.find((candidate) => candidate.authenticated)?.model ??
+				models[0]?.model;
 			if (selectedModel) localStorage.setItem("wuming.model", JSON.stringify(selectedModel));
 			return { ...current, models, selectedModel };
 		});
 		return models;
 	}, []);
 
-	const configureCustomModels = useCallback(async (configs: CustomModelConfig[]) => {
-		const configured: ModelMetadata[] = [];
-		for (const config of configs) {
-			const result = await requestRef.current?.({ type: "model.custom.set", config });
-			if (result?.type !== "model.custom.configured") throw new Error(`自定义模型 ${config.id} 配置失败`);
-			configured.push(result.model);
-		}
-		const selected = configured.at(-1)?.model;
-		if (selected) {
-			localStorage.setItem("wuming.model", JSON.stringify(selected));
-			setState((current) => ({ ...current, selectedModel: selected }));
-		}
-		await refreshModels();
-		return configured;
-	}, [refreshModels]);
+	const configureCustomModels = useCallback(
+		async (configs: CustomModelConfig[]) => {
+			const configured: ModelMetadata[] = [];
+			for (const config of configs) {
+				const result = await requestRef.current?.({ type: "model.custom.set", config });
+				if (result?.type !== "model.custom.configured") throw new Error(`自定义模型 ${config.id} 配置失败`);
+				configured.push(result.model);
+			}
+			const selected = configured.at(-1)?.model;
+			if (selected) {
+				localStorage.setItem("wuming.model", JSON.stringify(selected));
+				setState((current) => ({ ...current, selectedModel: selected }));
+			}
+			await refreshModels();
+			return configured;
+		},
+		[refreshModels]
+	);
 
-	const configureCustomModel = useCallback(async (config: CustomModelConfig) => {
-		const model = (await configureCustomModels([config]))[0];
-		if (!model) throw new Error("自定义模型配置失败");
-		return model;
-	}, [configureCustomModels]);
+	const configureCustomModel = useCallback(
+		async (config: CustomModelConfig) => {
+			const model = (await configureCustomModels([config]))[0];
+			if (!model) throw new Error("自定义模型配置失败");
+			return model;
+		},
+		[configureCustomModels]
+	);
 
 	const discoverCustomModels = useCallback(async (connection: CustomModelConnection) => {
 		const result = await requestRef.current?.({ type: "model.custom.discover", connection });
@@ -260,16 +441,39 @@ export function useWumingClient() {
 		return result.settings;
 	}, []);
 
-	const removeCustomModel = useCallback(async (model: ModelRef) => {
-		const result = await requestRef.current?.({ type: "model.custom.remove", model });
-		if (result?.type !== "model.custom.removed") throw new Error("删除自定义模型失败");
-		await refreshModels();
-	}, [refreshModels]);
+	const removeCustomModel = useCallback(
+		async (model: ModelRef) => {
+			const result = await requestRef.current?.({ type: "model.custom.remove", model });
+			if (result?.type !== "model.custom.removed") throw new Error("删除自定义模型失败");
+			await refreshModels();
+		},
+		[refreshModels]
+	);
 
 	const testCustomModel = useCallback(async (model: ModelRef) => {
 		const result = await requestRef.current?.({ type: "model.custom.test", model });
 		if (result?.type !== "model.custom.tested") throw new Error("模型测试失败");
 		return result.latencyMs;
+	}, []);
+	const listMediaModels = useCallback(async () => {
+		const result = await requestRef.current?.({ type: "model.media.list" });
+		if (result?.type !== "model.media.settings") throw new Error("无法读取生成模型设置");
+		return result.settings;
+	}, []);
+	const discoverMediaModels = useCallback(async (connection: MediaModelDiscoveryConnection) => {
+		const result = await requestRef.current?.({ type: "model.media.discover", connection });
+		if (result?.type !== "model.media.discovered") throw new Error("无法获取生成模型列表");
+		return result.models;
+	}, []);
+	const setMediaModel = useCallback(async (config: MediaModelConfig) => {
+		const result = await requestRef.current?.({ type: "model.media.set", config });
+		if (result?.type !== "model.media.settings") throw new Error("无法保存生成模型");
+		return result.settings;
+	}, []);
+	const removeMediaModel = useCallback(async (kind: MediaKind) => {
+		const result = await requestRef.current?.({ type: "model.media.remove", kind });
+		if (result?.type !== "model.media.settings") throw new Error("无法移除生成模型");
+		return result.settings;
 	}, []);
 
 	useEffect(() => {
@@ -283,18 +487,33 @@ export function useWumingClient() {
 		setReconnectAttempt((attempt) => attempt + 1);
 	}, []);
 
-	const refreshSessions = useCallback(async (workspaceId: string, options: SessionListOptions = sessionListRef.current) => {
-		const normalized = { ...(options.query?.trim() ? { query: options.query.trim() } : {}), archived: options.archived ?? false };
-		sessionListRef.current = normalized;
-		const result = await requestRef.current?.({ type: "session.list", workspaceId, ...normalized, limit: 200 });
-		if (result?.type === "session.list") setState((current) => ({ ...current, sessions: result.sessions }));
-		return result?.type === "session.list" ? result.sessions : [];
-	}, []);
+	const refreshSessions = useCallback(
+		async (workspaceId: string, options: SessionListOptions = sessionListRef.current) => {
+			const normalized = {
+				...(options.query?.trim() ? { query: options.query.trim() } : {}),
+				archived: options.archived ?? false,
+			};
+			sessionListRef.current = normalized;
+			const result = await requestRef.current?.({
+				type: "session.list",
+				workspaceId,
+				...normalized,
+				limit: 200,
+			});
+			if (result?.type === "session.list") setState((current) => ({ ...current, sessions: result.sessions }));
+			return result?.type === "session.list" ? result.sessions : [];
+		},
+		[]
+	);
 
-	const refreshUsageOverview = useCallback(async (workspaceId: string) => {
-		const result = await requestRef.current?.({ type: "usage.overview", workspaceId, days: 7 });
-		if (result?.type === "usage.overview") {
-			setState((current) => current.selectedWorkspaceId === undefined || current.selectedWorkspaceId === workspaceId ? { ...current, usageOverview: result.overview } : current);
+	const refreshUsageOverview = useCallback(async (workspaceId: string, days = 7) => {
+		const result = await requestRef.current?.({ type: "usage.overview", workspaceId, days });
+		if (result?.type === "usage.overview" && days === 7) {
+			setState((current) =>
+				current.selectedWorkspaceId === undefined || current.selectedWorkspaceId === workspaceId
+					? { ...current, usageOverview: result.overview }
+					: current
+			);
 		}
 		return result?.type === "usage.overview" ? result.overview : undefined;
 	}, []);
@@ -307,49 +526,212 @@ export function useWumingClient() {
 		return result?.type === "session.run.list" ? result.runs : [];
 	}, []);
 
+	const refreshMemories = useCallback(async (sessionId: string) => {
+		const result = await requestRef.current?.({
+			type: "session.memory.list",
+			sessionId,
+			limit: 20,
+		});
+		if (result?.type === "session.memory.list" && snapshotRef.current?.session.id === sessionId) {
+			setState((current) => ({ ...current, memories: result.memories }));
+		}
+		return result?.type === "session.memory.list" ? result.memories : [];
+	}, []);
+
+	const refreshEvaluationDatasets = useCallback(async (workspaceId: string) => {
+		const result = await requestRef.current?.({ type: "evaluation.dataset.list", workspaceId });
+		const evaluationDatasets = result?.type === "evaluation.dataset.list" ? result.datasets : [];
+		setState((current) =>
+			current.selectedWorkspaceId === undefined || current.selectedWorkspaceId === workspaceId
+				? { ...current, evaluationDatasets }
+				: current
+		);
+		return evaluationDatasets;
+	}, []);
+
+	const createEvaluationDataset = useCallback(
+		async (name: string, graders: EvaluationGrader[]) => {
+			const workspaceId = snapshotRef.current?.session.workspaceId;
+			if (!workspaceId) throw new Error("未选择会话");
+			const result = await requestRef.current?.({
+				type: "evaluation.dataset.create",
+				workspaceId,
+				name,
+				graders,
+			});
+			if (result?.type !== "evaluation.dataset.created") throw new Error("评测数据集创建失败");
+			await refreshEvaluationDatasets(workspaceId);
+			return result.dataset;
+		},
+		[refreshEvaluationDatasets]
+	);
+
+	const deleteEvaluationDataset = useCallback(
+		async (datasetId: string) => {
+			const workspaceId = snapshotRef.current?.session.workspaceId;
+			if (!workspaceId) throw new Error("未选择会话");
+			const result = await requestRef.current?.({
+				type: "evaluation.dataset.delete",
+				workspaceId,
+				datasetId,
+			});
+			if (result?.type !== "evaluation.dataset.deleted") throw new Error("评测数据集删除失败");
+			await refreshEvaluationDatasets(workspaceId);
+		},
+		[refreshEvaluationDatasets]
+	);
+
+	const listRunEvaluations = useCallback(async (runId: string): Promise<RunEvaluation[]> => {
+		const sessionId = snapshotRef.current?.session.id;
+		if (!sessionId) throw new Error("未选择会话");
+		const result = await requestRef.current?.({
+			type: "session.run.evaluation.list",
+			sessionId,
+			runId,
+			limit: 20,
+		});
+		if (result?.type !== "session.run.evaluation.list") throw new Error("无法读取运行评测");
+		return result.evaluations;
+	}, []);
+
+	const runEvaluation = useCallback(
+		async (
+			runId: string,
+			input: { datasetId?: string; name?: string; graders?: EvaluationGrader[] }
+		): Promise<RunEvaluation> => {
+			const sessionId = snapshotRef.current?.session.id;
+			if (!sessionId) throw new Error("未选择会话");
+			const result = await requestRef.current?.({
+				type: "session.run.evaluate",
+				sessionId,
+				runId,
+				...input,
+			});
+			if (result?.type !== "session.run.evaluated") throw new Error("运行评测失败");
+			return result.evaluation;
+		},
+		[]
+	);
+
+	const createRunAttestation = useCallback(
+		async (runId: string, evaluationId: string): Promise<EvaluationAttestation> => {
+			const sessionId = snapshotRef.current?.session.id;
+			if (!sessionId) throw new Error("未选择会话");
+			const result = await requestRef.current?.({
+				type: "session.run.attestation.create",
+				sessionId,
+				runId,
+				evaluationId,
+			});
+			if (result?.type !== "session.run.attested") throw new Error("签名证明创建失败");
+			return result.attestation;
+		},
+		[]
+	);
+
+	const manageMemory = useCallback(
+		async (memoryId: string, action: MemoryAction) => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			const result = await requestRef.current?.({
+				type: "session.memory.manage",
+				sessionId: snapshot.session.id,
+				memoryId,
+				action,
+			});
+			if (result?.type !== "session.memory.managed") throw new Error("记忆管理失败");
+			await refreshMemories(snapshot.session.id);
+			return result;
+		},
+		[refreshMemories]
+	);
+
 	const refreshSubagents = useCallback(async (sessionId: string) => {
 		const result = await requestRef.current?.({ type: "subagent.list", sessionId, limit: 100 });
 		if (result?.type === "subagent.list" && snapshotRef.current?.session.id === sessionId) {
-			setState((current) => ({ ...current, subagents: result.subagents, subagentDepth: result.depth, canCreateSubagent: result.canCreate }));
+			setState((current) => ({
+				...current,
+				subagents: result.subagents,
+				subagentDepth: result.depth,
+				canCreateSubagent: result.canCreate,
+			}));
 		}
 		return result?.type === "subagent.list" ? result.subagents : [];
 	}, []);
 
 	const refreshGoals = useCallback(async (sessionId: string) => {
+		const requestVersion = goalMutationVersion.current;
 		const result = await requestRef.current?.({ type: "goal.list", sessionId, limit: 100 });
-		if (result?.type === "goal.list" && snapshotRef.current?.session.id === sessionId) {
-			setState((current) => ({ ...current, goals: result.goals }));
+		if (
+			result?.type === "goal.list" &&
+			goalMutationVersion.current === requestVersion &&
+			snapshotRef.current?.session.id === sessionId
+		) {
+			setState((current) => {
+				const liveGoalActivities = { ...current.liveGoalActivities };
+				for (const goal of result.goals) {
+					if (["completed", "failed", "cancelled"].includes(goal.status)) delete liveGoalActivities[goal.id];
+				}
+				return { ...current, goals: result.goals, liveGoalActivities };
+			});
 		}
 		return result?.type === "goal.list" ? result.goals : [];
 	}, []);
 
-	const attachSession = useCallback(async (sessionId: string) => {
-		const result = await requestRef.current?.({ type: "session.attach", sessionId });
-		if (result?.type === "session.attached") {
-			const workspaceId = result.snapshot.session.workspaceId;
-			snapshotRef.current = result.snapshot;
-			localStorage.setItem("wuming.workspaceId", workspaceId);
-			localStorage.setItem(sessionSelectionKey(workspaceId), sessionId);
-			setState((current) => ({
-				...current,
-				selectedWorkspaceId: workspaceId,
-				snapshot: result.snapshot,
-				liveAssistants: {},
-				liveTools: {},
-				liveRetry: undefined,
-				subagents: [],
-				subagentDepth: 0,
-				canCreateSubagent: true,
-				goals: [],
-				error: undefined,
-			}));
-			await Promise.all([
-				refreshRuns(sessionId),
-				...(capabilitiesRef.current.includes("subagents") ? [refreshSubagents(sessionId)] : []),
-				...(capabilitiesRef.current.includes("goals") ? [refreshGoals(sessionId)] : []),
-			]);
+	const refreshAutomations = useCallback(async (sessionId: string) => {
+		const result = await requestRef.current?.({ type: "automation.list", sessionId, limit: 100 });
+		if (result?.type === "automation.list" && snapshotRef.current?.session.id === sessionId) {
+			setState((current) => ({ ...current, automations: result.automations }));
 		}
-	}, [refreshGoals, refreshRuns, refreshSubagents]);
+		return result?.type === "automation.list" ? result.automations : [];
+	}, []);
+
+	const attachSession = useCallback(
+		async (sessionId: string) => {
+			discardAssistantDeltas();
+			const result = await requestRef.current?.({ type: "session.attach", sessionId });
+			if (result?.type === "session.attached") {
+				// Apply this client's saved default once on attach. Reapplying it for
+				// every snapshot lets open clients with different preferences fight forever.
+				const snapshot = await syncStoredPermission(result.snapshot);
+				const workspaceId = snapshot.session.workspaceId;
+				snapshotRef.current = snapshot;
+				localStorage.setItem("wuming.workspaceId", workspaceId);
+				localStorage.setItem(sessionSelectionKey(workspaceId), sessionId);
+				setState((current) => ({
+					...current,
+					selectedWorkspaceId: workspaceId,
+					snapshot,
+					liveAssistants: {},
+					liveTools: {},
+					liveRetry: undefined,
+					memories: [],
+					subagents: [],
+					subagentDepth: 0,
+					canCreateSubagent: true,
+					goals: [],
+					automations: [],
+					error: undefined,
+				}));
+				await Promise.all([
+					refreshRuns(sessionId),
+					...(capabilitiesRef.current.includes("session.memory") ? [refreshMemories(sessionId)] : []),
+					...(capabilitiesRef.current.includes("subagents") ? [refreshSubagents(sessionId)] : []),
+					...(capabilitiesRef.current.includes("goals") ? [refreshGoals(sessionId)] : []),
+					...(capabilitiesRef.current.includes("automations") ? [refreshAutomations(sessionId)] : []),
+				]);
+			}
+		},
+		[
+			discardAssistantDeltas,
+			refreshAutomations,
+			refreshGoals,
+			refreshMemories,
+			refreshRuns,
+			refreshSubagents,
+			syncStoredPermission,
+		]
+	);
 
 	useEffect(() => {
 		let disposed = false;
@@ -357,7 +739,13 @@ export function useWumingClient() {
 		if (!token) {
 			requestRef.current = undefined;
 			capabilitiesRef.current = [];
-			setState((current) => ({ ...current, connection: "disconnected", capabilities: [], error: undefined }));
+			setState((current) => ({
+				...current,
+				connection: "disconnected",
+				capabilities: [],
+				executionEnvironment: undefined,
+				error: undefined,
+			}));
 			return;
 		}
 		setState((current) => ({ ...current, connection: "connecting", error: undefined }));
@@ -383,12 +771,22 @@ export function useWumingClient() {
 					const snapshot = current.snapshot;
 					if (snapshot?.session.id !== sessionId || snapshot.revision > result.snapshot.revision) return current;
 					snapshotRef.current = result.snapshot;
-					return { ...current, snapshot: result.snapshot, liveAssistants: {}, liveTools: {}, liveRetry: undefined };
+					return {
+						...current,
+						snapshot: result.snapshot,
+						liveAssistants: {},
+						liveTools: {},
+						liveRetry: undefined,
+					};
 				});
 				void refreshRuns(sessionId);
+				if (capabilitiesRef.current.includes("session.memory")) void refreshMemories(sessionId);
 			} catch (error) {
 				if (generation !== resyncGeneration) return;
-				setState((current) => ({ ...current, error: error instanceof Error ? error.message : String(error) }));
+				setState((current) => ({
+					...current,
+					error: error instanceof Error ? error.message : String(error),
+				}));
 			}
 		};
 
@@ -396,7 +794,13 @@ export function useWumingClient() {
 			if (message.type === "hello") {
 				localStorage.setItem("wuming.token", token);
 				capabilitiesRef.current = message.capabilities;
-				setState((current) => ({ ...current, connection: "connected", capabilities: message.capabilities, error: undefined }));
+				setState((current) => ({
+					...current,
+					connection: "connected",
+					capabilities: message.capabilities,
+					executionEnvironment: message.executionEnvironment,
+					error: undefined,
+				}));
 				void (async () => {
 					try {
 						const [workspaceResult, modelResult] = await Promise.all([
@@ -413,10 +817,12 @@ export function useWumingClient() {
 						} catch {
 							localStorage.removeItem("wuming.model");
 						}
-						const selectedModel = models.find((candidate) => candidate.authenticated && sameModel(storedModel, candidate.model))?.model
-							?? models.find((candidate) => candidate.authenticated && candidate.model.provider.startsWith("custom-"))?.model
-							?? models.find((candidate) => candidate.authenticated)?.model
-							?? models[0]?.model;
+						const selectedModel =
+							models.find((candidate) => candidate.authenticated && sameModel(storedModel, candidate.model))?.model ??
+							models.find((candidate) => candidate.authenticated && candidate.model.provider.startsWith("custom-"))
+								?.model ??
+							models.find((candidate) => candidate.authenticated)?.model ??
+							models[0]?.model;
 						if (workspace) localStorage.setItem("wuming.workspaceId", workspace.id);
 						if (selectedModel) localStorage.setItem("wuming.model", JSON.stringify(selectedModel));
 						setState((current) => ({
@@ -430,6 +836,7 @@ export function useWumingClient() {
 						await refreshSkills(workspace.id);
 						if (message.capabilities.includes("tools")) await refreshTools(workspace.id);
 						if (message.capabilities.includes("mcp")) await refreshMcp(workspace.id);
+						if (message.capabilities.includes("evaluation")) await refreshEvaluationDatasets(workspace.id);
 						const sessionResult = await request({
 							type: "session.list",
 							workspaceId: workspace.id,
@@ -469,7 +876,72 @@ export function useWumingClient() {
 			if (message.type === "progress") {
 				const event = message.event;
 				if (event.sessionId !== snapshotRef.current?.session.id) return;
+				if (event.type === "context.compaction") {
+					if (event.runSessionId && event.runSessionId !== event.sessionId) return;
+					setState((current) => ({ ...current, liveCompaction: { sessionId: event.sessionId, status: event.status } }));
+					return;
+				}
+				if (event.goalId) {
+					const runsInCurrentSession = !event.runSessionId || event.runSessionId === event.sessionId;
+					const goalId = event.goalId;
+					const runSessionId = event.runSessionId ?? event.sessionId;
+					const order = ++liveOrder.current;
+					setState((current) => {
+						const existing = current.liveGoalActivities[goalId] ?? {
+							goalId,
+							runSessionId,
+							order,
+							phase: "thinking" as const,
+							text: "",
+							thinking: "",
+						};
+						let next: LiveGoalActivity = { ...existing, runSessionId };
+						if (event.type === "run.retrying") {
+							next = { ...next, phase: "retrying", message: event.error };
+						} else if (event.type === "assistant.delta") {
+							next = {
+								...next,
+								phase: "thinking",
+								text: event.kind === "text" ? next.text + event.delta : next.text,
+								thinking: event.kind === "thinking" ? next.thinking + event.delta : next.thinking,
+							};
+						} else if (event.type === "tool.started") {
+							next = {
+								...next,
+								phase: "tool",
+								toolName: event.toolName,
+								toolStatus: "running",
+								toolPreview: "",
+							};
+						} else if (event.type === "tool.progress") {
+							next = {
+								...next,
+								phase: "tool",
+								toolName: next.toolName ?? "tool",
+								toolStatus: "running",
+								toolPreview: event.preview,
+							};
+						} else {
+							next = {
+								...next,
+								phase: "tool",
+								toolName: next.toolName ?? "tool",
+								toolStatus: event.isError ? "error" : "complete",
+								toolPreview: event.preview,
+							};
+						}
+						return {
+							...current,
+							liveGoalActivities: {
+								...current.liveGoalActivities,
+								[goalId]: next,
+							},
+						};
+					});
+					if (!runsInCurrentSession) return;
+				}
 				if (event.type === "run.retrying") {
+					discardAssistantDeltas(event.sessionId);
 					setState((current) => ({
 						...current,
 						liveAssistants: {},
@@ -486,25 +958,22 @@ export function useWumingClient() {
 					}));
 				} else if (event.type === "assistant.delta") {
 					const order = ++liveOrder.current;
-					setState((current) => {
-						const existing = current.liveAssistants[event.itemId] ?? {
-							id: event.itemId,
-							order,
-							text: "",
-							thinking: "",
-							toolCall: "",
-						};
-						const field = event.kind === "text" ? "text" : event.kind === "thinking" ? "thinking" : "toolCall";
-						return {
-							...current,
-							liveRetry: undefined,
-							liveAssistants: {
-								...current.liveAssistants,
-								[event.itemId]: { ...existing, [field]: existing[field] + event.delta },
-							},
-						};
+					const existing = bufferedAssistantDeltas.current.get(event.itemId) ?? {
+						sessionId: event.sessionId,
+						id: event.itemId,
+						order,
+						text: "",
+						thinking: "",
+						toolCall: "",
+					};
+					const field = event.kind === "text" ? "text" : event.kind === "thinking" ? "thinking" : "toolCall";
+					bufferedAssistantDeltas.current.set(event.itemId, {
+						...existing,
+						[field]: existing[field] + event.delta,
 					});
+					scheduleAssistantDeltaFlush();
 				} else if (event.type === "tool.started") {
+					flushAssistantDeltas();
 					const order = ++liveOrder.current;
 					setState((current) => ({
 						...current,
@@ -538,7 +1007,12 @@ export function useWumingClient() {
 							...current,
 							liveTools: {
 								...current.liveTools,
-								[event.toolCallId]: { ...existing, preview: event.preview, truncated: event.truncated },
+								[event.toolCallId]: {
+									...existing,
+									preview: event.preview,
+									truncated: event.truncated,
+									...(event.artifact ? { artifact: event.artifact } : {}),
+								},
 							},
 						};
 					});
@@ -563,6 +1037,7 @@ export function useWumingClient() {
 									status: event.isError ? "error" : "complete",
 									preview: event.preview,
 									truncated: event.truncated,
+									...(event.artifact ? { artifact: event.artifact } : {}),
 								},
 							},
 						};
@@ -581,6 +1056,7 @@ export function useWumingClient() {
 			cursorRef.current = message.cursor;
 			localStorage.setItem("wuming.cursor", message.cursor);
 			if (event.type === "session.snapshot") {
+				if (event.snapshot.session.phase === "idle") discardAssistantDeltas(event.snapshot.session.id);
 				if (event.snapshot.session.id === snapshotRef.current?.session.id) {
 					setState((current) => {
 						if (current.snapshot && current.snapshot.revision > event.snapshot.revision) return current;
@@ -588,7 +1064,9 @@ export function useWumingClient() {
 						return {
 							...current,
 							snapshot: event.snapshot,
-							...(event.snapshot.session.phase === "idle" ? { liveAssistants: {}, liveTools: {}, liveRetry: undefined } : {}),
+							...(event.snapshot.session.phase === "idle"
+								? { liveAssistants: {}, liveTools: {}, liveRetry: undefined }
+								: {}),
 						};
 					});
 					void refreshSessions(event.snapshot.session.workspaceId);
@@ -597,7 +1075,18 @@ export function useWumingClient() {
 				return;
 			}
 			if (event.sessionId !== snapshotRef.current?.session.id) return;
-			if (event.type === "session.phase.changed" && (event.phase === "idle" || event.phase === "retry")) void refreshRuns(event.sessionId);
+			if (event.type === "session.phase.changed" && (event.phase === "idle" || event.phase === "retry")) {
+				void refreshRuns(event.sessionId);
+				if (capabilitiesRef.current.includes("session.memory")) void refreshMemories(event.sessionId);
+				if (capabilitiesRef.current.includes("goals")) void refreshGoals(event.sessionId);
+			}
+			if (event.type === "approval.requested" && capabilitiesRef.current.includes("goals")) {
+				void refreshGoals(event.sessionId);
+			}
+			if (event.type === "session.item.upserted") discardAssistantDeltas(event.sessionId, event.item.id);
+			if (event.type === "session.phase.changed" && event.phase === "idle") {
+				discardAssistantDeltas(event.sessionId);
+			}
 			setState((current) => {
 				const snapshot = current.snapshot;
 				if (!snapshot) return current;
@@ -612,12 +1101,35 @@ export function useWumingClient() {
 					const liveTools = { ...current.liveTools };
 					delete liveAssistants[event.item.id];
 					if (event.item.type === "tool") delete liveTools[event.item.toolCallId];
-					return { ...current, snapshot: { ...next, revision: event.revision }, liveAssistants, liveTools };
+					return {
+						...current,
+						snapshot: { ...next, revision: event.revision },
+						liveAssistants,
+						liveTools,
+					};
+				}
+				if (event.type === "session.context.updated") {
+					const next = { ...snapshot, revision: event.revision, contextUsage: event.contextUsage };
+					snapshotRef.current = next;
+					return {
+						...current,
+						snapshot: next,
+						...(event.contextUsage.basis === "compaction"
+							? { liveCompaction: { sessionId: event.sessionId, status: "complete" as const } }
+							: {}),
+					};
 				}
 				if (event.type === "session.phase.changed") {
 					return {
 						...current,
-						snapshot: { ...snapshot, revision: event.revision, session: { ...snapshot.session, phase: event.phase } },
+						...(event.phase === "compaction"
+							? { liveCompaction: { sessionId: event.sessionId, status: "running" as const } }
+							: {}),
+						snapshot: {
+							...snapshot,
+							revision: event.revision,
+							session: { ...snapshot.session, phase: event.phase },
+						},
 						...(event.phase === "idle" ? { liveAssistants: {}, liveTools: {}, liveRetry: undefined } : {}),
 					};
 				}
@@ -651,18 +1163,41 @@ export function useWumingClient() {
 					type: "hello",
 					protocolVersion: 1,
 					clientId: clientId(),
-						capabilities: ["session.resume", "session.fork", "turn.steer", "turn.follow_up", "approval", "artifact", "image_input", "git", "terminal", "skills", "mcp", "subagents", "goals", "model.custom"],
+					capabilities: [
+						"session.resume",
+						"session.fork",
+						"turn.steer",
+						"turn.follow_up",
+						"approval",
+						"artifact",
+						"image_input",
+						"git",
+						"terminal",
+						"skills",
+						"mcp",
+						"subagents",
+						"goals",
+						"automations",
+						"model.custom",
+						"run.trajectory",
+						"session.memory",
+						"evaluation",
+					],
 					...(cursorRef.current ? { resumeCursor: cursorRef.current } : {}),
-				}),
+				})
 			);
 		});
 		ws.addEventListener("message", (raw) => applyMessage(JSON.parse(String(raw.data)) as ServerMessage));
 		ws.addEventListener("close", () => {
 			if (!disposed) {
-				setState((current) => ({ ...current, connection: "disconnected" }));
+				setState((current) => ({
+					...current,
+					connection: "disconnected",
+					executionEnvironment: undefined,
+				}));
 				reconnectTimer = setTimeout(
 					() => setReconnectAttempt((attempt) => attempt + 1),
-					Math.min(4000, 500 * 2 ** Math.min(reconnectAttempt, 3)),
+					Math.min(4000, 500 * 2 ** Math.min(reconnectAttempt, 3))
 				);
 			}
 		});
@@ -672,6 +1207,7 @@ export function useWumingClient() {
 
 		return () => {
 			disposed = true;
+			discardAssistantDeltas();
 			if (reconnectTimer) clearTimeout(reconnectTimer);
 			ws.close();
 			for (const waiter of pending.current.values()) waiter.reject(new Error("网关连接已关闭"));
@@ -679,7 +1215,23 @@ export function useWumingClient() {
 			if (requestRef.current === request) requestRef.current = undefined;
 			capabilitiesRef.current = [];
 		};
-	}, [attachSession, reconnectAttempt, refreshRuns, refreshSessions, refreshSkills, refreshTools, refreshMcp, refreshUsageOverview, token]);
+	}, [
+		attachSession,
+		discardAssistantDeltas,
+		flushAssistantDeltas,
+		reconnectAttempt,
+		refreshEvaluationDatasets,
+		refreshGoals,
+		refreshMemories,
+		refreshRuns,
+		refreshSessions,
+		refreshSkills,
+		refreshTools,
+		refreshMcp,
+		refreshUsageOverview,
+		scheduleAssistantDeltaFlush,
+		token,
+	]);
 
 	useEffect(() => {
 		const sessionId = state.snapshot?.session.id;
@@ -690,7 +1242,9 @@ export function useWumingClient() {
 		return () => clearInterval(timer);
 	}, [refreshSubagents, state.capabilities, state.connection, state.snapshot?.session.id]);
 
-	const hasActiveGoals = state.goals.some((goal) => ["queued", "running", "awaiting_approval", "cancelling"].includes(goal.status));
+	const hasActiveGoals = state.goals.some((goal) =>
+		["pending", "queued", "running", "awaiting_approval", "cancelling"].includes(goal.status)
+	);
 	useEffect(() => {
 		const sessionId = state.snapshot?.session.id;
 		if (state.connection !== "connected" || !sessionId || !state.capabilities.includes("goals")) return;
@@ -701,453 +1255,903 @@ export function useWumingClient() {
 		return () => clearInterval(timer);
 	}, [hasActiveGoals, refreshGoals, state.capabilities, state.connection, state.snapshot?.session.id]);
 
-	const openWorkspace = useCallback(async (workspaceId: string) => {
-		const previousSession = snapshotRef.current;
-		if (previousSession && previousSession.session.workspaceId !== workspaceId) {
-			await requestRef.current?.({ type: "session.detach", sessionId: previousSession.session.id }).catch(() => undefined);
-		}
-		localStorage.setItem("wuming.workspaceId", workspaceId);
-		snapshotRef.current = undefined;
-		setState((current) => ({
-			...current,
-			selectedWorkspaceId: workspaceId,
-			sessions: [],
-			usageOverview: undefined,
-			runs: [],
-			snapshot: undefined,
-			liveAssistants: {},
-			liveTools: {},
-			liveRetry: undefined,
-			error: undefined,
-			skills: [],
-			selectedSkill: undefined,
-			mcpServers: [],
-			selectedMcpServer: undefined,
-			tools: [],
-			toolRuntime: undefined,
-			subagents: [],
-			subagentDepth: 0,
-			canCreateSubagent: true,
-			goals: [],
-		}));
-		await refreshSkills(workspaceId);
-		if (state.capabilities.includes("tools")) await refreshTools(workspaceId);
-		if (state.capabilities.includes("mcp")) await refreshMcp(workspaceId);
-		const sessions = await refreshSessions(workspaceId);
-		await refreshUsageOverview(workspaceId);
-		const storedSessionId = localStorage.getItem(sessionSelectionKey(workspaceId));
-		const session = sessions.find((candidate) => candidate.id === storedSessionId) ?? sessions[0];
-		if (session) await attachSession(session.id);
-	}, [attachSession, refreshSessions, refreshSkills, refreshTools, refreshMcp, refreshUsageOverview, state.capabilities]);
+	useEffect(() => {
+		const sessionId = state.snapshot?.session.id;
+		if (state.connection !== "connected" || !sessionId || !state.capabilities.includes("automations")) return;
+		const refresh = () => void refreshAutomations(sessionId).catch(() => undefined);
+		refresh();
+		const timer = setInterval(refresh, 10_000);
+		return () => clearInterval(timer);
+	}, [refreshAutomations, state.capabilities, state.connection, state.snapshot?.session.id]);
 
-	const selectWorkspace = useCallback(async (workspaceId: string) => {
-		if (!state.workspaces.some((workspace) => workspace.id === workspaceId)) throw new Error("工作区不可用");
-		await openWorkspace(workspaceId);
-	}, [openWorkspace, state.workspaces]);
-
-	const getSkill = useCallback(async (workspaceId: string, skillId: string) => {
-		const result = await requestRef.current?.({ type: "skill.get", workspaceId, skillId });
-		if (result?.type !== "skill.get") return undefined;
-		setState((current) => ({ ...current, selectedSkill: result.skill }));
-		return result.skill;
-	}, []);
-
-	const getMcp = useCallback(async (workspaceId: string, serverId: string) => {
-		const result = await requestRef.current?.({ type: "mcp.get", workspaceId, serverId });
-		if (result?.type !== "mcp.get") return undefined;
-		setState((current) => ({ ...current, selectedMcpServer: result.server }));
-		return result.server;
-	}, []);
-
-	const browseSessions = useCallback(async (workspaceId: string, options: SessionListOptions) => {
-		const sessions = await refreshSessions(workspaceId, options);
-		const current = snapshotRef.current;
-		const archived = options.archived ?? false;
-		if (current?.session.workspaceId === workspaceId && (current.session.archivedAt !== undefined) === archived) return sessions;
-		if (current) await requestRef.current?.({ type: "session.detach", sessionId: current.session.id }).catch(() => undefined);
-		snapshotRef.current = undefined;
-		localStorage.removeItem(sessionSelectionKey(workspaceId));
-		setState((value) => ({ ...value, snapshot: undefined, runs: [], subagents: [], subagentDepth: 0, canCreateSubagent: true, goals: [], liveAssistants: {}, liveTools: {}, liveRetry: undefined }));
-		if (sessions[0]) await attachSession(sessions[0].id);
-		return sessions;
-	}, [attachSession, refreshSessions]);
-
-	const selectModel = useCallback((model: ModelRef) => {
-		const available = state.models.find((candidate) => candidate.authenticated && sameModel(candidate.model, model));
-		if (!available) throw new Error("模型不可用或尚未通过验证");
-		localStorage.setItem("wuming.model", JSON.stringify(available.model));
-		setState((current) => ({ ...current, selectedModel: available.model }));
-	}, [state.models]);
-
-	const createSessionInWorkspace = useCallback(async (workspaceId: string) => {
-		const currentSession = snapshotRef.current;
-		if (currentSession && currentSession.session.workspaceId !== workspaceId) {
-			await requestRef.current?.({ type: "session.detach", sessionId: currentSession.session.id }).catch(() => undefined);
-		}
-		const model = state.models.find((candidate) => candidate.authenticated && sameModel(state.selectedModel, candidate.model))
-			?? state.models.find((candidate) => candidate.authenticated)
-			?? state.models[0];
-		if (!model) throw new Error("模型不可用");
-		const permission = readStoredPermission(localStorage);
-		const result = await requestRef.current?.({
-			type: "session.create",
-			workspaceId,
-			model: model.model,
-			thinkingLevel: model.reasoning ? "medium" : "off",
-			sandboxMode: permission.sandboxMode,
-			approvalPolicy: permission.approvalPolicy,
-		});
-		if (result?.type === "session.created") {
-			sessionListRef.current = { archived: false };
-			snapshotRef.current = result.snapshot;
-			localStorage.setItem(sessionSelectionKey(workspaceId), result.snapshot.session.id);
+	const openWorkspace = useCallback(
+		async (workspaceId: string, attachLatest = true) => {
+			++skillSelectionRevision.current;
+			++skillListRevision.current;
+			++mcpSelectionRevision.current;
+			++mcpListRevision.current;
+			const previousSession = snapshotRef.current;
+			if (previousSession && (!attachLatest || previousSession.session.workspaceId !== workspaceId)) {
+				await requestRef
+					.current?.({ type: "session.detach", sessionId: previousSession.session.id })
+					.catch(() => undefined);
+			}
+			localStorage.setItem("wuming.workspaceId", workspaceId);
+			snapshotRef.current = undefined;
 			setState((current) => ({
 				...current,
 				selectedWorkspaceId: workspaceId,
-				snapshot: result.snapshot,
+				sessions: [],
+				usageOverview: undefined,
 				runs: [],
+				memories: [],
+				evaluationDatasets: [],
+				snapshot: undefined,
+				liveAssistants: {},
+				liveTools: {},
+				liveRetry: undefined,
+				error: undefined,
+				skills: [],
+				selectedSkill: undefined,
+				mcpServers: [],
+				selectedMcpServer: undefined,
+				tools: [],
+				toolRuntime: undefined,
 				subagents: [],
 				subagentDepth: 0,
 				canCreateSubagent: true,
 				goals: [],
+				automations: [],
+			}));
+			await refreshSkills(workspaceId);
+			if (state.capabilities.includes("tools")) await refreshTools(workspaceId);
+			if (state.capabilities.includes("mcp")) await refreshMcp(workspaceId);
+			if (state.capabilities.includes("evaluation")) await refreshEvaluationDatasets(workspaceId);
+			const sessions = await refreshSessions(workspaceId);
+			await refreshUsageOverview(workspaceId);
+			const storedSessionId = localStorage.getItem(sessionSelectionKey(workspaceId));
+			const session = sessions.find((candidate) => candidate.id === storedSessionId) ?? sessions[0];
+			if (attachLatest && session) await attachSession(session.id);
+		},
+		[
+			attachSession,
+			refreshEvaluationDatasets,
+			refreshSessions,
+			refreshSkills,
+			refreshTools,
+			refreshMcp,
+			refreshUsageOverview,
+			state.capabilities,
+		]
+	);
+
+	const selectWorkspace = useCallback(
+		async (workspaceId: string) => {
+			if (!state.workspaces.some((workspace) => workspace.id === workspaceId)) throw new Error("工作区不可用");
+			await openWorkspace(workspaceId);
+		},
+		[openWorkspace, state.workspaces]
+	);
+
+	const beginNewChat = useCallback(
+		async (workspaceId: string) => {
+			if (!state.workspaces.some((workspace) => workspace.id === workspaceId)) throw new Error("工作区不可用");
+			await openWorkspace(workspaceId, false);
+		},
+		[openWorkspace, state.workspaces]
+	);
+
+	const getSkill = useCallback(async (workspaceId: string, skillId: string) => {
+		const revision = ++skillSelectionRevision.current;
+		const result = await requestRef.current?.({ type: "skill.get", workspaceId, skillId });
+		if (result?.type !== "skill.get") return undefined;
+		if (revision !== skillSelectionRevision.current) return undefined;
+		if (result.skill.workspaceId !== workspaceId || result.skill.id !== skillId)
+			throw new Error("技能响应与请求不匹配");
+		setState((current) =>
+			revision === skillSelectionRevision.current && current.selectedWorkspaceId === workspaceId
+				? { ...current, selectedSkill: result.skill }
+				: current
+		);
+		return result.skill;
+	}, []);
+
+	const clearSelectedSkill = useCallback(() => {
+		++skillSelectionRevision.current;
+		setState((current) => ({ ...current, selectedSkill: undefined }));
+	}, []);
+
+	const manageSkills = useCallback(
+		async (
+			command: Extract<
+				Command,
+				{
+					type: "skill.installed.list" | "skill.install" | "skill.preview" | "skill.set_enabled" | "skill.uninstall";
+				}
+			>
+		): Promise<CommandResult> => {
+			const result = await requestRef.current?.(command);
+			if (!result) throw new Error("网关未连接");
+			if (
+				command.type === "skill.install" ||
+				command.type === "skill.set_enabled" ||
+				command.type === "skill.uninstall"
+			) {
+				await refreshSkills(command.workspaceId);
+			}
+			return result;
+		},
+		[refreshSkills]
+	);
+
+	const getMcp = useCallback(async (workspaceId: string, serverId: string) => {
+		const revision = ++mcpSelectionRevision.current;
+		setState((current) =>
+			current.selectedWorkspaceId === workspaceId ? { ...current, selectedMcpServer: undefined } : current
+		);
+		try {
+			const result = await requestRef.current?.({ type: "mcp.get", workspaceId, serverId });
+			if (result?.type !== "mcp.get") return undefined;
+			if (
+				revision !== mcpSelectionRevision.current ||
+				result.server.workspaceId !== workspaceId ||
+				result.server.id !== serverId
+			)
+				return undefined;
+			setState((current) =>
+				revision === mcpSelectionRevision.current && current.selectedWorkspaceId === workspaceId
+					? {
+							...current,
+							selectedMcpServer: result.server,
+							mcpServers: current.mcpServers.map((server) =>
+								server.id === serverId
+									? {
+											...server,
+											trusted: result.server.trusted,
+											toolCount: result.server.toolCount,
+											discoveryStatus: result.server.discoveryStatus ?? (result.server.trusted ? "ready" : "untrusted"),
+										}
+									: server
+							),
+						}
+					: current
+			);
+			return result.server;
+		} catch (error) {
+			if (revision !== mcpSelectionRevision.current) return undefined;
+			setState((current) =>
+				current.selectedWorkspaceId === workspaceId
+					? {
+							...current,
+							mcpServers: current.mcpServers.map((server) =>
+								server.id === serverId ? { ...server, discoveryStatus: "failed" as const } : server
+							),
+						}
+					: current
+			);
+			throw error;
+		}
+	}, []);
+
+	const browseSessions = useCallback(
+		async (workspaceId: string, options: SessionListOptions) => {
+			const sessions = await refreshSessions(workspaceId, options);
+			const current = snapshotRef.current;
+			const archived = options.archived ?? false;
+			if (current?.session.workspaceId === workspaceId && (current.session.archivedAt !== undefined) === archived)
+				return sessions;
+			if (current)
+				await requestRef.current?.({ type: "session.detach", sessionId: current.session.id }).catch(() => undefined);
+			snapshotRef.current = undefined;
+			localStorage.removeItem(sessionSelectionKey(workspaceId));
+			setState((value) => ({
+				...value,
+				snapshot: undefined,
+				runs: [],
+				memories: [],
+				subagents: [],
+				subagentDepth: 0,
+				canCreateSubagent: true,
+				goals: [],
+				automations: [],
 				liveAssistants: {},
 				liveTools: {},
 				liveRetry: undefined,
 			}));
-			await refreshSessions(workspaceId, { archived: false });
-		}
-	}, [refreshSessions, state.models, state.selectedModel]);
+			if (sessions[0]) await attachSession(sessions[0].id);
+			return sessions;
+		},
+		[attachSession, refreshSessions]
+	);
+
+	const selectModel = useCallback(
+		(model: ModelRef) => {
+			const available = state.models.find((candidate) => candidate.authenticated && sameModel(candidate.model, model));
+			if (!available) throw new Error("模型不可用或尚未通过验证");
+			localStorage.setItem("wuming.model", JSON.stringify(available.model));
+			setState((current) => ({ ...current, selectedModel: available.model }));
+		},
+		[state.models]
+	);
+
+	const createSessionInWorkspace = useCallback(
+		async (workspaceId: string) => {
+			const currentSession = snapshotRef.current;
+			if (currentSession && currentSession.session.workspaceId !== workspaceId) {
+				await requestRef
+					.current?.({ type: "session.detach", sessionId: currentSession.session.id })
+					.catch(() => undefined);
+			}
+			const model =
+				state.models.find((candidate) => candidate.authenticated && sameModel(state.selectedModel, candidate.model)) ??
+				state.models.find((candidate) => candidate.authenticated) ??
+				state.models[0];
+			if (!model) throw new Error("模型不可用");
+			const permission = readStoredPermission(localStorage);
+			const result = await requestRef.current?.({
+				type: "session.create",
+				workspaceId,
+				model: model.model,
+				thinkingLevel: thinkingLevelForModel(model, readStoredThinking(localStorage)),
+				sandboxMode: permission.sandboxMode,
+				approvalPolicy: permission.approvalPolicy,
+			});
+			if (result?.type === "session.created") {
+				sessionListRef.current = { archived: false };
+				snapshotRef.current = result.snapshot;
+				localStorage.setItem(sessionSelectionKey(workspaceId), result.snapshot.session.id);
+				setState((current) => ({
+					...current,
+					selectedWorkspaceId: workspaceId,
+					snapshot: result.snapshot,
+					runs: [],
+					memories: [],
+					subagents: [],
+					subagentDepth: 0,
+					canCreateSubagent: true,
+					goals: [],
+					automations: [],
+					liveAssistants: {},
+					liveTools: {},
+					liveRetry: undefined,
+				}));
+				await refreshSessions(workspaceId, { archived: false });
+			}
+		},
+		[refreshSessions, state.models, state.selectedModel]
+	);
 
 	const createSession = useCallback(async () => {
-		const workspace = state.workspaces.find((candidate) => candidate.id === state.selectedWorkspaceId) ?? state.workspaces[0];
+		const workspace =
+			state.workspaces.find((candidate) => candidate.id === state.selectedWorkspaceId) ?? state.workspaces[0];
 		if (!workspace) throw new Error("工作区不可用");
 		await createSessionInWorkspace(workspace.id);
 	}, [createSessionInWorkspace, state.selectedWorkspaceId, state.workspaces]);
 
-	const importProject = useCallback(async (
-		name: string,
-		files: Array<{ file: File; path: string }>,
-		onProgress?: (uploaded: number, total: number) => void,
-	) => {
-		if (files.length === 0) throw new Error("没有可导入的文件");
-		const { project: draft } = await workspaceApi.createProject(token, name);
-		let uploaded = 0;
-		for (let index = 0; index < files.length; index += 4) {
-			const batch = files.slice(index, index + 4);
-			await Promise.all(batch.map(async (entry) => {
-				await workspaceApi.uploadProjectFile(token, draft.id, entry.path, entry.file);
-				uploaded += 1;
-				onProgress?.(uploaded, files.length);
-			}));
-		}
-		const { project } = await workspaceApi.completeProject(token, draft.id);
-		const result = await requestRef.current?.({ type: "workspace.list" });
-		const workspaces = result?.type === "workspace.list" ? result.workspaces : [...state.workspaces, project];
-		setState((current) => ({ ...current, workspaces }));
-		await openWorkspace(project.id);
-		if (state.models.length > 0) await createSessionInWorkspace(project.id);
-		return project;
-	}, [createSessionInWorkspace, openWorkspace, state.models.length, state.workspaces, token]);
+	const importProject = useCallback(
+		async (
+			name: string,
+			files: Array<{ file: File; path: string }>,
+			onProgress?: (uploaded: number, total: number) => void
+		) => {
+			if (files.length === 0) throw new Error("没有可导入的文件");
+			const { project: draft } = await workspaceApi.createProject(token, name);
+			let uploaded = 0;
+			for (let index = 0; index < files.length; index += 4) {
+				const batch = files.slice(index, index + 4);
+				await Promise.all(
+					batch.map(async (entry) => {
+						await workspaceApi.uploadProjectFile(token, draft.id, entry.path, entry.file);
+						uploaded += 1;
+						onProgress?.(uploaded, files.length);
+					})
+				);
+			}
+			const { project } = await workspaceApi.completeProject(token, draft.id);
+			const result = await requestRef.current?.({ type: "workspace.list" });
+			const workspaces = result?.type === "workspace.list" ? result.workspaces : [...state.workspaces, project];
+			setState((current) => ({ ...current, workspaces }));
+			await openWorkspace(project.id, false);
+			return project;
+		},
+		[openWorkspace, state.workspaces, token]
+	);
 
 	const openLocalProject = useCallback(async () => {
 		const { project } = await workspaceApi.pickProject(token);
 		const result = await requestRef.current?.({ type: "workspace.list" });
 		const workspaces = result?.type === "workspace.list" ? result.workspaces : [...state.workspaces, project];
 		setState((current) => ({ ...current, workspaces }));
-		await openWorkspace(project.id);
-		if (state.models.length > 0) await createSessionInWorkspace(project.id);
+		await openWorkspace(project.id, false);
 		return project;
-	}, [createSessionInWorkspace, openWorkspace, state.models.length, state.workspaces, token]);
+	}, [openWorkspace, state.workspaces, token]);
 
-	const renameProject = useCallback(async (projectId: string, name: string) => {
-		const normalizedName = name.trim();
-		if (!normalizedName) throw new Error("项目名称不能为空");
-		const { project } = await workspaceApi.renameProject(token, projectId, normalizedName);
-		setState((current) => ({
-			...current,
-			workspaces: current.workspaces.map((workspace) => workspace.id === project.id ? project : workspace),
-		}));
-		return project;
-	}, [token]);
+	const renameProject = useCallback(
+		async (projectId: string, name: string) => {
+			const normalizedName = name.trim();
+			if (!normalizedName) throw new Error("项目名称不能为空");
+			const { project } = await workspaceApi.renameProject(token, projectId, normalizedName);
+			setState((current) => ({
+				...current,
+				workspaces: current.workspaces.map((workspace) => (workspace.id === project.id ? project : workspace)),
+			}));
+			return project;
+		},
+		[token]
+	);
 
-	const removeProject = useCallback(async (projectId: string) => {
-		const selected = state.selectedWorkspaceId === projectId;
-		const currentSession = snapshotRef.current;
-		if (selected && currentSession) {
-			if (currentSession.session.phase !== "idle") throw new Error("请先停止正在运行的会话");
-		}
-		await workspaceApi.removeProject(token, projectId);
-		if (selected) snapshotRef.current = undefined;
-		const result = await requestRef.current?.({ type: "workspace.list" });
-		const workspaces = result?.type === "workspace.list"
-			? result.workspaces
-			: state.workspaces.filter((workspace) => workspace.id !== projectId);
-		setState((current) => ({ ...current, workspaces }));
-		if (!selected) return;
-		const next = workspaces.find((workspace) => !isImplicitWorkspace(workspace)) ?? workspaces[0];
-		if (next) {
-			await openWorkspace(next.id);
-			return;
-		}
-		localStorage.removeItem("wuming.workspaceId");
-		setState((current) => ({
-			...current,
-			selectedWorkspaceId: undefined,
-			sessions: [],
-			snapshot: undefined,
-			runs: [],
-			subagents: [],
-			subagentDepth: 0,
-			canCreateSubagent: true,
-			goals: [],
-			liveAssistants: {},
-			liveTools: {},
-			liveRetry: undefined,
-		}));
-	}, [openWorkspace, state.selectedWorkspaceId, state.workspaces, token]);
+	const removeProject = useCallback(
+		async (projectId: string) => {
+			const selected = state.selectedWorkspaceId === projectId;
+			const currentSession = snapshotRef.current;
+			if (selected && currentSession) {
+				if (currentSession.session.phase !== "idle") throw new Error("请先停止正在运行的会话");
+			}
+			await workspaceApi.removeProject(token, projectId);
+			if (selected) snapshotRef.current = undefined;
+			const result = await requestRef.current?.({ type: "workspace.list" });
+			const workspaces =
+				result?.type === "workspace.list"
+					? result.workspaces
+					: state.workspaces.filter((workspace) => workspace.id !== projectId);
+			setState((current) => ({ ...current, workspaces }));
+			if (!selected) return;
+			const next = workspaces.find((workspace) => !isImplicitWorkspace(workspace)) ?? workspaces[0];
+			if (next) {
+				await openWorkspace(next.id);
+				return;
+			}
+			localStorage.removeItem("wuming.workspaceId");
+			setState((current) => ({
+				...current,
+				selectedWorkspaceId: undefined,
+				sessions: [],
+				snapshot: undefined,
+				runs: [],
+				memories: [],
+				subagents: [],
+				subagentDepth: 0,
+				canCreateSubagent: true,
+				goals: [],
+				automations: [],
+				liveAssistants: {},
+				liveTools: {},
+				liveRetry: undefined,
+			}));
+		},
+		[openWorkspace, state.selectedWorkspaceId, state.workspaces, token]
+	);
 
-	const forkSession = useCallback(async (fromItemId?: string) => {
-		const snapshot = snapshotRef.current;
-		if (!snapshot) throw new Error("未选择会话");
-		if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
-		const result = await requestRef.current?.({
-			type: "session.fork",
-			sessionId: snapshot.session.id,
-			...(fromItemId === undefined ? {} : { fromItemId }),
-		});
-		if (result?.type !== "session.forked") return;
-		const workspaceId = result.snapshot.session.workspaceId;
-		snapshotRef.current = result.snapshot;
-		localStorage.setItem(sessionSelectionKey(workspaceId), result.snapshot.session.id);
-		setState((current) => ({
-			...current,
-			selectedWorkspaceId: workspaceId,
-			snapshot: result.snapshot,
-			runs: [],
-			subagents: [],
-			subagentDepth: 0,
-			canCreateSubagent: true,
-			goals: [],
-			liveAssistants: {},
-			liveTools: {},
-			liveRetry: undefined,
-		}));
-		await refreshSessions(workspaceId, { archived: false });
-	}, [refreshSessions]);
+	const forkSession = useCallback(
+		async (fromItemId?: string) => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
+			const result = await requestRef.current?.({
+				type: "session.fork",
+				sessionId: snapshot.session.id,
+				...(fromItemId === undefined ? {} : { fromItemId }),
+			});
+			if (result?.type !== "session.forked") return;
+			const forkedSnapshot = await syncStoredPermission(result.snapshot);
+			const workspaceId = forkedSnapshot.session.workspaceId;
+			snapshotRef.current = forkedSnapshot;
+			localStorage.setItem(sessionSelectionKey(workspaceId), forkedSnapshot.session.id);
+			setState((current) => ({
+				...current,
+				selectedWorkspaceId: workspaceId,
+				snapshot: forkedSnapshot,
+				runs: [],
+				memories: [],
+				subagents: [],
+				subagentDepth: 0,
+				canCreateSubagent: true,
+				goals: [],
+				automations: [],
+				liveAssistants: {},
+				liveTools: {},
+				liveRetry: undefined,
+			}));
+			await refreshSessions(workspaceId, { archived: false });
+		},
+		[refreshSessions, syncStoredPermission]
+	);
 
-	const compactSession = useCallback(async (instructions?: string) => {
-		const snapshot = snapshotRef.current;
-		if (!snapshot) throw new Error("未选择会话");
-		if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
-		const result = await requestRef.current?.({
-			type: "session.compact",
-			sessionId: snapshot.session.id,
-			...(instructions?.trim() ? { instructions: instructions.trim() } : {}),
-		});
-		if (result?.type !== "session.compacted") return;
-		snapshotRef.current = result.snapshot;
-		setState((current) => ({ ...current, snapshot: result.snapshot, liveAssistants: {}, liveTools: {}, liveRetry: undefined }));
-	}, []);
+	const compactSession = useCallback(
+		async (instructions?: string) => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
+			const result = await requestRef.current?.({
+				type: "session.compact",
+				sessionId: snapshot.session.id,
+				...(instructions?.trim() ? { instructions: instructions.trim() } : {}),
+			});
+			if (result?.type !== "session.compacted") return;
+			snapshotRef.current = result.snapshot;
+			setState((current) => ({
+				...current,
+				snapshot: result.snapshot,
+				liveAssistants: {},
+				liveTools: {},
+				liveRetry: undefined,
+			}));
+			if (capabilitiesRef.current.includes("session.memory")) await refreshMemories(snapshot.session.id);
+		},
+		[refreshMemories]
+	);
 
 	const setSessionModel = useCallback(async (model: ModelRef) => {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
-		const result = await requestRef.current?.({ type: "session.model.set", sessionId: snapshot.session.id, model });
+		const result = await requestRef.current?.({
+			type: "session.model.set",
+			sessionId: snapshot.session.id,
+			model,
+		});
 		if (result?.type !== "session.configured") return;
 		snapshotRef.current = result.snapshot;
-		setState((current) => ({ ...current, snapshot: result.snapshot, selectedModel: result.snapshot.model }));
+		setState((current) => ({
+			...current,
+			snapshot: result.snapshot,
+			selectedModel: result.snapshot.model,
+		}));
 	}, []);
 
 	const setSessionThinking = useCallback(async (thinkingLevel: ThinkingLevel) => {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
-		const result = await requestRef.current?.({ type: "session.thinking.set", sessionId: snapshot.session.id, thinkingLevel });
+		const result = await requestRef.current?.({
+			type: "session.thinking.set",
+			sessionId: snapshot.session.id,
+			thinkingLevel,
+		});
 		if (result?.type !== "session.configured") return;
 		snapshotRef.current = result.snapshot;
+		// Remembered so the next session opens at the strength the user settled on
+		// instead of silently dropping back to the default.
+		writeStoredThinking(localStorage, thinkingLevel);
 		setState((current) => ({ ...current, snapshot: result.snapshot }));
 	}, []);
 
 	const setSessionPolicy = useCallback(async (sandboxMode: SandboxMode, approvalPolicy: ApprovalPolicy) => {
 		const snapshot = snapshotRef.current;
-		if (!snapshot) throw new Error("未选择会话");
-		const result = await requestRef.current?.({ type: "session.policy.set", sessionId: snapshot.session.id, sandboxMode, approvalPolicy });
-		if (result?.type !== "session.configured") return;
-		snapshotRef.current = result.snapshot;
 		writeStoredPermission(localStorage, { sandboxMode, approvalPolicy });
-		setState((current) => ({ ...current, snapshot: result.snapshot }));
-	}, []);
-
-	const setSessionBudget = useCallback(async (budget: { costBudgetUsd?: number | null; tokenBudget?: number | null; budgetWarningThreshold?: number }) => {
-		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
-		const result = await requestRef.current?.({ type: "session.budget.set", sessionId: snapshot.session.id, ...budget });
+		const result = await requestRef.current?.({
+			type: "session.policy.set",
+			sessionId: snapshot.session.id,
+			sandboxMode,
+			approvalPolicy,
+		});
 		if (result?.type !== "session.configured") return;
 		snapshotRef.current = result.snapshot;
 		setState((current) => ({ ...current, snapshot: result.snapshot }));
 	}, []);
 
-	const uploadArtifact = useCallback(async (file: File): Promise<ArtifactRef> => {
-		const workspaceId = snapshotRef.current?.session.workspaceId ?? state.selectedWorkspaceId ?? state.workspaces[0]?.id;
-		if (!workspaceId) throw new Error("未选择工作区");
-		const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/artifacts`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"Content-Type": file.type || "application/octet-stream",
-				"X-Wuming-File-Name": encodeURIComponent(file.name),
-			},
-			body: file,
-		});
-		const value = await response.json() as { artifact?: ArtifactRef; error?: string };
-		if (!response.ok || !value.artifact) throw new Error(value.error ?? `上传失败，状态码 ${response.status}`);
-		return value.artifact;
-	}, [state.selectedWorkspaceId, state.workspaces, token]);
-
-	const downloadArtifact = useCallback(async (artifact: ArtifactRef): Promise<void> => {
-		const response = await fetch(`/api/artifacts/${encodeURIComponent(artifact.id)}`, {
-			headers: { Authorization: `Bearer ${token}` },
-		});
-		if (!response.ok) {
-			const value = await response.json().catch(() => ({})) as { error?: string };
-			throw new Error(value.error ?? `下载失败，状态码 ${response.status}`);
-		}
-		const url = URL.createObjectURL(await response.blob());
-		try {
-			const anchor = document.createElement("a");
-			anchor.href = url;
-			anchor.download = artifact.name;
-			anchor.click();
-		} finally {
-			setTimeout(() => URL.revokeObjectURL(url), 0);
-		}
-	}, [token]);
-
-	const sendPrompt = useCallback(async (
-		text: string,
-		artifacts: ArtifactRef[] = [],
-		queueMode: "steer" | "follow_up" = "steer",
-	) => {
-		const snapshot = snapshotRef.current;
-		if (!snapshot) throw new Error("未选择会话");
-		if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
-		const content: UserContentPart[] = [
-			...(text.trim() ? [{ type: "text" as const, text: text.trim() }] : []),
-			...artifacts.map((artifact) => ({ type: "artifact" as const, artifact })),
-		];
-		if (content.length === 0) throw new Error("请输入消息或添加附件");
-		const type = snapshot.session.phase === "idle" ? "turn.prompt" : queueMode === "steer" ? "turn.steer" : "turn.follow_up";
-		await requestRef.current?.({
-			type,
-			sessionId: snapshot.session.id,
-			content,
-			...(state.selectedSkill ? { skills: [state.selectedSkill.id] } : {}),
-		});
-		await refreshRuns(snapshot.session.id);
-	}, [refreshRuns, state.selectedSkill]);
-
-	const renameSession = useCallback(async (sessionId: string, name: string) => {
-		const normalizedName = name.trim();
-		if (!normalizedName) throw new Error("会话名称不能为空");
-		const result = await requestRef.current?.({ type: "session.rename", sessionId, name: normalizedName });
-		if (result?.type !== "session.renamed") return;
-		if (snapshotRef.current?.session.id === sessionId) {
+	const setSessionBudget = useCallback(
+		async (budget: { costBudgetUsd?: number | null; tokenBudget?: number | null; budgetWarningThreshold?: number }) => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			const result = await requestRef.current?.({
+				type: "session.budget.set",
+				sessionId: snapshot.session.id,
+				...budget,
+			});
+			if (result?.type !== "session.configured") return;
 			snapshotRef.current = result.snapshot;
 			setState((current) => ({ ...current, snapshot: result.snapshot }));
-		}
-		await refreshSessions(result.snapshot.session.workspaceId);
-	}, [refreshSessions]);
+		},
+		[]
+	);
 
-	const archiveSession = useCallback(async (sessionId: string, archived: boolean) => {
-		const result = await requestRef.current?.({ type: "session.archive", sessionId, archived });
-		if (result?.type !== "session.archived") return;
-		const workspaceId = result.snapshot.session.workspaceId;
-		await refreshSessions(workspaceId);
-		if (snapshotRef.current?.session.id !== sessionId) return;
-		if ((result.snapshot.session.archivedAt !== undefined) === (sessionListRef.current.archived ?? false)) {
-			snapshotRef.current = result.snapshot;
-			setState((current) => ({ ...current, snapshot: result.snapshot }));
-			return;
-		}
-		await requestRef.current?.({ type: "session.detach", sessionId }).catch(() => undefined);
-		snapshotRef.current = undefined;
-		localStorage.removeItem(sessionSelectionKey(workspaceId));
-		setState((current) => ({ ...current, snapshot: undefined, runs: [], subagents: [], subagentDepth: 0, canCreateSubagent: true, goals: [], liveAssistants: {}, liveTools: {}, liveRetry: undefined }));
-	}, [refreshSessions]);
+	const uploadArtifact = useCallback(
+		async (file: File): Promise<ArtifactRef> => {
+			const workspaceId =
+				snapshotRef.current?.session.workspaceId ?? state.selectedWorkspaceId ?? state.workspaces[0]?.id;
+			if (!workspaceId) throw new Error("未选择工作区");
+			const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/artifacts`, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": file.type || "application/octet-stream",
+					"X-Wuming-File-Name": encodeURIComponent(file.name),
+				},
+				body: file,
+			});
+			const value = (await response.json()) as { artifact?: ArtifactRef; error?: string };
+			if (!response.ok || !value.artifact) throw new Error(value.error ?? `上传失败，状态码 ${response.status}`);
+			return value.artifact;
+		},
+		[state.selectedWorkspaceId, state.workspaces, token]
+	);
 
-	const respondApproval = useCallback(async (sessionId: string, approvalId: string, decision: "approve" | "deny") => {
-		await requestRef.current?.({ type: "approval.respond", sessionId, approvalId, decision });
-		const parentId = snapshotRef.current?.session.id;
-		if (parentId && parentId !== sessionId) await Promise.all([refreshSubagents(parentId), refreshGoals(parentId)]);
-	}, [refreshGoals, refreshSubagents]);
+	const loadArtifact = useCallback(
+		async (artifact: ArtifactRef): Promise<Blob> => {
+			const response = await fetch(`/api/artifacts/${encodeURIComponent(artifact.id)}`, {
+				headers: { Authorization: `Bearer ${token}` },
+			});
+			if (!response.ok) {
+				const value = (await response.json().catch(() => ({}))) as { error?: string };
+				throw new Error(value.error ?? `下载失败，状态码 ${response.status}`);
+			}
+			return response.blob();
+		},
+		[token]
+	);
 
-	const createSubagent = useCallback(async (input: { task: string; name?: string; costBudgetUsd?: number; tokenBudget?: number }) => {
-		const snapshot = snapshotRef.current;
-		if (!snapshot) throw new Error("未选择会话");
-		if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
-		const result = await requestRef.current?.({
-			type: "subagent.create",
-			sessionId: snapshot.session.id,
-			task: input.task,
-			...(input.name ? { name: input.name } : {}),
-			...(input.costBudgetUsd === undefined ? {} : { costBudgetUsd: input.costBudgetUsd }),
-			...(input.tokenBudget === undefined ? {} : { tokenBudget: input.tokenBudget }),
-		});
-		if (result?.type !== "subagent.created") throw new Error("子智能体创建失败");
-		setState((current) => ({
-			...current,
-			subagents: [result.subagent, ...current.subagents.filter((candidate) => candidate.id !== result.subagent.id)],
-		}));
-		return result.subagent;
-	}, []);
+	const downloadArtifact = useCallback(
+		async (artifact: ArtifactRef): Promise<void> => {
+			const url = URL.createObjectURL(await loadArtifact(artifact));
+			try {
+				const anchor = document.createElement("a");
+				anchor.href = url;
+				anchor.download = artifact.name;
+				anchor.click();
+			} finally {
+				setTimeout(() => URL.revokeObjectURL(url), 0);
+			}
+		},
+		[loadArtifact]
+	);
+
+	const sendPrompt = useCallback(
+		async (text: string, artifacts: ArtifactRef[] = [], queueMode: "steer" | "follow_up" = "steer") => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
+			if (state.selectedSkill?.truncated) throw new Error("所选技能内容已截断，无法执行。请先精简技能文件或取消技能。");
+			if (state.selectedSkill && state.selectedSkill.workspaceId !== snapshot.session.workspaceId)
+				throw new Error("所选技能不属于当前会话的工作区，请重新选择技能。");
+			const content: UserContentPart[] = [
+				...(text.trim() ? [{ type: "text" as const, text: text.trim() }] : []),
+				...artifacts.map((artifact) => ({ type: "artifact" as const, artifact })),
+			];
+			if (content.length === 0) throw new Error("请输入消息或添加附件");
+			const type =
+				snapshot.session.phase === "idle" ? "turn.prompt" : queueMode === "steer" ? "turn.steer" : "turn.follow_up";
+			await requestRef.current?.({
+				type,
+				sessionId: snapshot.session.id,
+				content,
+				...(state.selectedSkill ? { skills: [state.selectedSkill.id] } : {}),
+			});
+			await refreshRuns(snapshot.session.id);
+		},
+		[refreshRuns, state.selectedSkill]
+	);
+
+	const renameSession = useCallback(
+		async (sessionId: string, name: string) => {
+			const normalizedName = name.trim();
+			if (!normalizedName) throw new Error("会话名称不能为空");
+			const result = await requestRef.current?.({
+				type: "session.rename",
+				sessionId,
+				name: normalizedName,
+			});
+			if (result?.type !== "session.renamed") return;
+			if (snapshotRef.current?.session.id === sessionId) {
+				snapshotRef.current = result.snapshot;
+				setState((current) => ({ ...current, snapshot: result.snapshot }));
+			}
+			await refreshSessions(result.snapshot.session.workspaceId);
+		},
+		[refreshSessions]
+	);
+
+	const archiveSession = useCallback(
+		async (sessionId: string, archived: boolean) => {
+			const result = await requestRef.current?.({ type: "session.archive", sessionId, archived });
+			if (result?.type !== "session.archived") return;
+			const workspaceId = result.snapshot.session.workspaceId;
+			await refreshSessions(workspaceId);
+			if (snapshotRef.current?.session.id !== sessionId) return;
+			if ((result.snapshot.session.archivedAt !== undefined) === (sessionListRef.current.archived ?? false)) {
+				snapshotRef.current = result.snapshot;
+				setState((current) => ({ ...current, snapshot: result.snapshot }));
+				return;
+			}
+			await requestRef.current?.({ type: "session.detach", sessionId }).catch(() => undefined);
+			snapshotRef.current = undefined;
+			localStorage.removeItem(sessionSelectionKey(workspaceId));
+			setState((current) => ({
+				...current,
+				snapshot: undefined,
+				runs: [],
+				memories: [],
+				subagents: [],
+				subagentDepth: 0,
+				canCreateSubagent: true,
+				goals: [],
+				automations: [],
+				liveAssistants: {},
+				liveTools: {},
+				liveRetry: undefined,
+			}));
+		},
+		[refreshSessions]
+	);
+
+	const respondApproval = useCallback(
+		async (sessionId: string, approvalId: string, decision: "approve" | "deny") => {
+			await requestRef.current?.({ type: "approval.respond", sessionId, approvalId, decision });
+			const parentId = snapshotRef.current?.session.id;
+			if (parentId && parentId !== sessionId) await Promise.all([refreshSubagents(parentId), refreshGoals(parentId)]);
+		},
+		[refreshGoals, refreshSubagents]
+	);
+
+	const createSubagent = useCallback(
+		async (input: { task: string; name?: string; costBudgetUsd?: number; tokenBudget?: number }) => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
+			const result = await requestRef.current?.({
+				type: "subagent.create",
+				sessionId: snapshot.session.id,
+				task: input.task,
+				...(input.name ? { name: input.name } : {}),
+				...(input.costBudgetUsd === undefined ? {} : { costBudgetUsd: input.costBudgetUsd }),
+				...(input.tokenBudget === undefined ? {} : { tokenBudget: input.tokenBudget }),
+			});
+			if (result?.type !== "subagent.created") throw new Error("子智能体创建失败");
+			setState((current) => ({
+				...current,
+				subagents: [result.subagent, ...current.subagents.filter((candidate) => candidate.id !== result.subagent.id)],
+			}));
+			return result.subagent;
+		},
+		[]
+	);
 
 	const cancelSubagent = useCallback(async (subagentId: string) => {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
-		const result = await requestRef.current?.({ type: "subagent.cancel", sessionId: snapshot.session.id, subagentId });
+		const result = await requestRef.current?.({
+			type: "subagent.cancel",
+			sessionId: snapshot.session.id,
+			subagentId,
+		});
 		if (result?.type !== "subagent.cancel_requested") throw new Error("取消子智能体任务失败");
 		setState((current) => ({
 			...current,
-			subagents: current.subagents.map((candidate) => candidate.id === subagentId ? result.subagent : candidate),
+			subagents: current.subagents.map((candidate) => (candidate.id === subagentId ? result.subagent : candidate)),
 		}));
 		return result.subagent;
 	}, []);
 
-	const createGoal = useCallback(async (input: { objective: string; title?: string; successCriteria?: string; maxRounds?: number }) => {
-		const snapshot = snapshotRef.current;
-		if (!snapshot) throw new Error("未选择会话");
-		if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
-		// The orchestrator rejects review rounds without success criteria, so both fields travel together.
-		const review = input.successCriteria
-			? { successCriteria: input.successCriteria, ...(input.maxRounds === undefined ? {} : { maxRounds: input.maxRounds }) }
-			: {};
-		const result = await requestRef.current?.({
-			type: "goal.create",
-			sessionId: snapshot.session.id,
-			objective: input.objective,
-			...(input.title ? { title: input.title } : {}),
-			...review,
-		});
-		if (result?.type !== "goal.created") throw new Error("目标创建失败");
-		setState((current) => ({ ...current, goals: [result.goal, ...current.goals.filter((goal) => goal.id !== result.goal.id)] }));
-		return result.goal;
-	}, []);
+	const createGoal = useCallback(
+		async (input: {
+			objective: string;
+			skillId?: string;
+			executionMode?: GoalExecutionMode;
+			title?: string;
+			successCriteria?: string;
+			maxRounds?: number;
+			plan?: GoalPlanSpec;
+		}) => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
+			goalMutationVersion.current += 1;
+			// The orchestrator rejects review rounds without success criteria, so both fields travel together.
+			const review = input.successCriteria
+				? {
+						successCriteria: input.successCriteria,
+						...(input.maxRounds === undefined ? {} : { maxRounds: input.maxRounds }),
+					}
+				: {};
+			const result = await requestRef.current?.({
+				type: "goal.create",
+				sessionId: snapshot.session.id,
+				objective: input.objective,
+				...(input.skillId === undefined ? {} : { skillId: input.skillId }),
+				...(input.executionMode === undefined
+					? input.plan === undefined && input.successCriteria === undefined
+						? { executionMode: "session" as const }
+						: {}
+					: { executionMode: input.executionMode }),
+				...(input.plan === undefined ? {} : { plan: input.plan }),
+				...(input.title ? { title: input.title } : {}),
+				...review,
+			});
+			if (result?.type !== "goal.created") throw new Error("目标创建失败");
+			setState((current) => ({
+				...current,
+				goals: [result.goal, ...current.goals.filter((goal) => goal.id !== result.goal.id)],
+			}));
+			return result.goal;
+		},
+		[]
+	);
 
 	const startGoal = useCallback(async (goalId: string) => {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
-		const result = await requestRef.current?.({ type: "goal.start", sessionId: snapshot.session.id, goalId });
+		goalMutationVersion.current += 1;
+		const result = await requestRef.current?.({
+			type: "goal.start",
+			sessionId: snapshot.session.id,
+			goalId,
+		});
 		if (result?.type !== "goal.started") throw new Error("目标启动失败");
-		setState((current) => ({ ...current, goals: current.goals.map((goal) => goal.id === goalId ? result.goal : goal) }));
+		setState((current) => ({
+			...current,
+			liveGoalActivities: Object.fromEntries(
+				Object.entries(current.liveGoalActivities).filter(([id]) => id !== goalId)
+			),
+			goals: current.goals.map((goal) => (goal.id === goalId ? result.goal : goal)),
+		}));
 		return result.goal;
 	}, []);
 
 	const cancelGoal = useCallback(async (goalId: string) => {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
-		const result = await requestRef.current?.({ type: "goal.cancel", sessionId: snapshot.session.id, goalId });
+		goalMutationVersion.current += 1;
+		const result = await requestRef.current?.({
+			type: "goal.cancel",
+			sessionId: snapshot.session.id,
+			goalId,
+		});
 		if (result?.type !== "goal.cancel_requested") throw new Error("目标取消失败");
-		setState((current) => ({ ...current, goals: current.goals.map((goal) => goal.id === goalId ? result.goal : goal) }));
+		setState((current) => ({
+			...current,
+			liveGoalActivities: Object.fromEntries(
+				Object.entries(current.liveGoalActivities).filter(([id]) => id !== goalId)
+			),
+			goals: current.goals.map((goal) => (goal.id === goalId ? result.goal : goal)),
+		}));
 		return result.goal;
+	}, []);
+
+	const pauseGoal = useCallback(async (goalId: string) => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		goalMutationVersion.current += 1;
+		const result = await requestRef.current?.({
+			type: "goal.pause",
+			sessionId: snapshot.session.id,
+			goalId,
+		});
+		if (result?.type !== "goal.paused") throw new Error("目标暂停失败");
+		setState((current) => ({
+			...current,
+			liveGoalActivities: Object.fromEntries(
+				Object.entries(current.liveGoalActivities).filter(([id]) => id !== goalId)
+			),
+			goals: current.goals.map((goal) => (goal.id === goalId ? result.goal : goal)),
+		}));
+		return result.goal;
+	}, []);
+
+	const resumeGoal = useCallback(async (goalId: string) => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		goalMutationVersion.current += 1;
+		const result = await requestRef.current?.({
+			type: "goal.resume",
+			sessionId: snapshot.session.id,
+			goalId,
+		});
+		if (result?.type !== "goal.resumed") throw new Error("目标继续失败");
+		setState((current) => ({
+			...current,
+			liveGoalActivities: Object.fromEntries(
+				Object.entries(current.liveGoalActivities).filter(([id]) => id !== goalId)
+			),
+			goals: current.goals.map((goal) => (goal.id === goalId ? result.goal : goal)),
+		}));
+		return result.goal;
+	}, []);
+
+	const deleteGoal = useCallback(async (goalId: string) => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		goalMutationVersion.current += 1;
+		const result = await requestRef.current?.({
+			type: "goal.delete",
+			sessionId: snapshot.session.id,
+			goalId,
+		});
+		if (result?.type !== "goal.deleted") throw new Error("目标删除失败");
+		setState((current) => ({
+			...current,
+			liveGoalActivities: Object.fromEntries(
+				Object.entries(current.liveGoalActivities).filter(([id]) => id !== goalId)
+			),
+			goals: current.goals.filter((goal) => goal.id !== goalId),
+		}));
+		return goalId;
+	}, []);
+
+	const createAutomation = useCallback(
+		async (input: {
+			objective: string;
+			title?: string;
+			schedule: AutomationSchedule;
+			successCriteria?: string;
+			maxRounds?: number;
+			plan?: GoalPlanSpec;
+		}) => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
+			const review = input.successCriteria
+				? {
+						successCriteria: input.successCriteria,
+						...(input.maxRounds === undefined ? {} : { maxRounds: input.maxRounds }),
+					}
+				: {};
+			const result = await requestRef.current?.({
+				type: "automation.create",
+				sessionId: snapshot.session.id,
+				objective: input.objective,
+				...(input.plan === undefined ? {} : { plan: input.plan }),
+				schedule: input.schedule,
+				...(input.title ? { title: input.title } : {}),
+				...review,
+			});
+			if (result?.type !== "automation.created") throw new Error("自动化创建失败");
+			setState((current) => ({
+				...current,
+				automations: [
+					result.automation,
+					...current.automations.filter((automation) => automation.id !== result.automation.id),
+				],
+			}));
+			return result.automation;
+		},
+		[]
+	);
+
+	const setAutomationEnabled = useCallback(async (automationId: string, enabled: boolean) => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		const result = await requestRef.current?.({
+			type: "automation.set_enabled",
+			sessionId: snapshot.session.id,
+			automationId,
+			enabled,
+		});
+		if (result?.type !== "automation.configured") throw new Error("自动化状态更新失败");
+		setState((current) => ({
+			...current,
+			automations: current.automations.map((automation) =>
+				automation.id === automationId ? result.automation : automation
+			),
+		}));
+		return result.automation;
+	}, []);
+
+	const triggerAutomation = useCallback(
+		async (automationId: string): Promise<AutomationRunSummary> => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			const result = await requestRef.current?.({
+				type: "automation.trigger",
+				sessionId: snapshot.session.id,
+				automationId,
+			});
+			if (result?.type !== "automation.triggered") throw new Error("自动化触发失败");
+			void refreshAutomations(snapshot.session.id).catch(() => undefined);
+			return result.run;
+		},
+		[refreshAutomations]
+	);
+
+	const listAutomationRuns = useCallback(async (automationId: string, limit = 50): Promise<AutomationRunSummary[]> => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		const result = await requestRef.current?.({
+			type: "automation.run.list",
+			sessionId: snapshot.session.id,
+			automationId,
+			limit,
+		});
+		if (result?.type !== "automation.run.list") throw new Error("自动化运行记录读取失败");
+		return result.runs;
 	}, []);
 
 	const abortTurn = useCallback(async () => {
@@ -1167,11 +2171,22 @@ export function useWumingClient() {
 		refreshSessions,
 		refreshUsageOverview,
 		refreshRuns,
+		refreshMemories,
+		manageMemory,
+		refreshEvaluationDatasets,
+		createEvaluationDataset,
+		deleteEvaluationDataset,
+		listRunEvaluations,
+		runEvaluation,
+		createRunAttestation,
 		refreshSubagents,
 		refreshGoals,
+		refreshAutomations,
 		refreshSkills,
 		refreshTools,
 		getSkill,
+		clearSelectedSkill,
+		manageSkills,
 		refreshMcp,
 		refreshModels,
 		discoverCustomModels,
@@ -1183,11 +2198,16 @@ export function useWumingClient() {
 		configureCustomModels,
 		removeCustomModel,
 		testCustomModel,
+		listMediaModels,
+		discoverMediaModels,
+		setMediaModel,
+		removeMediaModel,
 		getMcp,
 		importProject,
 		openLocalProject,
 		renameProject,
 		removeProject,
+		beginNewChat,
 		createSessionInWorkspace,
 		createSession,
 		forkSession,
@@ -1206,8 +2226,16 @@ export function useWumingClient() {
 		createGoal,
 		startGoal,
 		cancelGoal,
+		pauseGoal,
+		resumeGoal,
+		deleteGoal,
+		createAutomation,
+		setAutomationEnabled,
+		triggerAutomation,
+		listAutomationRuns,
 		abortTurn,
 		uploadArtifact,
+		loadArtifact,
 		downloadArtifact,
 	};
 }

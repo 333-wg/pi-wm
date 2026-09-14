@@ -9,9 +9,11 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
+import { asCapabilityJson, type CapabilityManifest } from "@wuming/capability-kernel";
 import type { SessionSnapshot } from "@wuming/protocol";
 import { Value } from "typebox/value";
 import { buildWumingSystemPrompt } from "./system-prompt.js";
+import { ToolRecoveryMonitor } from "./tool-recovery.js";
 import type { PiProviderRegistration, PiSessionFactory, WorkspaceResolver } from "./types.js";
 
 export interface DefaultPiSessionFactoryOptions {
@@ -20,6 +22,7 @@ export interface DefaultPiSessionFactoryOptions {
 	resolveWorkspace: WorkspaceResolver;
 	createCustomTools?: (snapshot: SessionSnapshot) => ToolDefinition[] | Promise<ToolDefinition[]>;
 	autoRetry?: boolean;
+	autoCompaction?: boolean;
 	initialToolChoice?: "required";
 	registerProviders?: () => PiProviderRegistration[] | Promise<PiProviderRegistration[]>;
 	/**
@@ -27,7 +30,11 @@ export interface DefaultPiSessionFactoryOptions {
 	 * back to Pi's own default prompt, which describes Pi's tool names rather than
 	 * Wuming's — useful for comparison, rarely what a deployment wants.
 	 */
-	buildSystemPrompt?: (input: { snapshot: SessionSnapshot; tools: ToolDefinition[]; cwd: string }) => string | undefined;
+	buildSystemPrompt?: (input: {
+		snapshot: SessionSnapshot;
+		tools: ToolDefinition[];
+		cwd: string;
+	}) => string | undefined;
 }
 
 function sessionDirectory(root: string, sessionId: string): string {
@@ -43,7 +50,10 @@ function interruptionText(entry: SessionEntry): string | undefined {
 		if (message.stopReason === "error") return message.errorMessage;
 	}
 	if (message.role === "toolResult" && message.isError) {
-		return message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+		return message.content
+			.filter((part) => part.type === "text")
+			.map((part) => part.text)
+			.join("\n");
 	}
 	return undefined;
 }
@@ -83,6 +93,28 @@ function defaultSystemPrompt(input: { snapshot: SessionSnapshot; tools: ToolDefi
 	});
 }
 
+function toolCapability(tool: ToolDefinition): CapabilityManifest {
+	const mcp = /^mcp__(.+?)__/.exec(tool.name);
+	const contract = {
+		name: tool.name,
+		description: tool.description,
+		inputSchema: asCapabilityJson(tool.parameters),
+		executionMode: tool.executionMode ?? "parallel",
+	};
+	return {
+		id: `tool:${tool.name}`,
+		version: createHash("sha256").update(JSON.stringify(contract)).digest("hex"),
+		kind: "tool",
+		provider: mcp ? `mcp:${mcp[1]}` : "wuming",
+		scope: "session",
+		activation: "always",
+		modelVisible: true,
+		description: tool.description,
+		tool: { ...contract, executionMode: contract.executionMode, exposure: "direct" },
+		metadata: { source: "pi-tool" },
+	};
+}
+
 export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOptions): PiSessionFactory {
 	return async (snapshot: SessionSnapshot) => {
 		const cwd = await options.resolveWorkspace(snapshot.session.workspaceId);
@@ -90,14 +122,33 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		await mkdir(sessionDir, { recursive: true });
 		// The tools come first because the system prompt describes them, and Pi builds
 		// that prompt from the resource loader the services own.
-		const customTools = (await options.createCustomTools?.(snapshot)) ?? [];
-		const systemPrompt = (options.buildSystemPrompt ?? defaultSystemPrompt)({ snapshot, tools: customTools, cwd });
+		const definitions = (await options.createCustomTools?.(snapshot)) ?? [];
+		const recovery = new ToolRecoveryMonitor(definitions.some((tool) => tool.name === "skill_load"));
+		const customTools = definitions.map((tool) => recovery.wrap(tool));
+		const systemPrompt = (options.buildSystemPrompt ?? defaultSystemPrompt)({
+			snapshot,
+			tools: customTools,
+			cwd,
+		});
+		let activeSystemPrompt: string | undefined;
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir: options.agentDir,
 			resourceLoaderOptions: {
+				// Pi resets agent.state.systemPrompt during prompt preflight. Return the
+				// audited per-turn context at that lifecycle boundary as well.
+				extensionFactories: [
+					(pi) => {
+						pi.on("before_agent_start", () =>
+							activeSystemPrompt === undefined ? undefined : { systemPrompt: activeSystemPrompt }
+						);
+					},
+				],
 				noExtensions: true,
 				noThemes: true,
+				// Workspace context is assembled per turn by Wuming's context engine so
+				// every source, budget decision, and truncation is auditable.
+				noContextFiles: true,
 				// Wuming resolves skills through its own catalog and injects the selected
 				// ones per turn, so Pi's parallel skill injection would either duplicate
 				// them or add skills the Wuming UI never showed.
@@ -106,11 +157,17 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 				systemPromptOverride: (base) => base ?? systemPrompt,
 			},
 		});
-		for (const registration of (await options.registerProviders?.()) ?? []) services.modelRuntime.registerProvider(registration.provider, registration.config);
+		for (const registration of (await options.registerProviders?.()) ?? [])
+			services.modelRuntime.registerProvider(registration.provider, registration.config);
 		const model = services.modelRuntime.getModel(snapshot.model.provider, snapshot.model.id);
 		if (!model) {
-			const available = services.modelRuntime.getModels(snapshot.model.provider).map((candidate) => candidate.id).slice(0, 20);
-			throw new Error(`Unknown Pi model ${snapshot.model.provider}/${snapshot.model.id}; configure it in the Pi models catalog or choose one of: ${available.join(", ") || "none"}`);
+			const available = services.modelRuntime
+				.getModels(snapshot.model.provider)
+				.map((candidate) => candidate.id)
+				.slice(0, 20);
+			throw new Error(
+				`Unknown Pi model ${snapshot.model.provider}/${snapshot.model.id}; configure it in the Pi models catalog or choose one of: ${available.join(", ") || "none"}`
+			);
 		}
 		const sessionManager = SessionManager.continueRecent(cwd, sessionDir);
 		recoverInterruptedSession(sessionManager);
@@ -123,6 +180,7 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 			customTools,
 		});
 		session.setAutoRetryEnabled(options.autoRetry ?? false);
+		session.setAutoCompactionEnabled(options.autoCompaction ?? true);
 		let initialToolChoicePending = options.initialToolChoice === "required";
 		if (initialToolChoicePending) {
 			const streamFunction = session.agent.streamFunction.bind(session.agent);
@@ -131,34 +189,39 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 				initialToolChoicePending = false;
 				const selectedModel = requireTool
 					? {
-						...streamModel,
-						samplingParams: { ...streamModel.samplingParams, tool_choice: "required" },
-					}
+							...streamModel,
+							samplingParams: { ...streamModel.samplingParams, tool_choice: "required" },
+						}
 					: streamModel;
-				return streamFunction(
-					selectedModel,
-					context,
-					streamOptions,
-				);
+				return streamFunction(selectedModel, context, streamOptions);
 			};
 		}
 		const resumeApprovedTool = async (
 			toolCallId: string,
 			signal: AbortSignal,
-			onUpdate?: (result: { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: unknown }) => void,
+			onUpdate?: (result: {
+				content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+				details: unknown;
+			}) => void
 		): Promise<{ message: ToolResultMessage; input: unknown }> => {
 			initialToolChoicePending = false;
 			const messages = session.agent.state.messages;
-			const assistant = [...messages].reverse().find((message): message is AssistantMessage =>
-				message.role === "assistant" && message.content.some((part) => part.type === "toolCall" && part.id === toolCallId),
-			);
-			if (!assistant || messages.at(-1) !== assistant) throw new Error(`Pending Pi tool call ${toolCallId} is not the active conversation leaf`);
+			const assistant = [...messages]
+				.reverse()
+				.find(
+					(message): message is AssistantMessage =>
+						message.role === "assistant" &&
+						message.content.some((part) => part.type === "toolCall" && part.id === toolCallId)
+				);
+			if (!assistant || messages.at(-1) !== assistant)
+				throw new Error(`Pending Pi tool call ${toolCallId} is not the active conversation leaf`);
 			const call = assistant.content.find((part) => part.type === "toolCall" && part.id === toolCallId);
 			if (!call || call.type !== "toolCall") throw new Error(`Pending Pi tool call ${toolCallId} was not found`);
 			const tool = session.agent.state.tools.find((candidate) => candidate.name === call.name);
 			if (!tool) throw new Error(`Pending Pi tool ${call.name} is no longer available`);
 			const parameters = tool.prepareArguments?.(call.arguments) ?? call.arguments;
-			if (!Value.Check(tool.parameters, parameters)) throw new Error(`Stored arguments for Pi tool ${call.name} are no longer valid`);
+			if (!Value.Check(tool.parameters, parameters))
+				throw new Error(`Stored arguments for Pi tool ${call.name} are no longer valid`);
 			let message: ToolResultMessage;
 			try {
 				const result = await tool.execute(toolCallId, parameters, signal, onUpdate);
@@ -174,7 +237,10 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 					timestamp: Date.now(),
 				};
 			} catch (error) {
-				const details = error && typeof error === "object" && "details" in error ? (error as { details?: unknown }).details : undefined;
+				const details =
+					error && typeof error === "object" && "details" in error
+						? (error as { details?: unknown }).details
+						: undefined;
 				message = {
 					role: "toolResult",
 					toolCallId,
@@ -191,16 +257,28 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 			await session.agent.continue();
 			return { message, input: parameters };
 		};
+		const prompt = session.prompt.bind(session);
 		Object.assign(session, {
+			prompt: (text: string, promptOptions?: Parameters<typeof session.prompt>[1]) => {
+				if (promptOptions?.images?.length && !session.model?.input.includes("image")) {
+					return Promise.reject(
+						new Error("图片已上传，但当前模型不支持图片理解。请切换到支持视觉的模型后重试，无需重新上传图片。")
+					);
+				}
+				return prompt(text, promptOptions);
+			},
 			prepareForPrompt: () => {
+				recovery.reset();
 				if (!recoverInterruptedSession(sessionManager)) return;
 				session.agent.state.messages = sessionManager.buildSessionContext().messages;
 			},
 			resumeApprovedTool,
 			getSystemPrompt: () => session.agent.state.systemPrompt,
 			setSystemPrompt: (prompt: string) => {
+				activeSystemPrompt = prompt;
 				session.agent.state.systemPrompt = prompt;
 			},
+			getCapabilityManifests: () => customTools.map(toolCapability),
 		});
 		return session;
 	};

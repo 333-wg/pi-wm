@@ -1,6 +1,6 @@
-import { CornerDownLeft, FileText, Folder } from "lucide-react";
-import { type ReactNode } from "react";
-import type { WorkspaceEntry } from "@wuming/protocol";
+import { Box, CornerDownLeft, FileText, Folder } from "lucide-react";
+import { type ReactNode, useEffect, useRef } from "react";
+import type { SkillSummary, WorkspaceEntry } from "@wuming/protocol";
 import { rankBy, type Trigger } from "../lib/suggest.js";
 
 /** A command the composer can run locally or expand into the prompt. */
@@ -19,6 +19,8 @@ export interface ComposerCommand {
 }
 
 export interface SuggestItem {
+	group?: string;
+	skillId?: string;
 	id: string;
 	/** Text inserted in place of the trigger token. */
 	value: string;
@@ -28,6 +30,27 @@ export interface SuggestItem {
 	icon?: ReactNode;
 	/** Set for commands that run instead of being sent to the model. */
 	action?: (argument: string) => void | Promise<void>;
+}
+
+export function skillItems(skills: readonly SkillSummary[], query: string): SuggestItem[] {
+	const named = rankBy(skills, query, (skill) => [skill.name, skill.id], 100);
+	const ids = new Set(named.map((skill) => skill.id));
+	const described = skills.filter(
+		(skill) => !ids.has(skill.id) && skill.description.toLowerCase().includes(query.toLowerCase())
+	);
+	return [...named, ...described].slice(0, 100).map((skill) => ({
+		id: `skill:${skill.id}`,
+		skillId: skill.id,
+		value: skill.id,
+		label: skill.name,
+		detail: skill.description || "暂无说明",
+		group: "技能",
+		icon: <Box size={16} />,
+		badge: [
+			skill.source === "builtin" ? "系统" : skill.source === "user" ? "工作区" : "技能",
+			...(skill.allowImplicitInvocation === false ? ["手动"] : []),
+		].join(" · "),
+	}));
 }
 
 const kilobyte = 1024;
@@ -66,6 +89,7 @@ export function commandItems(commands: readonly ComposerCommand[], query: string
 		// finish typing; everything else runs the moment it is picked.
 		const immediate = command.kind === "action" && command.run !== undefined && command.argumentHint === undefined;
 		return {
+			group: "命令",
 			id: command.name,
 			value: command.name,
 			label: `/${command.name}${command.argumentHint ? ` ${command.argumentHint}` : ""}`,
@@ -99,11 +123,20 @@ export function SuggestMenu({
 	onHover: (index: number) => void;
 }) {
 	const label = trigger.kind === "file" ? "引用文件" : "快捷命令";
+	const list = useRef<HTMLUListElement>(null);
+	useEffect(() => {
+		list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+	}, [activeIndex]);
 	return (
-		<div className="suggest-menu" role="listbox" aria-label={label}>
+		<div className="suggest-menu" role="listbox" aria-label={trigger.kind === "skill" ? "选择技能" : label}>
 			<div className="suggest-head">
-				<span>{label}</span>
-				{trigger.query ? <code>{trigger.kind === "file" ? "@" : "/"}{trigger.query}</code> : null}
+				<span>{trigger.kind === "skill" ? "技能" : trigger.kind === "command" ? "命令与技能" : label}</span>
+				{trigger.query ? (
+					<code>
+						{trigger.kind === "file" ? "@" : trigger.kind === "skill" ? "$" : "/"}
+						{trigger.query}
+					</code>
+				) : null}
 				<span className="suggest-keys">
 					<kbd>↑</kbd>
 					<kbd>↓</kbd>
@@ -113,16 +146,29 @@ export function SuggestMenu({
 				</span>
 			</div>
 			{items.length === 0 ? (
-				<div className="suggest-empty">{error ?? (loading ? "正在搜索..." : trigger.kind === "file" ? "没有匹配的文件" : "没有匹配的命令")}</div>
+				<div className="suggest-empty">
+					{error ??
+						(loading
+							? "正在搜索..."
+							: trigger.kind === "file"
+								? "没有匹配的文件"
+								: trigger.kind === "skill"
+									? "没有匹配的技能"
+									: "没有匹配的命令或技能")}
+				</div>
 			) : (
-				<ul>
+				<ul ref={list}>
 					{items.map((item, index) => (
 						<li key={item.id}>
+							{item.group && item.group !== items[index - 1]?.group ? (
+								<div className="suggest-group">{item.group}</div>
+							) : null}
 							<button
 								type="button"
 								role="option"
 								aria-selected={index === activeIndex}
-								className={index === activeIndex ? "active" : ""}
+								className={`${index === activeIndex ? "active" : ""} ${item.skillId ? "suggest-skill" : ""}`}
+								title={[item.label, item.detail, item.badge].filter(Boolean).join(" · ")}
 								onMouseDown={(event) => event.preventDefault()}
 								onMouseEnter={() => onHover(index)}
 								onClick={() => onPick(item)}

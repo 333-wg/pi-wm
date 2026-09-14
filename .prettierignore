@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+playwright-report
+test-results
+*.log
+*.tsbuildinfo
+.wuming-data
+.wuming-pi-agent
+package-lock.json
+apps/gateway/src/server.ts

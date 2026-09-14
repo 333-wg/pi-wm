@@ -33,7 +33,8 @@ export class WorkspacePathPolicy {
 	async existing(input: string): Promise<string> {
 		const candidate = this.#candidate(input);
 		const resolved = await realpath(candidate);
-		if (!isWithin(this.root, resolved)) throw new SandboxError("path_escape", `Path resolves outside workspace: ${input}`);
+		if (!isWithin(this.root, resolved))
+			throw new SandboxError("path_escape", `Path resolves outside workspace: ${input}`);
 		return resolved;
 	}
 
@@ -41,7 +42,8 @@ export class WorkspacePathPolicy {
 		const candidate = this.#candidate(input);
 		try {
 			const resolved = await realpath(candidate);
-			if (!isWithin(this.root, resolved)) throw new SandboxError("path_escape", `Path resolves outside workspace: ${input}`);
+			if (!isWithin(this.root, resolved))
+				throw new SandboxError("path_escape", `Path resolves outside workspace: ${input}`);
 			return candidate;
 		} catch (error) {
 			if (error instanceof SandboxError) throw error;

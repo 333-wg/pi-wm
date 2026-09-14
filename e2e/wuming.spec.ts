@@ -23,7 +23,7 @@ async function startService(
 	args: string[],
 	cwd: string,
 	environment: Record<string, string>,
-	readyPattern: RegExp,
+	readyPattern: RegExp
 ): Promise<{ process: ChildProcess; match: RegExpMatchArray }> {
 	const child = spawn(process.execPath, args, {
 		cwd,
@@ -32,8 +32,12 @@ async function startService(
 	});
 	services.push(child);
 	let output = "";
-	child.stdout?.on("data", (chunk) => { output += String(chunk); });
-	child.stderr?.on("data", (chunk) => { output += String(chunk); });
+	child.stdout?.on("data", (chunk) => {
+		output += String(chunk);
+	});
+	child.stderr?.on("data", (chunk) => {
+		output += String(chunk);
+	});
 	const match = await new Promise<RegExpMatchArray>((resolveMatch, reject) => {
 		const timeout = setTimeout(() => reject(new Error(`${name} startup timed out\n${plainText(output)}`)), 20_000);
 		const inspect = () => {
@@ -55,10 +59,7 @@ async function startService(
 async function stopService(child: ChildProcess): Promise<void> {
 	if (child.exitCode !== null || child.signalCode !== null) return;
 	child.kill("SIGTERM");
-	await Promise.race([
-		once(child, "exit"),
-		new Promise((resolveTimeout) => setTimeout(resolveTimeout, 5_000)),
-	]);
+	await Promise.race([once(child, "exit"), new Promise((resolveTimeout) => setTimeout(resolveTimeout, 5_000))]);
 	if (child.exitCode === null && child.signalCode === null) {
 		child.kill("SIGKILL");
 		await once(child, "exit");
@@ -66,7 +67,14 @@ async function stopService(child: ChildProcess): Promise<void> {
 }
 
 async function createSession(page: Page): Promise<void> {
-	await page.getByRole("button", { name: "新建会话" }).click();
+	const navigation = page.getByRole("navigation", { name: "会话" });
+	const sessions = navigation.locator(".session-entry");
+	// The connection banner can appear before the initial session list settles.
+	// Every caller in this shared-server spec already has an attached session.
+	await expect(navigation.locator(".session-entry.selected")).toHaveCount(1);
+	const previousCount = await sessions.count();
+	await page.getByRole("button", { name: "新对话" }).click();
+	await expect(sessions).toHaveCount(previousCount + 1);
 	await expect(page.getByRole("textbox", { name: "消息" })).toBeEnabled();
 }
 
@@ -106,7 +114,7 @@ test.beforeAll(async () => {
 			// after a single demo turn.
 			WUMING_CONTEXT_WINDOW: "5000",
 		},
-		/Wuming gateway listening on http:\/\/127\.0\.0\.1:(\d+)/,
+		/Wuming gateway listening on http:\/\/127\.0\.0\.1:(\d+)/
 	);
 	const gatewayPort = Number(gateway.match[1]);
 	const web = await startService(
@@ -114,7 +122,7 @@ test.beforeAll(async () => {
 		[join(repositoryRoot, "node_modules/vite/bin/vite.js"), "--host", "127.0.0.1", "--port", "0", "--strictPort"],
 		join(repositoryRoot, "apps/web"),
 		{ WUMING_GATEWAY_URL: `http://127.0.0.1:${gatewayPort}` },
-		/Local:\s+http:\/\/127\.0\.0\.1:(\d+)\//,
+		/Local:\s+http:\/\/127\.0\.0\.1:(\d+)\//
 	);
 	webUrl = `http://127.0.0.1:${Number(web.match[1])}/`;
 });
@@ -148,7 +156,9 @@ test(firstConnectionTitle, async ({ page }) => {
 	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
 	await expect(dialog.getByText("连接成功", { exact: true })).toBeVisible();
 	await expect(dialog.getByText("大模型", { exact: true })).toBeVisible();
-	await expect(dialog.getByRole("combobox", { name: "默认模型" })).toHaveValue(JSON.stringify({ provider: "demo", id: "wuming-demo" }));
+	await expect(dialog.getByRole("combobox", { name: "默认模型" })).toHaveValue(
+		JSON.stringify({ provider: "demo", id: "wuming-demo" })
+	);
 	await dialog.getByRole("button", { name: "完成设置" }).click();
 	await expect(dialog).toBeHidden();
 	await expect.poll(() => page.evaluate(() => localStorage.getItem("wuming.token"))).toBe(token);
@@ -170,14 +180,18 @@ test("starts projectless and groups imported projects", async ({ page }) => {
 
 	await page.getByRole("button", { name: "打开项目" }).click();
 	const dialog = page.getByRole("dialog", { name: "打开项目" });
-	const combinedPicker = dialog.getByRole("button", { name: /^文件或文件夹\s*选择这台电脑上的项目内容$/ });
+	const combinedPicker = dialog.getByRole("button", {
+		name: /^文件或文件夹\s*选择这台电脑上的项目内容$/,
+	});
 	await expect(combinedPicker).toBeVisible();
 	await expect(dialog.getByRole("group", { name: "选择项目内容类型" })).toHaveCount(0);
-	await page.route("**/api/projects/pick", (route) => route.fulfill({
-		status: 400,
-		contentType: "application/json",
-		body: JSON.stringify({ error: "Project selection was cancelled" }),
-	}));
+	await page.route("**/api/projects/pick", (route) =>
+		route.fulfill({
+			status: 400,
+			contentType: "application/json",
+			body: JSON.stringify({ error: "Project selection was cancelled" }),
+		})
+	);
 	const pickRequest = page.waitForRequest("**/api/projects/pick");
 	await combinedPicker.click();
 	expect((await pickRequest).postDataJSON()).toEqual({});
@@ -239,10 +253,14 @@ test("archives, browses, and restores a chat", async ({ page }) => {
 	await expect(archive).toHaveAttribute("title", "归档聊天");
 	await archive.click();
 	await expect(page.getByRole("heading", { name: "开始一个新任务" })).toBeVisible();
-	await expect(page.getByRole("navigation", { name: "会话" }).getByRole("button", { name: "归档交互 E2E", exact: true })).toHaveCount(0);
+	await expect(
+		page.getByRole("navigation", { name: "会话" }).getByRole("button", { name: "归档交互 E2E", exact: true })
+	).toHaveCount(0);
 
 	await page.getByRole("button", { name: "查看归档聊天" }).click();
-	const archivedSession = page.getByRole("navigation", { name: "会话" }).locator(".session-entry", { hasText: "归档交互 E2E" });
+	const archivedSession = page
+		.getByRole("navigation", { name: "会话" })
+		.locator(".session-entry", { hasText: "归档交互 E2E" });
 	await expect(archivedSession).toBeVisible();
 	await archivedSession.getByRole("button", { name: "归档交互 E2E", exact: true }).click();
 	await expect(page.getByText("已归档", { exact: true })).toBeVisible();
@@ -251,7 +269,9 @@ test("archives, browses, and restores a chat", async ({ page }) => {
 	await expect(archivedSession).toHaveCount(0);
 
 	await page.getByRole("button", { name: "返回聊天" }).click();
-	await expect(page.getByRole("navigation", { name: "会话" }).getByRole("button", { name: "归档交互 E2E", exact: true })).toBeVisible();
+	await expect(
+		page.getByRole("navigation", { name: "会话" }).getByRole("button", { name: "归档交互 E2E", exact: true })
+	).toBeVisible();
 });
 
 test("approves a tool and stops a long-running turn", async ({ page }) => {
@@ -260,17 +280,24 @@ test("approves a tool and stops a long-running turn", async ({ page }) => {
 	const approval = page.getByRole("region", { name: "需要批准工具调用" });
 	await expect(approval).toBeVisible();
 	await approval.getByRole("button", { name: "允许" }).click();
-	await expect(page.getByText("Demo approval was granted. No filesystem or process action was executed.")).toBeVisible();
+	await expect(
+		page.getByText("Demo approval was granted. No filesystem or process action was executed.")
+	).toBeVisible();
 	await sendMessage(page, "/long");
 	const stop = page.getByRole("button", { name: "停止任务" });
 	await expect(stop).toBeVisible();
 	await stop.click();
 	await expect(stop).toBeHidden();
-	await expect(page.getByRole("textbox", { name: "消息" })).toHaveAttribute("placeholder", "给 Wuming 发送任务或问题（@ 引用文件，/ 快捷命令）");
+	await expect(page.getByRole("textbox", { name: "消息" })).toHaveAttribute(
+		"placeholder",
+		"给 Wuming 发送任务或问题（@ 引用文件，/ 快捷命令）"
+	);
 });
 
 test("leaves the transcript where the reader scrolled while a turn streams", async ({ page }) => {
-	await createSession(page);
+	await sendMessage(page, "scroll streaming setup");
+	await expect(page.getByText("Demo runtime received: scroll streaming setup", { exact: false })).toBeVisible();
+	await waitForIdle(page);
 	await sendMessage(page, "/long");
 	const transcript = page.locator(".transcript");
 	// Nothing to detach from until the streamed reply overflows the viewport.
@@ -299,6 +326,52 @@ test("leaves the transcript where the reader scrolled while a turn streams", asy
 	await page.getByRole("button", { name: "停止任务" }).click();
 });
 
+for (const viewport of [
+	{ width: 1440, height: 900 },
+	{ width: 390, height: 844 },
+]) {
+	test(`follows transcript layout growth at ${viewport.width}px without pulling readers down`, async ({ page }) => {
+		await page.setViewportSize(viewport);
+		await page.reload();
+		await expect(page.locator(".connection.connected")).toHaveCount(1);
+		await expect(page.locator(".session-entry.selected")).toHaveCount(1);
+		await sendMessage(page, `scroll layout regression ${viewport.width}`);
+		await expect(page.getByText(`Demo runtime received: scroll layout regression ${viewport.width}`)).toBeVisible();
+		await expect(page.getByRole("button", { name: "停止任务" })).toBeHidden();
+		const transcript = page.locator(".transcript");
+		const gap = () => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+		// Simulate a tool/media row arriving, then expanding without a React delta.
+		await transcript.evaluate((element) => {
+			const row = document.createElement("div");
+			row.dataset.scrollRegression = "true";
+			row.style.height = "1200px";
+			row.textContent = "Tool output";
+			element.append(row);
+		});
+		await expect.poll(gap).toBeLessThan(2);
+		await transcript.locator("[data-scroll-regression]").evaluate((element) => {
+			(element as HTMLElement).style.height = "1800px";
+		});
+		await expect.poll(gap).toBeLessThan(2);
+		await page.setViewportSize({ width: viewport.width, height: viewport.height - 160 });
+		await expect.poll(gap).toBeLessThan(2);
+		await transcript.evaluate((element) => {
+			element.scrollTop = 0;
+		});
+		await expect(page.getByRole("button", { name: /回到底部/ })).toBeVisible();
+		await transcript.locator("[data-scroll-regression]").evaluate((element) => {
+			(element as HTMLElement).style.height = "2200px";
+		});
+		await page.waitForTimeout(250);
+		expect(await transcript.evaluate((element) => element.scrollTop)).toBe(0);
+		await page.getByRole("button", { name: /回到底部/ }).click();
+		await expect.poll(gap).toBeLessThan(2);
+		await transcript.locator("[data-scroll-regression]").evaluate((element) => element.remove());
+		await expect.poll(gap).toBeLessThan(2);
+		await page.screenshot({ path: `test-results/scroll-follow-${viewport.width}.png` });
+	});
+}
+
 test("branches a session from a message and resends an edited prompt", async ({ page }) => {
 	await createSession(page);
 	await sendMessage(page, "第一问");
@@ -321,9 +394,12 @@ test("branches a session from a message and resends an edited prompt", async ({ 
 	const secondPrompt = page.locator(".message-row.user").nth(1);
 	await secondPrompt.hover();
 	await secondPrompt.getByRole("button", { name: "编辑并重新发送" }).click();
-	await page.getByRole("textbox", { name: "编辑消息" }).fill("改写的第二问");
+	await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue("第二问");
+	await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeFocused();
+	await expect(page.getByRole("textbox", { name: "编辑消息", exact: true })).toHaveCount(0);
+	await page.getByRole("textbox", { name: "消息", exact: true }).fill("改写的第二问");
 	// `exact` matters: every other message still offers 编辑并重新发送.
-	await page.getByRole("button", { name: "重新发送", exact: true }).click();
+	await page.getByRole("button", { name: "发送", exact: true }).click();
 	await expect(page.getByRole("button", { name: "第一问 (fork)", exact: true })).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 改写的第二问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第一问")).toBeVisible();
@@ -342,8 +418,8 @@ test("branches a session from a message and resends an edited prompt", async ({ 
 	const firstPrompt = page.locator(".message-row.user").first();
 	await firstPrompt.hover();
 	await firstPrompt.getByRole("button", { name: "编辑并重新发送" }).click();
-	await page.getByRole("textbox", { name: "编辑消息" }).fill("重写第一问");
-	await page.getByRole("button", { name: "重新发送", exact: true }).click();
+	await page.getByRole("textbox", { name: "消息", exact: true }).fill("重写第一问");
+	await page.getByRole("button", { name: "发送", exact: true }).click();
 	await expect(page.getByText("Demo runtime received: 重写第一问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第一问")).toHaveCount(0);
 	await expect(page.locator(".session-entry.selected")).toContainText("重写第一问");
@@ -389,6 +465,19 @@ test("completes file mentions and runs slash commands from the composer", async 
 	await expect(page.getByRole("button", { name: "readme.md" })).toBeVisible();
 });
 
+test("shows the thinking control as unavailable on a model without reasoning", async ({ page }) => {
+	await createSession(page);
+	// The demo model spends no thinking budget. The control still has to be there —
+	// hiding it is how the feature became invisible in the first place — but pinned
+	// to 关闭 and explaining itself. `thinking.spec.ts` covers the live control.
+	const trigger = page.locator(".thinking-trigger");
+	await expect(trigger).toHaveText("关闭");
+	await expect(trigger).toBeDisabled();
+	await expect(trigger).toHaveAttribute("title", "该模型不支持思考强度");
+	await trigger.click({ force: true });
+	await expect(page.getByRole("menu", { name: "思考强度" })).toBeHidden();
+});
+
 test("drives the shell from the keyboard and reports context occupancy", async ({ page }) => {
 	await createSession(page);
 	await sendMessage(page, "Report context usage for the meter");
@@ -421,6 +510,42 @@ test("drives the shell from the keyboard and reports context occupancy", async (
 	await expect(shortcuts).toBeHidden();
 	await page.keyboard.press("Control+Shift+b");
 	await expect(meter).toBeHidden();
+});
+
+test("shows a trajectory evaluation without mobile overflow", async ({ page }) => {
+	await createSession(page);
+	await sendMessage(page, "Capture a trajectory for this run");
+	await expect(page.getByText(/Demo runtime received: Capture a trajectory for this run/)).toBeVisible();
+	await waitForIdle(page);
+
+	const trajectory = page.locator(".run-trajectory").first();
+	await expect(trajectory.getByText(/结构评测 \d+\/100/)).toBeVisible();
+	await trajectory.locator("summary").click();
+	await expect(trajectory.getByText("仅评估执行结构与证据完整性，不判断回答语义正确性。")).toBeVisible();
+	await expect(trajectory.locator(".trajectory-entry")).toHaveCount(5);
+
+	await page.setViewportSize({ width: 390, height: 844 });
+	await expect(trajectory).toBeVisible();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test("retains and physically forgets a durable session memory", async ({ page }) => {
+	await createSession(page);
+	await sendMessage(page, "/demo-memory");
+	await expect(page.getByText(/Demo runtime received: \/demo-memory/)).toBeVisible();
+	await waitForIdle(page);
+
+	const memory = page.locator(".right-rail .memory-row").first();
+	await expect(memory).toHaveCount(1);
+	await memory.locator("summary").click();
+	await expect(memory).toContainText("Demo durable memory: keep the verified SQLite transaction decision.");
+	await memory.getByRole("button", { name: "保留此记忆" }).click();
+	await expect(memory.locator("summary")).toContainText("已保留");
+	await expect(memory.getByRole("button", { name: "取消保留" })).toHaveAttribute("aria-pressed", "true");
+
+	await memory.getByRole("button", { name: "忘记此记忆" }).click();
+	await expect(page.locator(".right-rail .memory-row")).toHaveCount(0);
+	await expect(page.locator(".right-rail .memory-history")).toContainText("暂无压缩记忆");
 });
 
 test("shows a thinking activity before the first model event", async ({ page }) => {
@@ -612,7 +737,9 @@ test("runs a goal through a bounded review loop", async ({ page }) => {
 	await expect(history.getByText("Demo reviewer accepted the candidate result.")).toBeVisible();
 	const checks = history.getByRole("list", { name: "第 1 轮验收项" });
 	await expect(checks.getByText("The configured success criteria", { exact: true })).toBeVisible();
-	await expect(checks.getByText("The demo candidate contains the requested goal result.", { exact: true })).toBeVisible();
+	await expect(
+		checks.getByText("The demo candidate contains the requested goal result.", { exact: true })
+	).toBeVisible();
 	await expect(history.getByText("本轮未记录工具调用", { exact: true })).toBeVisible();
 	await expect(page.getByText(/Demo runtime received: Return a reviewed E2E goal result/)).toBeVisible();
 	await expect(page.getByText("已完成", { exact: true }).last()).toBeVisible();
@@ -659,10 +786,11 @@ test("shows the server tool catalog without mobile page overflow", async ({ page
 	const catalog = page.getByRole("table", { name: "Agent 工具目录" });
 	await expect(catalog).toBeVisible();
 	await expect(page.getByText("Demo", { exact: true })).toBeVisible();
-	await expect(page.getByText("12 禁用", { exact: true })).toBeVisible();
-	await expect(catalog.locator(".tool-status-row")).toHaveCount(12);
-	// The planning and delegation tools are the only ones the gateway serves itself.
-	await expect(catalog.getByRole("row").filter({ hasText: "编排" })).toHaveCount(2);
+	await expect(page.getByText("23 禁用", { exact: true })).toBeVisible();
+	await expect(catalog.locator(".tool-status-row")).toHaveCount(23);
+	await expect(catalog.getByRole("row").filter({ hasText: "编排" })).toHaveCount(3);
+	await expect(catalog.getByRole("row").filter({ hasText: "browser_open" })).toHaveCount(1);
+	await expect(catalog.getByRole("row").filter({ hasText: "preview_start" })).toHaveCount(1);
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 	expect(await catalog.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(390);
 });
@@ -680,7 +808,7 @@ test("renders one card per tool renderer inside a mobile viewport", async ({ pag
 	// name and arguments, so the verbs are how that regression becomes visible.
 	const verbs = await page.locator(".tool-verb").allTextContents();
 	expect([...new Set(verbs)].sort()).toEqual(
-		["MCP · github", "写入", "列出", "匹配", "执行", "搜索", "检索", "编辑", "计划", "读取", "子代理"].sort(),
+		["MCP · github", "写入", "列出", "匹配", "执行", "搜索", "检索", "编辑", "计划", "读取", "子代理"].sort()
 	);
 	// The plan is drawn as a checklist from the arguments; the tool's text result
 	// repeats it verbatim and is suppressed, so exactly one copy reaches the reader.
@@ -688,16 +816,21 @@ test("renders one card per tool renderer inside a mobile viewport", async ({ pag
 	await expect(page.locator(".tool-plan-step.completed")).toHaveCount(1);
 	await expect(page.getByText("Plan updated (1/3 done)")).toHaveCount(0);
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-	const overflowing = await page.evaluate(() =>
-		[...document.querySelectorAll(".tool-card")].filter((element) => element.scrollWidth > element.clientWidth + 1).length,
+	const overflowing = await page.evaluate(
+		() =>
+			[...document.querySelectorAll(".tool-card")].filter((element) => element.scrollWidth > element.clientWidth + 1)
+				.length
 	);
 	expect(overflowing).toBe(0);
 });
 
-/** Reads a token straight off the root element, so a missing dark override shows up as an unchanged value. */function cssToken(page: Page, name: string): Promise<string> {
+/** Reads a token straight off the root element, so a missing dark override shows up as an unchanged value. */ function cssToken(
+	page: Page,
+	name: string
+): Promise<string> {
 	return page.evaluate(
 		(property) => getComputedStyle(document.documentElement).getPropertyValue(property).trim(),
-		name,
+		name
 	);
 }
 
@@ -759,4 +892,61 @@ test("follows the operating system when asked to", async ({ page }) => {
 	await themes.getByRole("button", { name: "浅色" }).click();
 	await page.emulateMedia({ colorScheme: "dark" });
 	await expect(root).toHaveAttribute("data-theme", "light");
+});
+
+test("switches interface language from settings and remembers the choice", async ({ page }) => {
+	const root = page.locator("html");
+	await page.getByRole("button", { name: "设置" }).click();
+
+	const dialog = page.getByRole("dialog", { name: "设置" });
+	const languages = dialog.getByRole("group", { name: "语言" });
+	await expect(languages.getByRole("button", { name: "中文" })).toHaveAttribute("aria-pressed", "true");
+
+	await languages.getByRole("button", { name: "English" }).click();
+	await expect(root).toHaveAttribute("lang", "en");
+	await expect(root).toHaveAttribute("data-locale", "en");
+	await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+	await expect(page.getByText("Appearance", { exact: true })).toBeVisible();
+
+	await page.reload();
+	await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+	await expect(root).toHaveAttribute("lang", "en");
+	await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
+
+	await page.getByRole("button", { name: "Settings" }).click();
+	await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+	await expect(page.getByRole("dialog", { name: "Settings" }).getByRole("group", { name: "Language" })).toBeVisible();
+});
+
+test("organizes settings into focused sections without mobile overflow", async ({ page }) => {
+	await page.getByRole("button", { name: "设置" }).click();
+	const dialog = page.getByRole("dialog", { name: "设置" });
+	const navigation = dialog.getByRole("navigation", { name: "设置分类" });
+
+	await expect(navigation.getByRole("button", { name: /^常规/ })).toHaveAttribute("aria-current", "page");
+	await expect(dialog.getByText("外观", { exact: true })).toBeVisible();
+	await expect(dialog.getByText("自定义模型", { exact: true })).toBeHidden();
+
+	await navigation.getByRole("button", { name: /^模型/ }).click();
+	await expect(dialog.locator("#settings-panel-models")).toBeVisible();
+	await expect(dialog.locator("#settings-panel-models").getByRole("heading", { name: "模型" })).toBeVisible();
+	await expect(dialog.getByText("外观", { exact: true })).toBeHidden();
+
+	await navigation.getByRole("button", { name: /^用量统计/ }).click();
+	const usagePanel = dialog.locator("#settings-panel-usage");
+	await expect(usagePanel).toBeVisible();
+	await expect(usagePanel.getByText("历史累计", { exact: true })).toBeVisible();
+	await expect(usagePanel.getByRole("heading", { name: "每日趋势" })).toBeVisible();
+	await expect(usagePanel.locator(".usage-settings-day")).toHaveCount(7);
+	await usagePanel.getByRole("button", { name: "近 30 天", exact: true }).click();
+	await expect(usagePanel.locator(".usage-settings-day")).toHaveCount(30);
+
+	await page.setViewportSize({ width: 390, height: 844 });
+	await expect(dialog).toBeVisible();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+	expect(await dialog.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(390);
+
+	await navigation.getByRole("button", { name: /^连接与执行/ }).click();
+	await expect(dialog.getByText("命令执行位置", { exact: true })).toBeVisible();
+	await expect(dialog.getByText("网关连接", { exact: true })).toBeVisible();
 });

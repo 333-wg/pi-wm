@@ -1,25 +1,29 @@
 {
-  "compilerOptions": {
-    "target": "ES2023",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "skipLibCheck": true,
-    "types": ["node"]
-  },
-  "files": [],
-  "references": [
-    { "path": "./packages/protocol" },
-    { "path": "./packages/domain" },
-    { "path": "./packages/orchestrator" },
-    { "path": "./packages/pi-adapter" },
-    { "path": "./packages/sandbox" },
-    { "path": "./packages/artifacts" },
-    { "path": "./apps/gateway" }
-  ]
+	"compilerOptions": {
+		"target": "ES2023",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"exactOptionalPropertyTypes": true,
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
+		"skipLibCheck": true,
+		"types": ["node"]
+	},
+	"files": [],
+	"references": [
+		{ "path": "./packages/capability-kernel" },
+		{ "path": "./packages/context-engine" },
+		{ "path": "./packages/trajectory" },
+		{ "path": "./packages/evaluation" },
+		{ "path": "./packages/protocol" },
+		{ "path": "./packages/domain" },
+		{ "path": "./packages/orchestrator" },
+		{ "path": "./packages/pi-adapter" },
+		{ "path": "./packages/sandbox" },
+		{ "path": "./packages/artifacts" },
+		{ "path": "./apps/gateway" }
+	]
 }

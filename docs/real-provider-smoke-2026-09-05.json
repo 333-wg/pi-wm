@@ -1,0 +1,32 @@
+{
+	"verifiedOn": "2026-09-05",
+	"kind": "real-provider-smoke",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"result": "passed",
+	"response": "WUMING_PI_OK",
+	"usage": {
+		"inputTokens": 1383,
+		"outputTokens": 28,
+		"cacheReadTokens": 320,
+		"cacheWriteTokens": 0,
+		"totalTokens": 1731
+	},
+	"actualCost": "not established; configured pricing is zero",
+	"savedConfigurationUnchanged": true,
+	"limits": {
+		"requestedModelMaxOutputTokens": 256,
+		"timeoutMs": 30000,
+		"autoRetry": false,
+		"autoCompaction": false,
+		"workspace": "temporary empty directory",
+		"tools": "none"
+	},
+	"notVerified": [
+		"upstream model identity",
+		"tool execution",
+		"durable goal DAG",
+		"Docker execution",
+		"production readiness"
+	]
+}

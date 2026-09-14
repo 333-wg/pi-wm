@@ -14,7 +14,7 @@ export class SandboxError extends Error {
 			| "response_too_large"
 			| "content_unsupported"
 			| "approval_denied",
-		message: string,
+		message: string
 	) {
 		super(message);
 		this.name = "SandboxError";

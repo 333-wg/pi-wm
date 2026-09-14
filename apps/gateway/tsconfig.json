@@ -1,16 +1,20 @@
 {
-  "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "composite": true,
-    "rootDir": "src",
-    "outDir": "dist"
-  },
-  "references": [
-    { "path": "../../packages/artifacts" },
-    { "path": "../../packages/protocol" },
-    { "path": "../../packages/orchestrator" },
-    { "path": "../../packages/pi-adapter" },
-    { "path": "../../packages/sandbox" }
-  ],
-  "include": ["src/**/*.ts"]
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"composite": true,
+		"rootDir": "src",
+		"outDir": "dist"
+	},
+	"references": [
+		{ "path": "../../packages/artifacts" },
+		{ "path": "../../packages/capability-kernel" },
+		{ "path": "../../packages/context-engine" },
+		{ "path": "../../packages/evaluation" },
+		{ "path": "../../packages/trajectory" },
+		{ "path": "../../packages/protocol" },
+		{ "path": "../../packages/orchestrator" },
+		{ "path": "../../packages/pi-adapter" },
+		{ "path": "../../packages/sandbox" }
+	],
+	"include": ["src/**/*.ts"]
 }

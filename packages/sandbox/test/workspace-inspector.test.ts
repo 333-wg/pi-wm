@@ -25,8 +25,15 @@ describe("WorkspaceInspector", () => {
 		const directory = await inspector.listDirectory(".");
 		expect(directory.entries.map((entry) => entry.name)).toEqual(["src"]);
 		const file = await inspector.readFile("src/index.ts");
-		expect(file).toMatchObject({ path: "src/index.ts", content: "export const", truncated: true, binary: false });
-		await expect(inspector.readFile("../outside.txt")).rejects.toMatchObject({ code: "path_escape" });
+		expect(file).toMatchObject({
+			path: "src/index.ts",
+			content: "export const",
+			truncated: true,
+			binary: false,
+		});
+		await expect(inspector.readFile("../outside.txt")).rejects.toMatchObject({
+			code: "path_escape",
+		});
 	});
 
 	it("ranks fuzzy path matches and skips ignored directories while searching", async () => {

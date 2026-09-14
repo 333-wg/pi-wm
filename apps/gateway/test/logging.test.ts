@@ -4,7 +4,10 @@ import { createConsoleStructuredLogger } from "../src/logging.js";
 describe("structured gateway logging", () => {
 	it("writes JSONL with bounded, redacted fields", () => {
 		const lines: string[] = [];
-		const logger = createConsoleStructuredLogger({ level: "debug", write: (line) => lines.push(line) });
+		const logger = createConsoleStructuredLogger({
+			level: "debug",
+			write: (line) => lines.push(line),
+		});
 		logger.log("info", "test.event", {
 			requestId: "req-1",
 			token: "do-not-write",
@@ -14,7 +17,12 @@ describe("structured gateway logging", () => {
 
 		expect(lines).toHaveLength(1);
 		const record = JSON.parse(lines[0]!);
-		expect(record).toMatchObject({ level: "info", event: "test.event", requestId: "req-1", service: "wuming-gateway" });
+		expect(record).toMatchObject({
+			level: "info",
+			event: "test.event",
+			requestId: "req-1",
+			service: "wuming-gateway",
+		});
 		expect(record.token).toBe("[redacted]");
 		expect(record.content).toBe("[omitted]");
 		expect(record.nested).toEqual({ authorization: "[redacted]", value: "ok" });
@@ -24,7 +32,10 @@ describe("structured gateway logging", () => {
 
 	it("honors the configured minimum level", () => {
 		const lines: string[] = [];
-		const logger = createConsoleStructuredLogger({ level: "warn", write: (line) => lines.push(line) });
+		const logger = createConsoleStructuredLogger({
+			level: "warn",
+			write: (line) => lines.push(line),
+		});
 		logger.log("info", "ignored");
 		logger.log("warn", "kept");
 		expect(lines).toHaveLength(1);

@@ -20,7 +20,7 @@ const FOCUSABLE = [
  */
 function focusableWithin(root: HTMLElement): HTMLElement[] {
 	return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-		(element) => element.getClientRects().length > 0 && element.getAttribute("aria-hidden") !== "true",
+		(element) => element.getClientRects().length > 0 && element.getAttribute("aria-hidden") !== "true"
 	);
 }
 

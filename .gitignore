@@ -11,3 +11,4 @@ test-results/
 .wuming-data/
 .wuming-pi-agent/
 .fuse_hidden*
+%SystemDrive%/

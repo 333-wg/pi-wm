@@ -48,8 +48,12 @@ async function startGateway(dataDir: string, workspace: string): Promise<{ child
 	children.add(child);
 	let output = "";
 	let errors = "";
-	child.stdout?.on("data", (chunk) => { output += String(chunk); });
-	child.stderr?.on("data", (chunk) => { errors += String(chunk); });
+	child.stdout?.on("data", (chunk) => {
+		output += String(chunk);
+	});
+	child.stderr?.on("data", (chunk) => {
+		errors += String(chunk);
+	});
 	const port = await new Promise<number>((resolvePort, reject) => {
 		const timeout = setTimeout(() => reject(new Error(`Gateway startup timed out\n${output}\n${errors}`)), 20_000);
 		const inspect = () => {
@@ -100,7 +104,9 @@ class Collector {
 			const timeout = setTimeout(() => {
 				this.#waiters.delete(check);
 				const recent = this.messages.slice(-20).map(describe).join(", ");
-				reject(new Error(`Timed out waiting for ${label}; received ${this.messages.length} message(s); recent: ${recent}`));
+				reject(
+					new Error(`Timed out waiting for ${label}; received ${this.messages.length} message(s); recent: ${recent}`)
+				);
 			}, requestTimeoutMs);
 			const check = () => {
 				const message = this.messages.find(predicate);
@@ -121,7 +127,12 @@ async function openClient(port: number, clientId: string): Promise<{ ws: WebSock
 		ws.once("error", reject);
 	});
 	const collector = new Collector(ws);
-	send(ws, { type: "hello", protocolVersion: 1, clientId, capabilities: ["session.resume", "approval"] });
+	send(ws, {
+		type: "hello",
+		protocolVersion: 1,
+		clientId,
+		capabilities: ["session.resume", "approval"],
+	});
 	await collector.waitFor((message) => message.type === "hello", "gateway hello");
 	return { ws, collector };
 }
@@ -131,7 +142,8 @@ function send(ws: WebSocket, message: ClientMessage): void {
 }
 
 function describe(message: ServerMessage): string {
-	if (message.type === "response") return `response:${message.requestId}:${message.ok ? message.result.type : message.error.code}`;
+	if (message.type === "response")
+		return `response:${message.requestId}:${message.ok ? message.result.type : message.error.code}`;
 	if (message.type === "event") {
 		if (message.event.type === "session.phase.changed") return `event:phase:${message.event.phase}`;
 		if (message.event.type === "session.item.upserted") {
@@ -187,9 +199,12 @@ async function main(): Promise<void> {
 		});
 		const created = await connected.collector.waitFor(
 			(message) => message.type === "response" && message.requestId === "create",
-			"session creation",
+			"session creation"
 		);
-		assert(created.type === "response" && created.ok && created.result.type === "session.created", "Session creation failed");
+		assert(
+			created.type === "response" && created.ok && created.result.type === "session.created",
+			"Session creation failed"
+		);
 		const sessionId = created.result.snapshot.session.id;
 
 		send(firstClient, {
@@ -199,28 +214,40 @@ async function main(): Promise<void> {
 			command: {
 				type: "turn.prompt",
 				sessionId,
-				content: [{
-					type: "text",
-					text: `This is an automated recovery gate. Call the write_file tool exactly once to create ${proofName} with the exact content ${JSON.stringify(proofContent)}. Do not call read_file or edit, and do not answer until write_file succeeds.`,
-				}],
+				content: [
+					{
+						type: "text",
+						text: `This is an automated recovery gate. Call the write_file tool exactly once to create ${proofName} with the exact content ${JSON.stringify(proofContent)}. Do not call read_file or edit, and do not answer until write_file succeeds.`,
+					},
+				],
 			},
 		});
 		const accepted = await connected.collector.waitFor(
 			(message) => message.type === "response" && message.requestId === "write-proof",
-			"turn acceptance",
+			"turn acceptance"
 		);
 		assert(accepted.type === "response" && accepted.ok, "Turn was not accepted");
 		const requested = await connected.collector.waitFor(
-			(message) => message.type === "event" && message.event.type === "approval.requested" && message.event.sessionId === sessionId,
-			"real Pi write_file approval",
+			(message) =>
+				message.type === "event" &&
+				message.event.type === "approval.requested" &&
+				message.event.sessionId === sessionId,
+			"real Pi write_file approval"
 		);
 		assert(requested.type === "event" && requested.event.type === "approval.requested", "Approval request missing");
 		const approval = requested.event.approval;
 		assert(approval.status === "pending", "Approval was not pending before restart");
-		assert(approval.capabilities.some((capability) => capability.type === "filesystem.write" && capability.paths.includes(proofName)), "Approval did not cover the expected write");
+		assert(
+			approval.capabilities.some(
+				(capability) => capability.type === "filesystem.write" && capability.paths.includes(proofName)
+			),
+			"Approval did not cover the expected write"
+		);
 		await access(proofPath).then(
-			() => { throw new Error("Proof file was written before approval"); },
-			() => undefined,
+			() => {
+				throw new Error("Proof file was written before approval");
+			},
+			() => undefined
 		);
 
 		firstClient.close();
@@ -237,27 +264,45 @@ async function main(): Promise<void> {
 		});
 		const attached = await reconnected.collector.waitFor(
 			(message) => message.type === "response" && message.requestId === "attach",
-			"session attach after restart",
+			"session attach after restart"
 		);
-		assert(attached.type === "response" && attached.ok && attached.result.type === "session.attached", "Session attach failed after restart");
-		assert(attached.result.snapshot.session.phase === "awaiting_approval", "Session did not recover in awaiting_approval");
-		assert(attached.result.snapshot.pendingApprovals.length === 1, "Recovered session did not contain exactly one pending approval");
+		assert(
+			attached.type === "response" && attached.ok && attached.result.type === "session.attached",
+			"Session attach failed after restart"
+		);
+		assert(
+			attached.result.snapshot.session.phase === "awaiting_approval",
+			"Session did not recover in awaiting_approval"
+		);
+		assert(
+			attached.result.snapshot.pendingApprovals.length === 1,
+			"Recovered session did not contain exactly one pending approval"
+		);
 		assert(attached.result.snapshot.pendingApprovals[0]?.id === approval.id, "Recovered approval ID changed");
 
 		send(secondClient, {
 			type: "request",
 			requestId: "approve",
 			idempotencyKey: "approve",
-			command: { type: "approval.respond", sessionId, approvalId: approval.id, decision: "approve" },
+			command: {
+				type: "approval.respond",
+				sessionId,
+				approvalId: approval.id,
+				decision: "approve",
+			},
 		});
 		const approved = await reconnected.collector.waitFor(
 			(message) => message.type === "response" && message.requestId === "approve",
-			"approval response",
+			"approval response"
 		);
 		assert(approved.type === "response" && approved.ok, "Recovered approval was rejected");
 		await reconnected.collector.waitFor(
-			(message) => message.type === "event" && message.event.type === "session.phase.changed" && message.event.sessionId === sessionId && message.event.phase === "idle",
-			"completed turn after approval",
+			(message) =>
+				message.type === "event" &&
+				message.event.type === "session.phase.changed" &&
+				message.event.sessionId === sessionId &&
+				message.event.phase === "idle",
+			"completed turn after approval"
 		);
 
 		send(secondClient, {
@@ -268,16 +313,25 @@ async function main(): Promise<void> {
 		});
 		const snapshot = await reconnected.collector.waitFor(
 			(message) => message.type === "response" && message.requestId === "snapshot",
-			"final snapshot",
+			"final snapshot"
 		);
-		assert(snapshot.type === "response" && snapshot.ok && snapshot.result.type === "session.snapshot", "Final snapshot query failed");
+		assert(
+			snapshot.type === "response" && snapshot.ok && snapshot.result.type === "session.snapshot",
+			"Final snapshot query failed"
+		);
 		assert(snapshot.result.snapshot.pendingApprovals.length === 0, "Approval remained pending after completion");
 		const matchingTools = snapshot.result.snapshot.transcript.filter(
 			(item): item is Extract<SessionSnapshot["transcript"][number], { type: "tool" }> =>
-				item.type === "tool" && item.toolCallId === approval.toolCallId,
+				item.type === "tool" && item.toolCallId === approval.toolCallId
 		);
-		assert(matchingTools.length === 1 && matchingTools[0]?.status === "complete", "Recovered tool call did not complete exactly once");
-		assert(snapshot.result.snapshot.transcript.some((item) => item.type === "assistant" && item.status === "complete"), "Provider returned no final assistant message");
+		assert(
+			matchingTools.length === 1 && matchingTools[0]?.status === "complete",
+			"Recovered tool call did not complete exactly once"
+		);
+		assert(
+			snapshot.result.snapshot.transcript.some((item) => item.type === "assistant" && item.status === "complete"),
+			"Provider returned no final assistant message"
+		);
 
 		send(secondClient, {
 			type: "request",
@@ -287,33 +341,42 @@ async function main(): Promise<void> {
 		});
 		const runs = await reconnected.collector.waitFor(
 			(message) => message.type === "response" && message.requestId === "runs",
-			"run history",
+			"run history"
 		);
 		assert(runs.type === "response" && runs.ok && runs.result.type === "session.run.list", "Run history query failed");
 		assert(runs.result.runs.length === 1, "Expected exactly one durable run");
-		assert(runs.result.runs[0]?.status === "completed" && runs.result.runs[0]?.attempt === 2, "Recovered run did not complete on attempt 2");
+		assert(
+			runs.result.runs[0]?.status === "completed" && runs.result.runs[0]?.attempt === 2,
+			"Recovered run did not complete on attempt 2"
+		);
 		assert((runs.result.runs[0]?.usage?.totalTokens ?? 0) > 0, "Recovered run did not record provider usage");
 
 		const content = await readFile(proofPath, "utf8");
 		assert(content === proofContent, "Proof file content did not match the requested value");
-		console.log(JSON.stringify({
-			ok: true,
-			provider,
-			modelId,
-			approvalRecovered: true,
-			approvalIdPreserved: true,
-			toolExecutions: matchingTools.length,
-			runAttempt: runs.result.runs[0]?.attempt,
-			usage: runs.result.runs[0]?.usage,
-			proof: { path: proofName, content },
-		}, null, 2));
+		console.log(
+			JSON.stringify(
+				{
+					ok: true,
+					provider,
+					modelId,
+					approvalRecovered: true,
+					approvalIdPreserved: true,
+					toolExecutions: matchingTools.length,
+					runAttempt: runs.result.runs[0]?.attempt,
+					usage: runs.result.runs[0]?.usage,
+					proof: { path: proofName, content },
+				},
+				null,
+				2
+			)
+		);
 
 		secondClient.close();
 		await stopGateway(second.child);
 	} finally {
 		firstClient?.close();
 		secondClient?.close();
-		for (const child of [...children]) await stopGateway(child);
+		for (const child of children) await stopGateway(child);
 		await rm(temporary, { recursive: true, force: true });
 	}
 }

@@ -1,9 +1,22 @@
 import type { WorkspaceSummary } from "@wuming/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { bearerProtocol, StaticTokenAuth, tokenFromProtocols } from "../src/auth.js";
 
-const workspace: WorkspaceSummary = { id: "workspace-1", name: "Workspace", status: "ready", createdAt: 1, updatedAt: 1 };
+const workspace: WorkspaceSummary = {
+	id: "workspace-1",
+	name: "Workspace",
+	status: "ready",
+	createdAt: 1,
+	updatedAt: 1,
+};
 const principal = { id: "user-1", workspaces: [workspace] };
+
+test("normalizes static token whitespace and rejects empty credentials", () => {
+	const auth = new StaticTokenAuth(" secret ", principal);
+	expect(auth.authenticate("secret")?.id).toBe("user-1");
+	expect(auth.authenticate(" secret ")?.id).toBe("user-1");
+	expect(() => new StaticTokenAuth("   ", principal)).toThrow("must not be empty");
+});
 
 describe("StaticTokenAuth", () => {
 	it("accepts the configured token and rejects every other one", () => {

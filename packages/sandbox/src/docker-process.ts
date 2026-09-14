@@ -26,7 +26,10 @@ function appendBounded(current: string, chunk: string, maxBytes: number): { valu
 	const bytes = Buffer.byteLength(combined);
 	if (bytes <= maxBytes) return { value: combined, truncated: false };
 	const buffer = Buffer.from(combined);
-	return { value: buffer.subarray(Math.max(0, buffer.length - maxBytes)).toString("utf8"), truncated: true };
+	return {
+		value: buffer.subarray(Math.max(0, buffer.length - maxBytes)).toString("utf8"),
+		truncated: true,
+	};
 }
 
 export class NodeCommandRunner implements CommandRunner {
@@ -111,19 +114,30 @@ const networkPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 const environmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function checkedSize(value: string, label: string): string {
-	if (!sizePattern.test(value)) throw new SandboxError("process_unavailable", `Docker ${label} must be a size such as 512m or 2g`);
+	if (!sizePattern.test(value))
+		throw new SandboxError("process_unavailable", `Docker ${label} must be a size such as 512m or 2g`);
 	return value;
 }
 
 function checkedMountPath(value: string, label: string): string {
-	if (!value.startsWith("/") || value.includes(",") || value.includes("\0") || value === "/" || value === "/workspace") {
-		throw new SandboxError("process_unavailable", `Docker ${label} must be an absolute container path outside /workspace and contain no commas`);
+	if (
+		!value.startsWith("/") ||
+		value.includes(",") ||
+		value.includes("\0") ||
+		value === "/" ||
+		value === "/workspace"
+	) {
+		throw new SandboxError(
+			"process_unavailable",
+			`Docker ${label} must be an absolute container path outside /workspace and contain no commas`
+		);
 	}
 	return value;
 }
 
 export class DockerProcessSandbox implements ProcessSandbox {
 	readonly networkAccess: boolean;
+	readonly pythonExecutable = "python3";
 	readonly #workspaceRoot: string;
 	readonly #image: string;
 	readonly #dockerExecutable: string;
@@ -175,9 +189,13 @@ export class DockerProcessSandbox implements ProcessSandbox {
 
 	#checkedNetwork(options: DockerProcessSandboxOptions): string {
 		const network = options.network ?? "none";
-		if (!networkPattern.test(network)) throw new SandboxError("process_unavailable", `Unsupported Docker network name: ${network}`);
+		if (!networkPattern.test(network))
+			throw new SandboxError("process_unavailable", `Unsupported Docker network name: ${network}`);
 		if (network === "host" && !options.allowHostNetwork) {
-			throw new SandboxError("process_unavailable", "Docker host networking removes the network boundary and must be enabled explicitly");
+			throw new SandboxError(
+				"process_unavailable",
+				"Docker host networking removes the network boundary and must be enabled explicitly"
+			);
 		}
 		return network;
 	}
@@ -186,15 +204,17 @@ export class DockerProcessSandbox implements ProcessSandbox {
 	#checkedEnvironment(env: DockerProcessSandboxOptions["env"]): string[] {
 		const merged: Record<string, string> = { HOME: this.#home, TMPDIR: "/tmp", ...env };
 		return Object.entries(merged).flatMap(([name, value]) => {
-			if (!environmentNamePattern.test(name)) throw new SandboxError("process_unavailable", `Unsupported container environment name: ${name}`);
-			if (value.includes("\0")) throw new SandboxError("process_unavailable", `Container environment ${name} must not contain NUL`);
+			if (!environmentNamePattern.test(name))
+				throw new SandboxError("process_unavailable", `Unsupported container environment name: ${name}`);
+			if (value.includes("\0"))
+				throw new SandboxError("process_unavailable", `Container environment ${name} must not contain NUL`);
 			return ["--env", `${name}=${value}`];
 		});
 	}
 
 	async exec(
 		command: string,
-		options: { timeoutMs?: number; signal?: AbortSignal; onOutput?: (chunk: string) => void } = {},
+		options: { timeoutMs?: number; signal?: AbortSignal; onOutput?: (chunk: string) => void } = {}
 	): Promise<ProcessResult> {
 		if (!command.trim()) throw new SandboxError("process_failed", "Command must not be empty");
 		if (command.length > 64 * 1024) throw new SandboxError("process_failed", "Command exceeds 64 KiB limit");
@@ -277,7 +297,9 @@ export class DockerProcessSandbox implements ProcessSandbox {
 
 	async #removeContainer(name: string): Promise<void> {
 		try {
-			await this.#runner.run(this.#dockerExecutable, ["rm", "-f", name], { maxOutputBytes: 64 * 1024 });
+			await this.#runner.run(this.#dockerExecutable, ["rm", "-f", name], {
+				maxOutputBytes: 64 * 1024,
+			});
 		} catch {
 			// Best effort cleanup; the original timeout/abort remains authoritative.
 		}

@@ -44,7 +44,7 @@ class ResolvingAbortRunner extends RecordingRunner {
 describe("DockerProcessSandbox", () => {
 	it("requires immutable images by default", () => {
 		expect(() => new DockerProcessSandbox({ workspaceRoot: "C:\\workspace", image: "node:22" })).toThrow(
-			/pinned by sha256/,
+			/pinned by sha256/
 		);
 	});
 
@@ -56,18 +56,36 @@ describe("DockerProcessSandbox", () => {
 			runner,
 		});
 		expect(sandbox.networkAccess).toBe(false);
-		await expect(sandbox.exec("npm test")).resolves.toMatchObject({ exitCode: 0, stdout: "ok", timedOut: false });
+		await expect(sandbox.exec("npm test")).resolves.toMatchObject({
+			exitCode: 0,
+			stdout: "ok",
+			timedOut: false,
+		});
 		const args = runner.calls[0]?.args ?? [];
-		expect(args).toEqual(expect.arrayContaining([
-			"--rm", "--init", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
-		]));
+		expect(args).toEqual(
+			expect.arrayContaining([
+				"--rm",
+				"--init",
+				"--network",
+				"none",
+				"--cap-drop",
+				"ALL",
+				"--security-opt",
+				"no-new-privileges",
+				"--read-only",
+			])
+		);
 		expect(args).toContain("type=bind,source=C:\\workspace,target=/workspace");
 		expect(args.slice(-4)).toEqual(["node@sha256:abc", "/bin/sh", "-lc", "npm test"]);
 	});
 
 	it("gives a real build a writable HOME, a usable /tmp and room to run", async () => {
 		const runner = new RecordingRunner();
-		const sandbox = new DockerProcessSandbox({ workspaceRoot: "/srv/workspace", image: "node@sha256:abc", runner });
+		const sandbox = new DockerProcessSandbox({
+			workspaceRoot: "/srv/workspace",
+			image: "node@sha256:abc",
+			runner,
+		});
 
 		await sandbox.exec("npm ci");
 		const args = runner.calls[0]?.args ?? [];
@@ -117,15 +135,27 @@ describe("DockerProcessSandbox", () => {
 
 	it("opens the network only when the deployment asks, and never to the host by accident", async () => {
 		const runner = new RecordingRunner();
-		const bridged = new DockerProcessSandbox({ workspaceRoot: "/srv/workspace", image: "node@sha256:abc", runner, network: "bridge" });
+		const bridged = new DockerProcessSandbox({
+			workspaceRoot: "/srv/workspace",
+			image: "node@sha256:abc",
+			runner,
+			network: "bridge",
+		});
 		expect(bridged.networkAccess).toBe(true);
 		await bridged.exec("npm ci");
-		expect(runner.calls[0]?.args.slice(runner.calls[0].args.indexOf("--network"), runner.calls[0].args.indexOf("--network") + 2)).toEqual(["--network", "bridge"]);
+		expect(
+			runner.calls[0]?.args.slice(
+				runner.calls[0].args.indexOf("--network"),
+				runner.calls[0].args.indexOf("--network") + 2
+			)
+		).toEqual(["--network", "bridge"]);
 
 		const base = { workspaceRoot: "/srv/workspace", image: "node@sha256:abc", runner };
 		expect(() => new DockerProcessSandbox({ ...base, network: "host" })).toThrow(/host networking/);
 		expect(new DockerProcessSandbox({ ...base, network: "host", allowHostNetwork: true }).networkAccess).toBe(true);
-		expect(() => new DockerProcessSandbox({ ...base, network: "none --privileged" })).toThrow(/Unsupported Docker network/);
+		expect(() => new DockerProcessSandbox({ ...base, network: "none --privileged" })).toThrow(
+			/Unsupported Docker network/
+		);
 	});
 
 	it("rejects limits and paths that would smuggle extra container options", () => {

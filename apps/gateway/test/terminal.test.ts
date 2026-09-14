@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,7 +12,10 @@ afterEach(async () => {
 function waitForOutput(outputs: string[], text: string): Promise<void> {
 	if (outputs.join("").includes(text)) return Promise.resolve();
 	return new Promise((resolve, reject) => {
-		const deadline = setTimeout(() => reject(new Error(`Timed out waiting for ${text}; got ${outputs.join("")}`)), 5000);
+		const deadline = setTimeout(
+			() => reject(new Error(`Timed out waiting for ${text}; got ${outputs.join("")}`)),
+			5000
+		);
 		const check = setInterval(() => {
 			if (!outputs.join("").includes(text)) return;
 			clearTimeout(deadline);
@@ -52,18 +55,45 @@ describe("TerminalManager", () => {
 			connectionId: "connection-1",
 			send: collectOutput,
 		});
-		expect(ready).toMatchObject({ type: "terminal.ready", requestId: "request-1", terminalId: "terminal-1" });
+		expect(ready).toMatchObject({
+			type: "terminal.ready",
+			requestId: "request-1",
+			terminalId: "terminal-1",
+		});
 		const unsubscribe = manager.listen("terminal-1", "connection-1", collectOutput);
 		try {
-			manager.input({ terminalId: "terminal-1", owner: { principalId: "user-1", workspaceId: "workspace-1" }, data: "echo TERMINAL_TEST\r" });
+			manager.input({
+				terminalId: "terminal-1",
+				owner: { principalId: "user-1", workspaceId: "workspace-1" },
+				data: "echo TERMINAL_TEST\r",
+			});
 			await waitForOutput(outputs, "TERMINAL_TEST");
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			expect(outputSeqs).toEqual([...new Set(outputSeqs)]);
-			manager.resize({ terminalId: "terminal-1", owner: { principalId: "user-1", workspaceId: "workspace-1" }, cols: 100, rows: 30 });
-			expect(() => manager.input({ terminalId: "terminal-1", owner: { principalId: "other", workspaceId: "workspace-1" }, data: "echo NO\r" })).toThrow(/access denied/i);
-			const closed = manager.close({ terminalId: "terminal-1", owner: { principalId: "user-1", workspaceId: "workspace-1" }, requestId: "close-1" });
-			expect(closed).toEqual({ type: "terminal.closed", requestId: "close-1", terminalId: "terminal-1" });
-			 expect(() => manager.workspaceFor("terminal-1", "user-1")).toThrow(/does not exist/i);
+			manager.resize({
+				terminalId: "terminal-1",
+				owner: { principalId: "user-1", workspaceId: "workspace-1" },
+				cols: 100,
+				rows: 30,
+			});
+			expect(() =>
+				manager.input({
+					terminalId: "terminal-1",
+					owner: { principalId: "other", workspaceId: "workspace-1" },
+					data: "echo NO\r",
+				})
+			).toThrow(/access denied/i);
+			const closed = manager.close({
+				terminalId: "terminal-1",
+				owner: { principalId: "user-1", workspaceId: "workspace-1" },
+				requestId: "close-1",
+			});
+			expect(closed).toEqual({
+				type: "terminal.closed",
+				requestId: "close-1",
+				terminalId: "terminal-1",
+			});
+			expect(() => manager.workspaceFor("terminal-1", "user-1")).toThrow(/does not exist/i);
 		} finally {
 			unsubscribe();
 		}

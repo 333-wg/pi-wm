@@ -1,24 +1,49 @@
 import type { TranscriptItem } from "@wuming/protocol";
-import { appendForkTitle, isAutomaticSessionTitle, suggestSessionTitle, suggestSessionTitleFromTranscript } from "../src/index.js";
+import {
+	appendForkTitle,
+	isAutomaticSessionTitle,
+	suggestSessionTitle,
+	suggestSessionTitleFromTranscript,
+} from "../src/index.js";
 import { describe, expect, it } from "vitest";
 
 describe("session titles", () => {
 	it("builds a compact title from the first user text", () => {
 		expect(suggestSessionTitle([{ type: "text", text: "#   Fix the login flow\n\nand add regression tests" }])).toBe(
-			"Fix the login flow and add regression tests",
+			"Fix the login flow and add regression tests"
 		);
 	});
 
 	it("uses attachment names when a prompt has no text", () => {
-		expect(suggestSessionTitle([
-			{ type: "artifact", artifact: { id: "one", name: "report.docx", mimeType: "application/octet-stream", size: 12 } },
-			{ type: "artifact", artifact: { id: "two", name: "chart.png", mimeType: "image/png", size: 24 } },
-		])).toBe("report.docx, chart.png");
+		expect(
+			suggestSessionTitle([
+				{
+					type: "artifact",
+					artifact: {
+						id: "one",
+						name: "report.docx",
+						mimeType: "application/octet-stream",
+						size: 12,
+					},
+				},
+				{
+					type: "artifact",
+					artifact: { id: "two", name: "chart.png", mimeType: "image/png", size: 24 },
+				},
+			])
+		).toBe("report.docx, chart.png");
 	});
 
 	it("uses the first usable user item in a transcript and truncates long titles", () => {
 		const transcript: TranscriptItem[] = [
-			{ id: "assistant", type: "assistant", createdAt: 1, status: "complete", content: [{ type: "text", text: "Ignore this" }], model: { provider: "test", id: "test" } },
+			{
+				id: "assistant",
+				type: "assistant",
+				createdAt: 1,
+				status: "complete",
+				content: [{ type: "text", text: "Ignore this" }],
+				model: { provider: "test", id: "test" },
+			},
 			{ id: "empty", type: "user", createdAt: 2, content: [{ type: "text", text: "   " }] },
 			{ id: "user", type: "user", createdAt: 3, content: [{ type: "text", text: "x".repeat(80) }] },
 		];

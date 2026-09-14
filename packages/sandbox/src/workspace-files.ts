@@ -82,10 +82,14 @@ export class WorkspaceFileExecutor implements WorkspaceFiles {
 		const assertUnchanged = async () => {
 			if (expectedSha256 === undefined) return;
 			const current = await readFile(revalidatedTarget).catch((error: unknown) => {
-				throw new SandboxError("edit_conflict", `File changed before edit could be written: ${error instanceof Error ? error.message : String(error)}`);
+				throw new SandboxError(
+					"edit_conflict",
+					`File changed before edit could be written: ${error instanceof Error ? error.message : String(error)}`
+				);
 			});
 			const currentSha256 = createHash("sha256").update(current).digest("hex");
-			if (currentSha256 !== expectedSha256) throw new SandboxError("edit_conflict", "File changed while the edit was being prepared");
+			if (currentSha256 !== expectedSha256)
+				throw new SandboxError("edit_conflict", "File changed while the edit was being prepared");
 		};
 		await assertUnchanged();
 		const temporary = join(dirname(revalidatedTarget), `.${basename(revalidatedTarget)}.wuming-${randomUUID()}.tmp`);
@@ -110,7 +114,7 @@ export class WorkspaceFileExecutor implements WorkspaceFiles {
 		path: string,
 		oldText: string,
 		newText: string,
-		options: EditTextOptions = {},
+		options: EditTextOptions = {}
 	): Promise<{ bytesWritten: number; replacements: number }> {
 		if (!oldText) throw new SandboxError("edit_conflict", "oldText must not be empty");
 		const resolved = await this.#policy.existing(path);

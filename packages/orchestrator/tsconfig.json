@@ -1,13 +1,16 @@
 {
-  "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "composite": true,
-    "rootDir": "src",
-    "outDir": "dist"
-  },
-  "references": [
-    { "path": "../protocol" },
-    { "path": "../domain" }
-  ],
-  "include": ["src/**/*.ts"]
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"composite": true,
+		"rootDir": "src",
+		"outDir": "dist"
+	},
+	"references": [
+		{ "path": "../capability-kernel" },
+		{ "path": "../context-engine" },
+		{ "path": "../trajectory" },
+		{ "path": "../protocol" },
+		{ "path": "../domain" }
+	],
+	"include": ["src/**/*.ts"]
 }

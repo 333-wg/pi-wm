@@ -1,12 +1,30 @@
 import { describe, expect, it } from "vitest";
 import type { Trigger } from "../src/lib/suggest.js";
-import { applyCompletion, cycleIndex, detectTrigger, quoteMention, rankBy, subsequenceScore } from "../src/lib/suggest.js";
+import {
+	applyCompletion,
+	cycleIndex,
+	detectTrigger,
+	quoteMention,
+	rankBy,
+	subsequenceScore,
+} from "../src/lib/suggest.js";
+import { skillItems } from "../src/components/ComposerSuggest.js";
 
 // The composer's autocomplete is all in these primitives, so this is where the
 // rules live: what counts as a trigger, which candidate wins, and what the
 // textarea holds afterwards.
 
 describe("detectTrigger", () => {
+	it("searches Chinese slash aliases and inline skill mentions without treating prices as skills", () => {
+		expect(detectTrigger("/调试", 3)).toMatchObject({ kind: "command", query: "调试" });
+		expect(detectTrigger("请审查 $code-review", 16)).toMatchObject({
+			kind: "skill",
+			start: 4,
+			query: "code-review",
+		});
+		expect(detectTrigger("US$30", 5)).toBeUndefined();
+		expect(detectTrigger("$debug next", 11)).toBeUndefined();
+	});
 	it("opens as soon as the trigger character is typed", () => {
 		expect(detectTrigger("@", 1)).toEqual({ kind: "file", start: 0, end: 1, query: "" });
 		expect(detectTrigger("/", 1)).toEqual({ kind: "command", start: 0, end: 1, query: "" });
@@ -44,6 +62,50 @@ describe("detectTrigger", () => {
 	it("clamps a caret outside the text", () => {
 		expect(detectTrigger("@a", 99)).toEqual({ kind: "file", start: 0, end: 2, query: "a" });
 		expect(detectTrigger("@a", -3)).toBeUndefined();
+	});
+});
+
+describe("skill candidates", () => {
+	it("ranks skill names ahead of description matches and avoids scattered prose matches", () => {
+		const base = { workspaceId: "w", path: "SKILL.md", updatedAt: 1 };
+		const skills = [
+			{ ...base, id: "run-app", name: "run-app", description: "启动项目" },
+			{ ...base, id: "review", name: "项目审查", description: "检查变更" },
+			{ ...base, id: "other", name: "other", description: "do examine broken user globals" },
+		];
+		expect(skillItems(skills, "项目").map((item) => item.skillId)).toEqual(["review", "run-app"]);
+		expect(skillItems(skills, "debug")).toEqual([]);
+	});
+	it("matches descriptions and exposes provenance without hiding explicit-only skills", () => {
+		const items = skillItems(
+			[
+				{
+					id: "debug",
+					workspaceId: "w",
+					name: "debug",
+					description: "排查报错",
+					path: "SKILL.md",
+					updatedAt: 1,
+					source: "builtin",
+				},
+				{
+					id: "manual",
+					workspaceId: "w",
+					name: "manual",
+					description: "排查报错",
+					path: "SKILL.md",
+					updatedAt: 1,
+					source: "user",
+					allowImplicitInvocation: false,
+				},
+			],
+			"报错"
+		);
+		expect(items.map(({ skillId, badge }) => ({ skillId, badge }))).toEqual([
+			{ skillId: "debug", badge: "系统" },
+			{ skillId: "manual", badge: "工作区 · 手动" },
+		]);
+		expect(items.every((item) => item.action === undefined)).toBe(true);
 	});
 });
 
@@ -86,7 +148,10 @@ describe("rankBy", () => {
 	it("scores an item by its best key", () => {
 		// The first row matches through its alias only — a Chinese label with an
 		// English alias is the case this exists for.
-		const rows = [{ label: "打开设置", alias: "settings" }, { label: "st", alias: "" }];
+		const rows = [
+			{ label: "打开设置", alias: "settings" },
+			{ label: "st", alias: "" },
+		];
 		expect(rankBy(rows, "sett", (row) => [row.label, row.alias])).toEqual([rows[0]]);
 	});
 
@@ -111,16 +176,25 @@ describe("applyCompletion", () => {
 	const mention: Trigger = { kind: "file", start: 4, end: 8, query: "rea" };
 
 	it("replaces the token and leaves the caret past the trailing space", () => {
-		expect(applyCompletion("see @rea", mention, "readme.md")).toEqual({ text: "see @readme.md ", caret: 15 });
+		expect(applyCompletion("see @rea", mention, "readme.md")).toEqual({
+			text: "see @readme.md ",
+			caret: 15,
+		});
 	});
 
 	it("does not add a second space when the text already has one", () => {
-		expect(applyCompletion("@a b", { kind: "file", start: 0, end: 2, query: "a" }, "abc")).toEqual({ text: "@abc b", caret: 4 });
+		expect(applyCompletion("@a b", { kind: "file", start: 0, end: 2, query: "a" }, "abc")).toEqual({
+			text: "@abc b",
+			caret: 4,
+		});
 	});
 
 	it("can leave the space out, for a command still waiting for an argument", () => {
 		const slash: Trigger = { kind: "command", start: 0, end: 3, query: "co" };
-		expect(applyCompletion("/co", slash, "compact", { trailing: false })).toEqual({ text: "/compact", caret: 8 });
+		expect(applyCompletion("/co", slash, "compact", { trailing: false })).toEqual({
+			text: "/compact",
+			caret: 8,
+		});
 	});
 });
 

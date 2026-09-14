@@ -43,7 +43,10 @@ test("the terminal paints itself from the token block", async ({ page }) => {
 	await openTerminal(page);
 	// xterm puts the background on its scroll container and the foreground on the
 	// row container, so those are the two places its palette becomes visible.
-	await expect(page.locator(".xterm-scrollable-element")).toHaveCSS("background-color", await tokenColor(page, "--term-bg"));
+	await expect(page.locator(".xterm-scrollable-element")).toHaveCSS(
+		"background-color",
+		await tokenColor(page, "--term-bg")
+	);
 	await expect(page.locator(".xterm-rows")).toHaveCSS("color", await tokenColor(page, "--term-text"));
 });
 

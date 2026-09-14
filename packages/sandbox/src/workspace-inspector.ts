@@ -1,7 +1,15 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { relative, resolve, sep } from "node:path";
-import type { GitDiff, GitStatus, GitStatusEntry, WorkspaceDirectory, WorkspaceEntry, WorkspaceFileView, WorkspaceSearch } from "@wuming/protocol";
+import type {
+	GitDiff,
+	GitStatus,
+	GitStatusEntry,
+	WorkspaceDirectory,
+	WorkspaceEntry,
+	WorkspaceFileView,
+	WorkspaceSearch,
+} from "@wuming/protocol";
 import { SandboxError } from "./errors.js";
 import { WorkspacePathPolicy } from "./path-policy.js";
 
@@ -26,7 +34,12 @@ function slash(path: string): string {
 	return path.split(sep).join("/");
 }
 
-function appendPrefix(chunks: Buffer[], size: number, chunk: Buffer, maxBytes: number): { size: number; truncated: boolean } {
+function appendPrefix(
+	chunks: Buffer[],
+	size: number,
+	chunk: Buffer,
+	maxBytes: number
+): { size: number; truncated: boolean } {
 	const remaining = Math.max(0, maxBytes - size);
 	if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
 	return { size: size + Math.min(chunk.length, remaining), truncated: chunk.length > remaining };
@@ -233,12 +246,17 @@ export class WorkspaceInspector {
 			return { isRepository: false, entries: [], truncated: false };
 		}
 		const branchResult = await this.#runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], 4096);
-		const fallbackBranch = branchResult.exitCode === 0
-			? undefined
-			: await this.#runGit(["rev-parse", "--short", "HEAD"], 4096);
-		const branch = (branchResult.exitCode === 0 ? branchResult.stdout : fallbackBranch?.stdout)?.toString("utf8").trim();
-		const status = await this.#runGit(["-c", "core.quotepath=false", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], this.#maxGitBytes);
-		if (status.exitCode !== 0 && !status.truncated) throw new SandboxError("process_failed", status.stderr.toString("utf8") || "git status failed");
+		const fallbackBranch =
+			branchResult.exitCode === 0 ? undefined : await this.#runGit(["rev-parse", "--short", "HEAD"], 4096);
+		const branch = (branchResult.exitCode === 0 ? branchResult.stdout : fallbackBranch?.stdout)
+			?.toString("utf8")
+			.trim();
+		const status = await this.#runGit(
+			["-c", "core.quotepath=false", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."],
+			this.#maxGitBytes
+		);
+		if (status.exitCode !== 0 && !status.truncated)
+			throw new SandboxError("process_failed", status.stderr.toString("utf8") || "git status failed");
 		const records = status.stdout.toString("utf8").split("\0");
 		const entries: GitStatusEntry[] = [];
 		for (let index = 0; index < records.length; index += 1) {
@@ -249,22 +267,40 @@ export class WorkspaceInspector {
 			const path = record.slice(3);
 			const renamed = indexStatus === "R" || indexStatus === "C" || worktreeStatus === "R" || worktreeStatus === "C";
 			const originalPath = renamed ? records[++index] : undefined;
-			entries.push({ path, indexStatus, worktreeStatus, ...(originalPath ? { originalPath } : {}) });
+			entries.push({
+				path,
+				indexStatus,
+				worktreeStatus,
+				...(originalPath ? { originalPath } : {}),
+			});
 		}
-		return { isRepository: true, ...(branch ? { branch } : {}), entries, truncated: status.truncated };
+		return {
+			isRepository: true,
+			...(branch ? { branch } : {}),
+			entries,
+			truncated: status.truncated,
+		};
 	}
 
 	async gitDiff(input?: string, staged = false): Promise<GitDiff> {
 		const path = input ? this.#relativePath(input, false) : undefined;
 		const args = [
-			"-c", "core.quotepath=false",
-			"-c", "core.fsmonitor=false",
-			"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--unified=3",
+			"-c",
+			"core.quotepath=false",
+			"-c",
+			"core.fsmonitor=false",
+			"diff",
+			"--no-ext-diff",
+			"--no-textconv",
+			"--no-color",
+			"--unified=3",
 			...(staged ? ["--cached"] : []),
-			"--", path ?? ".",
+			"--",
+			path ?? ".",
 		];
 		const diff = await this.#runGit(args, this.#maxGitBytes);
-		if (diff.exitCode !== 0 && !diff.truncated) throw new SandboxError("process_failed", diff.stderr.toString("utf8") || "git diff failed");
+		if (diff.exitCode !== 0 && !diff.truncated)
+			throw new SandboxError("process_failed", diff.stderr.toString("utf8") || "git diff failed");
 		let content = diff.stdout.toString("utf8");
 		let truncated = diff.truncated;
 		if (!staged && path && !content) {
@@ -342,7 +378,12 @@ export class WorkspaceInspector {
 				if (settled) return;
 				settled = true;
 				clearTimeout(timeout);
-				resolveResult({ exitCode, stdout: Buffer.concat(stdout, stdoutSize), stderr: Buffer.concat(stderr, stderrSize), truncated });
+				resolveResult({
+					exitCode,
+					stdout: Buffer.concat(stdout, stdoutSize),
+					stderr: Buffer.concat(stderr, stderrSize),
+					truncated,
+				});
 			});
 		});
 	}

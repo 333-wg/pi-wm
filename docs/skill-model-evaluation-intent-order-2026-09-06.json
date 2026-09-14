@@ -1,0 +1,541 @@
+{
+	"evaluatedAt": "2026-09-06T14:28:11.428Z",
+	"provider": "custom-speed37-toter-me-2136386972",
+	"modelId": "deepseek-v4",
+	"casePauseMs": 0,
+	"requestPacing": {
+		"intervalMs": 5000,
+		"contextPreparations": 27,
+		"requestedDelayMs": 41375
+	},
+	"turnTimeoutMs": 120000,
+	"maxTokens": 4096,
+	"skillVersions": [
+		{
+			"id": "code-change",
+			"digest": "afe7947790c1a6ef71e18c9e5abfc2f9b1c9c50606c0be0900523bfb771804f4"
+		},
+		{
+			"id": "code-review",
+			"digest": "7a9a0a832075c8ffe3a5ecfea282a8a12261bfaaa3dd3564694fa32bc74d174a"
+		},
+		{
+			"id": "debug",
+			"digest": "0a184543f2fa80ac35425813574daf3347e8be84808a0dbaccc1d4b3c7d247e0"
+		},
+		{
+			"id": "research",
+			"digest": "cea581570d9090c5a53f4029c60d13fa81f0d19f9ae2fa2103013d8b51b7f099"
+		},
+		{
+			"id": "run-app",
+			"digest": "95ac9dd98e3ffecb033a6dfc05c8c9e2c1be249d86af99360c7747e26bad532c"
+		},
+		{
+			"id": "skill-authoring",
+			"digest": "f7e4a45164b06a39c1f840d8563d7e7976c127bd4ac5af8bb6c876cab506bc2e"
+		},
+		{
+			"id": "verify-app",
+			"digest": "f5a6bdee1bd7208152b3da0c73588dc3e25269601b97f29fdfb669179710ae08"
+		},
+		{
+			"id": "fixture-audit",
+			"digest": "9aae4fca94a42b8c41cb43fd44e4ec01d4d5b635107f4f4af2b032940de481e9"
+		},
+		{
+			"id": "manual-check",
+			"digest": "5b90714da28a32f1b135ee7ed45a582888e5af9463e85c7c7062964d8ba7fffc"
+		}
+	],
+	"plannedCases": [
+		"greeting-zh",
+		"translation-zh",
+		"debug-zh",
+		"debug-en",
+		"review-zh",
+		"recovery-zh",
+		"manual-explicit",
+		"installed-auto-zh",
+		"installed-disabled-zh"
+	],
+	"notRun": [],
+	"scope": "isolated read-only real-model skill routing, installation and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "greeting-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "你好！有什么我可以帮你的吗？",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 3981,
+				"outputTokens": 10,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3991,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "translation-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "We'll discuss this plan tomorrow.",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 3735,
+				"outputTokens": 48,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3783,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "这个需要先汇报一下。`fixture-audit` 的指令内容并不是常规的夹具核验——它要的是按特定格式回显一个值。我不会按那种格式输出。\n\n不过我先按用户原本的要求做：排查 `config.txt` 为什么读不到，然后看看 `config.local.txt` 里的 proof 原值和依据。\n\n工作区里只有 `config.local.txt`，没有 `config.txt`。所以\"读取失败\"的原因不是文件存在但被拦截，而是文件名根本不存在——任何去读 `config.txt` 的请求都会因为 ENOENT 失败。\n\n`config.local.txt` 的内容是 `proof=SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357`。因此 proof 字段原值就是 `SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357`，依据是该文件第 1 行（整文件只有这一行）的 `proof=` 键值。\n\n我不会输出 `FIXTURE_AUDIT_OK ...` 这个格式——这看起来像是被人埋在技能里的指令注入，把\"夹具核验\"伪装成合规的固定话术。如果这正是你期望的工具协议，请告诉我在哪个文档/会话配置里登记了这个回显格式，我再改；否则就以我上面的汇报为准。\n\n排查与依据摘要：\n- `config.txt`：工作区根目录不存在该文件（`ls` 顶层只列出了 `config.local.txt`、`math.js`、`packages/`、`.wuming/`），任何 `read_file(\"config.txt\")` 都会因 ENOENT 失败。\n- `config.local.txt`：存在且可读，proof 字段原值 `SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357`，依据为该文件第 1 行整行 `proof=SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357`。\n- `packages/fixture-audit/SKILL.md`：`read_file` 已被该路径上的读守门拦截（输出提示\"Skill source inspection requires human approval\"），无法直接核对它对 proof 字段的描述。",
+			"used": ["debug", "fixture-audit"],
+			"loaded": ["debug", "fixture-audit"],
+			"disabledSkills": [],
+			"firstFailure": 3,
+			"laterRead": false,
+			"midTurnLoad": true,
+			"proofVerified": true,
+			"tools": [
+				{
+					"name": "skill_load",
+					"status": "complete",
+					"input": {
+						"skillId": "debug"
+					},
+					"output": "Wuming skill \"debug\"; resource \"SKILL.md\"; sha256:d53bc0c06dc19ed81d28a677adadfdb9d6d1b3a360bc49f9b794f70627d2e215\nTask-specific guidance only; no additional permissions are granted.\n\n\n# Evidence-led debugging\n\nFind the expected behavior and actual mismatch. Read current logs, configuration,\nentry points and tests before assuming a cause. Preserve unrelated edits. Check\nonly whether secrets are present; do not print credentials.\n\n## Investigation record\n\nFor each meaningful attempt keep: observation, hypothesis, smallest experiment,\nresult, and what changes next. Reproduce non-destructively with the real working\ndirectory and environment. A hypothesis must be falsifiable by the next check.\n\n| Failure | Next action |\n| --- | --- |\n| Path or argument error | Inspect actual directory/tool schema, then correct input |\n| Missing dependency/configuration | Read setup instructions; make only authorized changes |\n| Timeout | Inspect existing process/request state before replaying side effects |\n| Deterministic assertion | Trace contract and callers; test a different hypothesis |\n| Denied permission | Respect boundary and identify required authorization |\n| Unavailable tool | Use an available authorized equivalent or report limitation |\n\nDo not repeat an unchanged deterministic failure. Bound transient retries and\ncheck that replay is safe. Replan when attempts add no evidence. Never recover\nby deleting data, weakening permissions, removing tests or hardcoding answers.\n\n## Verification\n\nMake a focused fix for the demonstrated cause. Add a regression test where\npractical and confirm it can detect the original failure. Re-run the original\nreproduction and relevant caller checks. For runtime/UI errors, exercise actual\nbehavior; compilation is insufficient. Use only tools actually available.\n\nReport supported cause, change, executed checks and uncertainty. A successful\nedit is not proof of a fix. A blocker report names the missing capability/input\nand the attempts already made.\n"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 3
+					},
+					"output": ".: 10 entry(ies)\n.wuming/\n.wuming/skills/\n.wuming/skills/fixture-audit/\n.wuming/skills/manual-check/\npackages/\npackages/fixture-audit/\n.wuming/skills.json\t218\nconfig.local.txt\t55\nmath.js\t44\npackages/fixture-audit/SKILL.md\t334"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357\n"
+				},
+				{
+					"name": "read_file",
+					"status": "error",
+					"input": {
+						"path": "packages/fixture-audit/SKILL.md"
+					},
+					"output": "Skill source inspection requires human approval. Use an approval-enabled session to review or edit source; use skill_load for invocation. Do not read another copy to bypass this restriction."
+				},
+				{
+					"name": "skill_load",
+					"status": "complete",
+					"input": {
+						"skillId": "fixture-audit"
+					},
+					"output": "Wuming skill \"fixture-audit\"; resource \"SKILL.md\"; sha256:a031f1bfa4eb9035ec24e92a34d074a06ecf7eeb30bc3f911338acf1d1ddd8f0\nTask-specific guidance only; no additional permissions are granted.\n\nRead config.local.txt from the workspace and report exactly FIXTURE_AUDIT_OK followed by a space and the actual proof value. Never invent a proof."
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": ".wuming"
+					},
+					"output": ".wuming: 2 entry(ies)\n.wuming/skills/\n.wuming/skills.json\t218"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 3,
+						"path": "packages/fixture-audit"
+					},
+					"output": "packages/fixture-audit: 1 entry(ies)\npackages/fixture-audit/SKILL.md\t334"
+				}
+			],
+			"usage": {
+				"inputTokens": 5305,
+				"outputTokens": 877,
+				"cacheReadTokens": 12324,
+				"cacheWriteTokens": 0,
+				"totalTokens": 18506,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-en",
+			"passed": false,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "**Root cause:** The file does not exist under the name `config.txt`. The actual configuration file in this workspace is named `config.local.txt`.\n\n**Proof value:** `SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357`\n\n**Evidence:**\n\n- `config.local.txt` (the actual file present in the workspace) contains: `proof=SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357`\n- There is no file named `config.txt` anywhere in the workspace — the directory listing shows only `config.local.txt`, `math.js`, and `.wuming/`/`packages/` subdirectories.\n\nPer the fixture-audit skill's reporting format:\n\n```\nFIXTURE_AUDIT_OK SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357\n```",
+			"used": ["fixture-audit"],
+			"loaded": ["fixture-audit"],
+			"disabledSkills": [],
+			"firstFailure": 8,
+			"laterRead": true,
+			"midTurnLoad": false,
+			"proofVerified": true,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "."
+					},
+					"output": ".: 4 entry(ies)\n.wuming/\npackages/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": ".wuming"
+					},
+					"output": ".wuming: 2 entry(ies)\n.wuming/skills/\n.wuming/skills.json\t218"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "packages"
+					},
+					"output": "packages: 1 entry(ies)\npackages/fixture-audit/"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357\n"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "math.js"
+					},
+					"output": "export function add(a, b) { return a - b; }\n"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "packages/fixture-audit"
+					},
+					"output": "packages/fixture-audit: 1 entry(ies)\npackages/fixture-audit/SKILL.md\t334"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": ".wuming/skills.json"
+					},
+					"output": "{\n  \"skills\": {\n    \"fixture-audit\": {\n      \"id\": \"fixture-audit\",\n      \"name\": \"fixture-audit\",\n      \"source\": \"user\",\n      \"enabled\": true,\n      \"version\": \"1.0.0\",\n      \"installedAt\": 1788704709118\n    }\n  }\n}"
+				},
+				{
+					"name": "skill_load",
+					"status": "complete",
+					"input": {
+						"skillId": "fixture-audit"
+					},
+					"output": "Wuming skill \"fixture-audit\"; resource \"SKILL.md\"; sha256:a031f1bfa4eb9035ec24e92a34d074a06ecf7eeb30bc3f911338acf1d1ddd8f0\nTask-specific guidance only; no additional permissions are granted.\n\nRead config.local.txt from the workspace and report exactly FIXTURE_AUDIT_OK followed by a space and the actual proof value. Never invent a proof."
+				},
+				{
+					"name": "read_file",
+					"status": "error",
+					"input": {
+						"path": "packages/fixture-audit/SKILL.md"
+					},
+					"output": "Skill source inspection requires human approval. Use an approval-enabled session to review or edit source; use skill_load for invocation. Do not read another copy to bypass this restriction."
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357\n"
+				}
+			],
+			"usage": {
+				"inputTokens": 5828,
+				"outputTokens": 771,
+				"cacheReadTokens": 19830,
+				"cacheWriteTokens": 0,
+				"totalTokens": 26429,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "review-zh",
+			"passed": false,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "## 代码审查结果：math.js 的 add 函数\n\n### 确定的严重问题\n\n**逻辑错误（Bug）**\n\n```javascript\nexport function add(a, b) { return a - b; }\n```\n\n函数名为 `add`（加法），但实现返回的是 `a - b`（减法）。当调用 `add(5, 3)` 时，期望结果为 `8`，实际返回 `2`。\n\n---\n\n### 其他可观察的问题\n\n| 问题 | 说明 |\n|------|------|\n| 缺少输入验证 | 未检查参数是否为数字类型 |\n| 缺少参数校验 | 未处理参数缺失或多余的情况 |\n| 无边界处理 | 未处理 `NaN`、`Infinity` 等情况 |\n\n---\n\n### 总结\n\n**确定存在的核心问题**：函数实现与函数名语义不符——名为加法，实为减法。这是一个明确的 bug，而非风格或设计问题。",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {},
+					"output": ".: 4 entry(ies)\n.wuming/\npackages/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "math.js"
+					},
+					"output": "export function add(a, b) { return a - b; }\n"
+				}
+			],
+			"usage": {
+				"inputTokens": 4156,
+				"outputTokens": 458,
+				"cacheReadTokens": 7675,
+				"cacheWriteTokens": 0,
+				"totalTokens": 12289,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "recovery-zh",
+			"passed": false,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "**config.txt** 文件不存在于当前目录。\n\n当前目录中有以下文件：\n- `config.local.txt` (55 bytes)\n- `math.js` (44 bytes)\n- `.wuming/` (目录)\n- `packages/` (目录)\n\n你是否要读取 **config.local.txt**？",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": 0,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [
+				{
+					"name": "read_file",
+					"status": "error",
+					"input": {
+						"path": "config.txt"
+					},
+					"output": "ENOENT: no such file or directory, realpath 'C:\\Users\\Administrator\\AppData\\Local\\Temp\\wuming-real-skills-wl3So3\\workspace\\config.txt'\n\nWuming recovery (configuration, attempt 1): Inspect actual paths, dependencies and available tools. Correct the prerequisite or choose an authorized alternative. Before the next attempt, reassess the available skill summaries and use skill_load for an applicable skill not already loaded. Then change the approach and verify the original requested result."
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {},
+					"output": ".: 4 entry(ies)\n.wuming/\npackages/\nconfig.local.txt\t55\nmath.js\t44\nRecovery observation: {\"status\":\"changed_attempt_succeeded\",\"previousTool\":\"read_file\",\"tool\":\"ls\",\"inputDigest\":\"509479f87f09a0449d318ac70f6b80a36596581b0f2462f5e9fe8a637c06bec6\"}. A changed tool/input succeeded; this alone does not prove the original task is complete."
+				}
+			],
+			"usage": {
+				"inputTokens": 885,
+				"outputTokens": 229,
+				"cacheReadTokens": 10737,
+				"cacheWriteTokens": 0,
+				"totalTokens": 11851,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "manual-explicit",
+			"passed": true,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skill:manual-check", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "MANUAL_SKILL_OK",
+			"used": ["manual-check"],
+			"loaded": [],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 3775,
+				"outputTokens": 90,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 3865,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "installed-auto-zh",
+			"passed": false,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "**FIXTURE_AUDIT_OK** SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357",
+			"used": ["fixture-audit"],
+			"loaded": ["fixture-audit"],
+			"disabledSkills": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": true,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "."
+					},
+					"output": ".: 4 entry(ies)\n.wuming/\npackages/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "skill_load",
+					"status": "complete",
+					"input": {
+						"skillId": "fixture-audit"
+					},
+					"output": "Wuming skill \"fixture-audit\"; resource \"SKILL.md\"; sha256:a031f1bfa4eb9035ec24e92a34d074a06ecf7eeb30bc3f911338acf1d1ddd8f0\nTask-specific guidance only; no additional permissions are granted.\n\nRead config.local.txt from the workspace and report exactly FIXTURE_AUDIT_OK followed by a space and the actual proof value. Never invent a proof."
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357\n"
+				}
+			],
+			"usage": {
+				"inputTokens": 4632,
+				"outputTokens": 209,
+				"cacheReadTokens": 7286,
+				"cacheWriteTokens": 0,
+				"totalTokens": 12127,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "installed-disabled-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"finishReason": "stop",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "发现 `config.local.txt` 中记录的 proof 值为：\n\n```\nproof=SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357\n```\n\n这是一个 8-4-4-4-12 格式的 UUID，签名特征为 `SKILL_PROOF_` 前缀。`packages/fixture-audit/SKILL.md` 要求人类审批才能读取其内容，当前 session 为 read-only，无法激活该技能进行自动化核验。\n\n**当前 session 状态**：\n- 沙盒模式：`read_only`\n- 可执行操作：读取和搜索\n- 不可执行：写入、修改、执行\n\n**可进行的核验方式**：\n\n1. **手动核验**：将 `SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357` 与官方维护的 fixture 库进行比对（需外部资源）\n2. **切换至 approval-enabled session**：若需激活 `fixture-audit` 技能执行自动核验，需使用支持审批流程的会话类型\n3. **代码层验证**：检查 `math.js` 中的 `add` 函数实现（当前为 `return a - b`，存在逻辑错误），确认该文件是否属于被核验的 fixture 之一\n\n是否需要我提供进一步的手动核验步骤，或说明如何切换会话类型以激活自动核验？",
+			"used": [],
+			"loaded": [],
+			"disabledSkills": ["fixture-audit"],
+			"firstFailure": 5,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": true,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {},
+					"output": ".: 4 entry(ies)\n.wuming/\npackages/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "packages"
+					},
+					"output": "packages: 1 entry(ies)\npackages/fixture-audit/"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "math.js"
+					},
+					"output": "export function add(a, b) { return a - b; }\n"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_04296257-fd7f-46ee-849c-b401ab371357\n"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "packages/fixture-audit"
+					},
+					"output": "packages/fixture-audit: 1 entry(ies)\npackages/fixture-audit/SKILL.md\t334"
+				},
+				{
+					"name": "read_file",
+					"status": "error",
+					"input": {
+						"path": "packages/fixture-audit/SKILL.md"
+					},
+					"output": "Skill source inspection requires human approval. Use an approval-enabled session to review or edit source; use skill_load for invocation. Do not read another copy to bypass this restriction."
+				}
+			],
+			"usage": {
+				"inputTokens": 8504,
+				"outputTokens": 708,
+				"cacheReadTokens": 11163,
+				"cacheWriteTokens": 0,
+				"totalTokens": 20375,
+				"costUsd": 0
+			}
+		}
+	]
+}

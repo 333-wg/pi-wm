@@ -37,8 +37,12 @@ describe("ImportedProjectCatalog", () => {
 		const catalog = await ImportedProjectCatalog.open(root, { idFactory: () => "project-two" });
 		const draft = await catalog.create("user-1", "Boundary test");
 
-		await expect(catalog.writeProjectFile("user-1", draft.id, "../secret.txt", Buffer.from("no"))).rejects.toThrow("invalid");
-		await expect(catalog.writeProjectFile("user-2", draft.id, "safe.txt", Buffer.from("no"))).rejects.toThrow("access denied");
+		await expect(catalog.writeProjectFile("user-1", draft.id, "../secret.txt", Buffer.from("no"))).rejects.toThrow(
+			"invalid"
+		);
+		await expect(catalog.writeProjectFile("user-2", draft.id, "safe.txt", Buffer.from("no"))).rejects.toThrow(
+			"access denied"
+		);
 		await expect(catalog.complete("user-1", draft.id)).rejects.toThrow("at least one file");
 	});
 
@@ -46,7 +50,10 @@ describe("ImportedProjectCatalog", () => {
 		const root = await mkdtemp(join(tmpdir(), "wuming-projects-"));
 		const source = await mkdtemp(join(tmpdir(), "wuming-source-"));
 		cleanup.push(root, source);
-		const catalog = await ImportedProjectCatalog.open(root, { idFactory: () => "project-local", clock: () => 200 });
+		const catalog = await ImportedProjectCatalog.open(root, {
+			idFactory: () => "project-local",
+			clock: () => 200,
+		});
 		const project = await catalog.addLocal(source, "directory");
 
 		expect(project).toMatchObject({ id: "project-local", status: "ready" });
@@ -58,7 +65,10 @@ describe("ImportedProjectCatalog", () => {
 		const root = await mkdtemp(join(tmpdir(), "wuming-projects-"));
 		const source = await mkdtemp(join(tmpdir(), "wuming-source-"));
 		cleanup.push(root, source);
-		const catalog = await ImportedProjectCatalog.open(root, { idFactory: () => "project-restorable", clock: () => 300 });
+		const catalog = await ImportedProjectCatalog.open(root, {
+			idFactory: () => "project-restorable",
+			clock: () => 300,
+		});
 		const project = await catalog.addLocal(source, "directory");
 		await catalog.renameProject(project.id, "Renamed project");
 		await catalog.removeProject(project.id);

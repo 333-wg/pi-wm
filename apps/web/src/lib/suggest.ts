@@ -4,7 +4,7 @@
  * is accepted. Everything here is pure so the composer stays a thin shell.
  */
 
-export type TriggerKind = "file" | "command";
+export type TriggerKind = "file" | "command" | "skill";
 
 export interface Trigger {
 	kind: TriggerKind;
@@ -18,7 +18,7 @@ export interface Trigger {
 
 /** Characters allowed inside a mention token; whitespace always ends one. */
 const fileToken = /^[^\s"'`,;()[\]{}<>]*$/;
-const commandToken = /^[A-Za-z0-9:._-]*$/;
+const commandToken = /^[\p{L}\p{N}:._-]*$/u;
 
 /**
  * Slash commands only complete when they are the whole prompt, matching the
@@ -31,6 +31,11 @@ export function detectTrigger(text: string, caret: number): Trigger | undefined 
 		const query = before.slice(1);
 		if (commandToken.test(query)) return { kind: "command", start: 0, end: position, query };
 	}
+	const dollar = before.lastIndexOf("$");
+	if (dollar >= 0 && (dollar === 0 || /[\s(["'`]/.test(before[dollar - 1]!))) {
+		const query = before.slice(dollar + 1);
+		if (commandToken.test(query)) return { kind: "skill", start: dollar, end: position, query };
+	}
 	const at = before.lastIndexOf("@");
 	if (at === -1) return undefined;
 	const query = before.slice(at + 1);
@@ -41,7 +46,14 @@ export function detectTrigger(text: string, caret: number): Trigger | undefined 
 }
 
 function isBoundary(character: string | undefined): boolean {
-	return character === undefined || character === "/" || character === "." || character === "-" || character === "_" || character === " ";
+	return (
+		character === undefined ||
+		character === "/" ||
+		character === "." ||
+		character === "-" ||
+		character === "_" ||
+		character === " "
+	);
 }
 
 /**
@@ -98,11 +110,14 @@ export interface Completion {
  * the next keystroke starts a fresh word instead of extending the mention.
  */
 export function applyCompletion(text: string, trigger: Trigger, value: string, { trailing = true } = {}): Completion {
-	const marker = trigger.kind === "file" ? "@" : "/";
+	const marker = trigger.kind === "file" ? "@" : trigger.kind === "skill" ? "$" : "/";
 	const rest = text.slice(trigger.end);
 	const spaced = trailing && !rest.startsWith(" ");
 	const inserted = `${marker}${value}${spaced ? " " : ""}`;
-	return { text: `${text.slice(0, trigger.start)}${inserted}${rest}`, caret: trigger.start + inserted.length };
+	return {
+		text: `${text.slice(0, trigger.start)}${inserted}${rest}`,
+		caret: trigger.start + inserted.length,
+	};
 }
 
 /** Wraps an index into `[0, length)` so ↑/↓ cycle through the menu. */

@@ -13,7 +13,8 @@ function safeValue(key: string, value: unknown): unknown {
 	if (Array.isArray(value)) return value.slice(0, 20).map((item) => safeValue(key, item));
 	if (value && typeof value === "object") {
 		const result: Record<string, unknown> = {};
-		for (const [childKey, childValue] of Object.entries(value).slice(0, 50)) result[childKey] = safeValue(childKey, childValue);
+		for (const [childKey, childValue] of Object.entries(value).slice(0, 50))
+			result[childKey] = safeValue(childKey, childValue);
 		return result;
 	}
 	return value;
@@ -30,7 +31,13 @@ export function createConsoleStructuredLogger(options: ConsoleStructuredLoggerOp
 	return {
 		log(level, event, fields = {}) {
 			if (LEVELS[level] < threshold) return;
-			const payload: Record<string, unknown> = { timestamp: new Date().toISOString(), level, event, service: "wuming-gateway", pid: process.pid };
+			const payload: Record<string, unknown> = {
+				timestamp: new Date().toISOString(),
+				level,
+				event,
+				service: "wuming-gateway",
+				pid: process.pid,
+			};
 			for (const [key, value] of Object.entries(fields)) payload[key] = safeValue(key, value);
 			write(JSON.stringify(payload));
 		},

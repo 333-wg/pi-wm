@@ -31,6 +31,7 @@ const TEXT_APPLICATION_MIMES = new Set([
 export interface ArtifactValidationOptions {
 	maxFileBytes?: number;
 	maxImageBytes?: number;
+	maxVideoBytes?: number;
 	maxTextBytes?: number;
 	maxImagePixels?: number;
 }
@@ -57,47 +58,58 @@ function imageType(content: Buffer): string | undefined {
 		content.length >= 45 &&
 		content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
 		content.subarray(-8, -4).toString("ascii") === "IEND"
-	) return "image/png";
-	if (
-		content.length >= 10 &&
-		content[0] === 0xff &&
-		content[1] === 0xd8 &&
-		content[2] === 0xff &&
-		content[content.length - 2] === 0xff &&
-		content[content.length - 1] === 0xd9
-	) return "image/jpeg";
+	)
+		return "image/png";
+	if (content.length >= 10 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff) return "image/jpeg";
 	const header = content.subarray(0, 6).toString("ascii");
-	if (content.length >= 14 && (header === "GIF87a" || header === "GIF89a") && content[content.length - 1] === 0x3b) return "image/gif";
+	if (content.length >= 14 && (header === "GIF87a" || header === "GIF89a") && content[content.length - 1] === 0x3b)
+		return "image/gif";
 	if (
 		content.length >= 30 &&
 		content.subarray(0, 4).toString("ascii") === "RIFF" &&
 		content.subarray(8, 12).toString("ascii") === "WEBP" &&
 		content.readUInt32LE(4) + 8 === content.length
-	) return "image/webp";
+	)
+		return "image/webp";
 	return undefined;
 }
 
 function jpegDimensions(content: Buffer): { width: number; height: number } | undefined {
 	const sof = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
 	let offset = 2;
-	while (offset + 8 < content.length) {
-		if (content[offset] !== 0xff) {
-			offset += 1;
-			continue;
+	let dimensions: { width: number; height: number } | undefined;
+	let inScan = false;
+	let sawScan = false;
+	// Skip metadata segments; embedded thumbnail markers cannot terminate the image.
+	// Local exports may retain bytes after the actual end-of-image marker.
+	while (offset < content.length) {
+		if (inScan) {
+			offset = content.indexOf(0xff, offset);
+			if (offset < 0) return undefined;
 		}
+		if (content[offset] !== 0xff) return undefined;
 		while (content[offset] === 0xff) offset += 1;
-		const marker = content[offset];
-		if (marker === undefined || marker === 0xd9 || marker === 0xda) break;
-		if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
-			offset += 1;
-			continue;
-		}
-		const length = content.readUInt16BE(offset + 1);
-		if (length < 2 || offset + 1 + length > content.length) break;
+		const marker = content[offset++];
+		if (marker === undefined) return undefined;
+		if (inScan && (marker === 0x00 || (marker >= 0xd0 && marker <= 0xd7))) continue;
+		if (marker === 0xd9) return sawScan ? dimensions : undefined;
+		if (marker === 0x01) continue;
+		if (marker === 0x00 || marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7)) return undefined;
+		if (offset + 2 > content.length) return undefined;
+		const length = content.readUInt16BE(offset);
+		if (length < 2 || offset + length > content.length) return undefined;
 		if (sof.has(marker)) {
-			return { height: content.readUInt16BE(offset + 4), width: content.readUInt16BE(offset + 6) };
+			if (length < 8) return undefined;
+			dimensions = { height: content.readUInt16BE(offset + 3), width: content.readUInt16BE(offset + 5) };
 		}
-		offset += 1 + length;
+		if (marker === 0xda) {
+			if (!dimensions || length < 6) return undefined;
+			sawScan = true;
+			inScan = true;
+		} else if (marker !== 0xdc) {
+			inScan = false;
+		}
+		offset += length;
 	}
 	return undefined;
 }
@@ -137,18 +149,43 @@ function inferredMimeType(name: string, supplied: string | undefined): string {
 
 export function validateArtifact(
 	input: { name: string; suppliedMimeType?: string; content: Buffer },
-	options: ArtifactValidationOptions = {},
+	options: ArtifactValidationOptions = {}
 ): ValidatedArtifact {
 	const name = safeName(input.name);
-	if (input.content.length > (options.maxFileBytes ?? 10 * 1024 * 1024)) throw new ArtifactError("too_large", "File exceeds the upload limit");
 	const supplied = normalizedSuppliedMime(input.suppliedMimeType);
-	if (input.content.length === 0) return { name, mimeType: inferredMimeType(name, supplied), kind: "binary" };
+	const video =
+		input.content.length >= 24 &&
+		input.content.subarray(4, 8).toString("ascii") === "ftyp" &&
+		/^(isom|iso[2-9]|mp4[12]|avc1|M4V |dash)$/.test(input.content.subarray(8, 12).toString("ascii"))
+			? "video/mp4"
+			: input.content.length >= 16 &&
+				  input.content.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) &&
+				  input.content.subarray(4, 256).includes(Buffer.from("webm"))
+				? "video/webm"
+				: undefined;
+	if (video) {
+		if (supplied && supplied !== video && supplied !== "application/octet-stream")
+			throw new ArtifactError("invalid", `Content is ${video}, not ${supplied}`);
+		if (input.content.length > (options.maxVideoBytes ?? options.maxFileBytes ?? 10 * 1024 * 1024))
+			throw new ArtifactError("too_large", "Video exceeds the artifact limit");
+		return { name, mimeType: video, kind: "binary" };
+	}
+	if (supplied === "video/mp4" || supplied === "video/webm")
+		throw new ArtifactError("invalid", `Content does not match ${supplied}`);
+	if (input.content.length > (options.maxFileBytes ?? 10 * 1024 * 1024))
+		throw new ArtifactError("too_large", "File exceeds the upload limit");
+	if (input.content.length === 0) {
+		if (supplied && IMAGE_MIMES.has(supplied)) throw new ArtifactError("invalid", "Image file is empty");
+		return { name, mimeType: inferredMimeType(name, supplied), kind: "binary" };
+	}
 	const detectedImage = imageType(input.content);
 	if (detectedImage) {
-		if (supplied && supplied !== detectedImage) throw new ArtifactError("invalid", `Content is ${detectedImage}, not ${supplied}`);
-		if (input.content.length > (options.maxImageBytes ?? 10 * 1024 * 1024)) throw new ArtifactError("too_large", "Image exceeds the upload limit");
+		// Browser File.type is only a hint, often derived from the local extension.
+		if (input.content.length > (options.maxImageBytes ?? 10 * 1024 * 1024))
+			throw new ArtifactError("too_large", "Image exceeds the upload limit");
 		const dimensions = imageDimensions(detectedImage, input.content);
-		if (!dimensions || dimensions.width < 1 || dimensions.height < 1) throw new ArtifactError("invalid", "Image dimensions are invalid or unsupported");
+		if (!dimensions || dimensions.width < 1 || dimensions.height < 1)
+			throw new ArtifactError("invalid", "Image dimensions are invalid or unsupported");
 		if (dimensions.width * dimensions.height > (options.maxImagePixels ?? 40_000_000)) {
 			throw new ArtifactError("too_large", "Image pixel dimensions exceed the limit");
 		}
@@ -162,6 +199,12 @@ export function validateArtifact(
 		return { name, mimeType: inferredMimeType(name, supplied), kind: "binary" };
 	}
 	if (decoded.includes("\0")) return { name, mimeType: inferredMimeType(name, supplied), kind: "binary" };
-	if (input.content.length > (options.maxTextBytes ?? 2 * 1024 * 1024)) throw new ArtifactError("too_large", "Text artifact exceeds the upload limit");
-	return { name, mimeType: supplied && (supplied.startsWith("text/") || TEXT_APPLICATION_MIMES.has(supplied)) ? supplied : "text/plain", kind: "text" };
+	if (input.content.length > (options.maxTextBytes ?? 2 * 1024 * 1024))
+		throw new ArtifactError("too_large", "Text artifact exceeds the upload limit");
+	return {
+		name,
+		mimeType:
+			supplied && (supplied.startsWith("text/") || TEXT_APPLICATION_MIMES.has(supplied)) ? supplied : "text/plain",
+		kind: "text",
+	};
 }

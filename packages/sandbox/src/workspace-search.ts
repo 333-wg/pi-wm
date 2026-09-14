@@ -289,10 +289,16 @@ export class WorkspaceSearcher {
 		try {
 			expression = new RegExp(source, options.caseInsensitive ? "i" : "");
 		} catch (error) {
-			throw new SandboxError("path_invalid", `Invalid search pattern: ${error instanceof Error ? error.message : String(error)}`);
+			throw new SandboxError(
+				"path_invalid",
+				`Invalid search pattern: ${error instanceof Error ? error.message : String(error)}`
+			);
 		}
 		const fileFilter = options.glob === undefined ? undefined : compileGlob(options.glob);
-		const walk = await this.#walk(start, { includeDirectories: false, ...(options.signal ? { signal: options.signal } : {}) });
+		const walk = await this.#walk(start, {
+			includeDirectories: false,
+			...(options.signal ? { signal: options.signal } : {}),
+		});
 		const candidates = fileFilter ? walk.entries.filter((entry) => fileFilter.test(entry.path)) : walk.entries;
 
 		const matches: WorkspaceGrepMatch[] = [];
@@ -410,13 +416,20 @@ export class WorkspaceSearcher {
 	 */
 	async #walk(
 		start: string,
-		options: { includeDirectories: boolean; maxDepth?: number; signal?: AbortSignal },
+		options: { includeDirectories: boolean; maxDepth?: number; signal?: AbortSignal }
 	): Promise<{ entries: WorkspaceSearchEntry[]; truncated: boolean; visited: number }> {
 		const resolved = await this.#policy.existing(start === "" ? "." : start);
 		const startStats = await stat(resolved);
 		if (startStats.isFile()) {
 			return {
-				entries: [{ path: start, kind: "file", size: startStats.size, modifiedAt: Math.floor(startStats.mtimeMs) }],
+				entries: [
+					{
+						path: start,
+						kind: "file",
+						size: startStats.size,
+						modifiedAt: Math.floor(startStats.mtimeMs),
+					},
+				],
 				truncated: false,
 				visited: 1,
 			};
@@ -440,9 +453,12 @@ export class WorkspaceSearcher {
 			}
 			// `start` and its ancestors were already loaded by #layersFor, so only a
 			// directory the walk descended into can contribute a new layer.
-			const layers = current.path !== start && children.some((child) => child.name === ".gitignore" && child.isFile())
-				? [...current.layers, await this.#loadLayer(current.path)].filter((layer): layer is IgnoreLayer => layer !== undefined)
-				: current.layers;
+			const layers =
+				current.path !== start && children.some((child) => child.name === ".gitignore" && child.isFile())
+					? [...current.layers, await this.#loadLayer(current.path)].filter(
+							(layer): layer is IgnoreLayer => layer !== undefined
+						)
+					: current.layers;
 			for (const child of children) {
 				if (child.isSymbolicLink() || this.#ignoredNames.has(child.name)) continue;
 				const directory = child.isDirectory();

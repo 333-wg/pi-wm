@@ -1,0 +1,104 @@
+{
+	"evaluatedAt": "2026-09-06T11:35:26.609Z",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"scope": "isolated read-only real-model skill routing and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "debug-en",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 5578,
+				"outputTokens": 240,
+				"cacheReadTokens": 2638,
+				"cacheWriteTokens": 0,
+				"totalTokens": 8456,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "review-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "recovery-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "manual-explicit",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skill:manual-check", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": ["manual-check"],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		}
+	]
+}

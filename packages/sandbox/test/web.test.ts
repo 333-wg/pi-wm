@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedWebResolution, isPublicWebAddress, isSupportedTextContentType, parseBingItems, parseDuckDuckGoItems, SafeWebClient, validateWebUrl } from "../src/index.js";
+import {
+	isAllowedWebResolution,
+	isPublicWebAddress,
+	isSupportedTextContentType,
+	parseBingItems,
+	parseDuckDuckGoItems,
+	SafeWebClient,
+	validateWebUrl,
+} from "../src/index.js";
 
 describe("safe web access", () => {
 	it("accepts only public HTTP(S) URLs on their standard ports", () => {
@@ -14,11 +22,22 @@ describe("safe web access", () => {
 			"http://10.0.0.1",
 			"http://[::ffff:127.0.0.1]",
 			"https://example.com:8443",
-		]) expect(() => validateWebUrl(value)).toThrow();
+		])
+			expect(() => validateWebUrl(value)).toThrow();
 	});
 
 	it("classifies private, reserved, and public addresses", () => {
-		for (const address of ["0.0.0.0", "10.1.2.3", "100.64.1.1", "127.0.0.1", "192.168.1.1", "::1", "fc00::1", "fe80::1", "2001:db8::1"]) {
+		for (const address of [
+			"0.0.0.0",
+			"10.1.2.3",
+			"100.64.1.1",
+			"127.0.0.1",
+			"192.168.1.1",
+			"::1",
+			"fc00::1",
+			"fe80::1",
+			"2001:db8::1",
+		]) {
 			expect(isPublicWebAddress(address)).toBe(false);
 		}
 		expect(isPublicWebAddress("8.8.8.8")).toBe(true);
@@ -33,7 +52,8 @@ describe("safe web access", () => {
 			"application/xhtml+xml; charset=UTF-8",
 			"application/problem+json",
 			"application/atom+xml",
-		]) expect(isSupportedTextContentType(contentType)).toBe(true);
+		])
+			expect(isSupportedTextContentType(contentType)).toBe(true);
 
 		for (const contentType of ["application/octet-stream", "image/png", "textual/html", ""]) {
 			expect(isSupportedTextContentType(contentType)).toBe(false);
@@ -41,8 +61,12 @@ describe("safe web access", () => {
 	});
 
 	it("rejects a public-looking hostname when DNS resolves to a private address", async () => {
-		const client = new SafeWebClient({ resolver: async () => [{ address: "127.0.0.1", family: 4 }] });
-		await expect(client.fetch("https://example.com")).rejects.toMatchObject({ code: "network_denied" });
+		const client = new SafeWebClient({
+			resolver: async () => [{ address: "127.0.0.1", family: 4 }],
+		});
+		await expect(client.fetch("https://example.com")).rejects.toMatchObject({
+			code: "network_denied",
+		});
 	});
 
 	it("applies the web deadline while DNS resolution is pending", async () => {
@@ -50,7 +74,9 @@ describe("safe web access", () => {
 			timeoutMs: 20,
 			resolver: () => new Promise(() => {}),
 		});
-		await expect(client.fetch("https://example.com")).rejects.toMatchObject({ code: "network_timeout" });
+		await expect(client.fetch("https://example.com")).rejects.toMatchObject({
+			code: "network_timeout",
+		});
 	});
 
 	it("cancels while DNS resolution is pending", async () => {
@@ -68,20 +94,30 @@ describe("safe web access", () => {
 	});
 
 	it("parses structured DuckDuckGo HTML results and unwraps redirect URLs", () => {
-		const items = parseDuckDuckGoItems(`
+		const items = parseDuckDuckGoItems(
+			`
 			<div class="result">
 				<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs">Example docs</a>
 				<a class="result__snippet">Useful <b>documentation</b>.</a>
 			</div>
-		`, 5);
-		expect(items).toEqual([{ title: "Example docs", url: "https://example.com/docs", snippet: "Useful documentation." }]);
+		`,
+			5
+		);
+		expect(items).toEqual([
+			{ title: "Example docs", url: "https://example.com/docs", snippet: "Useful documentation." },
+		]);
 	});
 
 	it("parses structured Bing HTML results", () => {
-		expect(parseBingItems(`
+		expect(
+			parseBingItems(
+				`
 			<li class="b_algo"><h2><a href="https://example.com/docs">Example docs</a></h2>
 			<div class="b_caption"><p>Useful <strong>documentation</strong>.</p></div></li>
-		`, 5)).toEqual([{ title: "Example docs", url: "https://example.com/docs", snippet: "Useful documentation." }]);
+		`,
+				5
+			)
+		).toEqual([{ title: "Example docs", url: "https://example.com/docs", snippet: "Useful documentation." }]);
 	});
 
 	it("validates search configuration without exposing secrets", async () => {

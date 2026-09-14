@@ -1,32 +1,46 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f7f8f6" />
-    <title>Wuming</title>
-    <script>
-      // Resolves the stored theme before first paint so a dark-mode user never
-      // sees a light flash. Mirrors src/lib/theme.ts — keep the key, the choice
-      // values, and the two background colours in sync.
-      (function () {
-        try {
-          var choice = localStorage.getItem("wuming.theme");
-          if (choice !== "light" && choice !== "dark") {
-            choice = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-          }
-          document.documentElement.dataset.theme = choice;
-          document
-            .querySelector('meta[name="theme-color"]')
-            .setAttribute("content", choice === "dark" ? "#0e120f" : "#f7f8f6");
-        } catch (error) {
-          document.documentElement.dataset.theme = "light";
-        }
-      })();
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="theme-color" content="#f7f8f6" />
+		<title>Wuming</title>
+		<script>
+			// Resolve the stored interface language before React boots so the root
+			// document metadata is correct on the first paint as well.
+			(function () {
+				try {
+					var locale = localStorage.getItem("wuming.locale");
+					if (locale !== "en") locale = "zh";
+					document.documentElement.dataset.locale = locale;
+					document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
+				} catch (error) {
+					document.documentElement.dataset.locale = "zh";
+					document.documentElement.lang = "zh-CN";
+				}
+			})();
+
+			// Resolves the stored theme before first paint so a dark-mode user never
+			// sees a light flash. Mirrors src/lib/theme.ts — keep the key, the choice
+			// values, and the two background colours in sync.
+			(function () {
+				try {
+					var choice = localStorage.getItem("wuming.theme");
+					if (choice !== "light" && choice !== "dark") {
+						choice = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+					}
+					document.documentElement.dataset.theme = choice;
+					document
+						.querySelector('meta[name="theme-color"]')
+						.setAttribute("content", choice === "dark" ? "#0e120f" : "#f7f8f6");
+				} catch (error) {
+					document.documentElement.dataset.theme = "light";
+				}
+			})();
+		</script>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="/src/main.tsx"></script>
+	</body>
 </html>

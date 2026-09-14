@@ -52,7 +52,12 @@ export function CommandPalette({ entries, onClose }: { entries: readonly Palette
 		if (pending) return [];
 		const order = new Map<string, number>();
 		for (const [index, entry] of entries.entries()) if (!order.has(entry.group)) order.set(entry.group, index);
-		const ranked = rankBy(entries, query.trim(), (entry) => [entry.label, entry.detail ?? "", entry.group, ...(entry.keywords ?? [])], 60);
+		const ranked = rankBy(
+			entries,
+			query.trim(),
+			(entry) => [entry.label, entry.detail ?? "", entry.group, ...(entry.keywords ?? [])],
+			60
+		);
 		return ranked.sort((left, right) => (order.get(left.group) ?? 0) - (order.get(right.group) ?? 0));
 	}, [entries, pending, query]);
 
@@ -94,7 +99,14 @@ export function CommandPalette({ entries, onClose }: { entries: readonly Palette
 	let group: string | undefined;
 	return (
 		<div className="modal-backdrop palette-backdrop" role="presentation" onMouseDown={onClose}>
-			<div className="palette" role="dialog" aria-modal="true" aria-label="命令面板" ref={dialog} onMouseDown={(event) => event.stopPropagation()}>
+			<div
+				className="palette"
+				role="dialog"
+				aria-modal="true"
+				aria-label="命令面板"
+				ref={dialog}
+				onMouseDown={(event) => event.stopPropagation()}
+			>
 				<div className="palette-input">
 					{pending ? (
 						<button type="button" className="palette-scope" title="返回命令列表" onClick={leave}>
@@ -112,7 +124,7 @@ export function CommandPalette({ entries, onClose }: { entries: readonly Palette
 						aria-expanded={visible.length > 0}
 						aria-controls="palette-list"
 						{...(visible[activeIndex] ? { "aria-activedescendant": `palette-option-${activeIndex}` } : {})}
-						placeholder={pending ? pending.argumentHint : "搜索命令、会话与面板"}
+						placeholder={pending ? pending.argumentHint : "搜索命令、技能、会话与面板"}
 						value={query}
 						disabled={busy}
 						onChange={(event) => {
@@ -150,14 +162,23 @@ export function CommandPalette({ entries, onClose }: { entries: readonly Palette
 					/>
 					<kbd>Esc</kbd>
 				</div>
-				{error && <div className="palette-error"><CircleAlert size={13} />{error}</div>}
+				{error && (
+					<div className="palette-error">
+						<CircleAlert size={13} />
+						{error}
+					</div>
+				)}
 				{pending ? (
 					<div className="palette-hint">
 						{pending.detail ? `${pending.detail} · ` : ""}输入参数后按 <CornerDownLeft size={11} /> 执行
 					</div>
 				) : (
 					<ul className="palette-list" id="palette-list" role="listbox" aria-label="命令" ref={list}>
-						{visible.length === 0 && <li className="palette-empty" role="presentation">没有匹配的命令</li>}
+						{visible.length === 0 && (
+							<li className="palette-empty" role="presentation">
+								没有匹配的命令
+							</li>
+						)}
 						{visible.map((entry, index) => {
 							const heading = entry.group === group ? undefined : entry.group;
 							group = entry.group;
@@ -189,14 +210,32 @@ export function CommandPalette({ entries, onClose }: { entries: readonly Palette
 				<div className="palette-foot">
 					{pending ? (
 						<>
-							<span><kbd>Esc</kbd>返回命令</span>
-							<span><kbd><CornerDownLeft size={10} /></kbd>执行</span>
+							<span>
+								<kbd>Esc</kbd>返回命令
+							</span>
+							<span>
+								<kbd>
+									<CornerDownLeft size={10} />
+								</kbd>
+								执行
+							</span>
 						</>
 					) : (
 						<>
-							<span><kbd>↑</kbd><kbd>↓</kbd>选择</span>
-							<span><kbd><CornerDownLeft size={10} /></kbd>执行</span>
-							<span><kbd>{modifierLabel()}</kbd><kbd>/</kbd>快捷键</span>
+							<span>
+								<kbd>↑</kbd>
+								<kbd>↓</kbd>选择
+							</span>
+							<span>
+								<kbd>
+									<CornerDownLeft size={10} />
+								</kbd>
+								执行
+							</span>
+							<span>
+								<kbd>{modifierLabel()}</kbd>
+								<kbd>/</kbd>快捷键
+							</span>
 						</>
 					)}
 					<span className="palette-count">{pending ? "等待参数" : `${visible.length} 项`}</span>

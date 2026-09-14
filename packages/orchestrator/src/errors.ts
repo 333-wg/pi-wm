@@ -8,7 +8,7 @@ export class OrchestratorError extends Error {
 			| "lease_lost"
 			| "budget_exceeded"
 			| "corrupt_storage",
-		message: string,
+		message: string
 	) {
 		super(message);
 		this.name = "OrchestratorError";

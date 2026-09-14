@@ -6,7 +6,13 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo, Socket } from "node:net";
-import type { ClientMessage, Command, CommandResult, RunSummary, ServerMessage } from "../packages/protocol/src/index.js";
+import type {
+	ClientMessage,
+	Command,
+	CommandResult,
+	RunSummary,
+	ServerMessage,
+} from "../packages/protocol/src/index.js";
 import { CustomModelRegistry } from "../apps/gateway/src/custom-models.js";
 import WebSocket from "ws";
 
@@ -27,13 +33,19 @@ function bearerProtocol(value: string): string {
 
 function requestText(body: unknown): string {
 	if (!body || typeof body !== "object" || !("messages" in body) || !Array.isArray(body.messages)) return "";
-	return body.messages.map((message) => {
-		if (!message || typeof message !== "object" || !("content" in message)) return "";
-		const content = message.content;
-		if (typeof content === "string") return content;
-		if (!Array.isArray(content)) return "";
-		return content.map((part) => part && typeof part === "object" && "text" in part && typeof part.text === "string" ? part.text : "").join(" ");
-	}).join("\n");
+	return body.messages
+		.map((message) => {
+			if (!message || typeof message !== "object" || !("content" in message)) return "";
+			const content = message.content;
+			if (typeof content === "string") return content;
+			if (!Array.isArray(content)) return "";
+			return content
+				.map((part) =>
+					part && typeof part === "object" && "text" in part && typeof part.text === "string" ? part.text : ""
+				)
+				.join(" ");
+		})
+		.join("\n");
 }
 
 function markerFor(text: string): string {
@@ -89,7 +101,12 @@ class MockOpenAiServer {
 	async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
 		if (request.method === "GET" && request.url?.endsWith("/models")) {
 			response.setHeader("content-type", "application/json");
-			response.end(JSON.stringify({ object: "list", data: [{ id: modelId, object: "model", owned_by: "wuming-test" }] }));
+			response.end(
+				JSON.stringify({
+					object: "list",
+					data: [{ id: modelId, object: "model", owned_by: "wuming-test" }],
+				})
+			);
 			return;
 		}
 		if (request.method !== "POST" || !request.url?.endsWith("/chat/completions")) {
@@ -114,7 +131,15 @@ class MockOpenAiServer {
 		if (marker === "FAULT_RATE_LIMIT" && attempt === 1) {
 			response.statusCode = 429;
 			response.setHeader("content-type", "application/json");
-			response.end(JSON.stringify({ error: { message: "Injected rate limit", type: "rate_limit_error", code: "rate_limit_exceeded" } }));
+			response.end(
+				JSON.stringify({
+					error: {
+						message: "Injected rate limit",
+						type: "rate_limit_error",
+						code: "rate_limit_exceeded",
+					},
+				})
+			);
 			return;
 		}
 		if (marker === "FAULT_TIMEOUT") {
@@ -140,17 +165,25 @@ class MockOpenAiServer {
 			"cache-control": "no-cache",
 			connection: "keep-alive",
 		});
-		response.write(`data: ${JSON.stringify({ id: randomUUID(), object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: modelId, choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] })}\n\n`);
+		response.write(
+			`data: ${JSON.stringify({ id: randomUUID(), object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: modelId, choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] })}\n\n`
+		);
 	}
 
 	#completeStream(response: ServerResponse, content: string): void {
 		this.#beginStream(response, content);
-		response.write(`data: ${JSON.stringify({ id: randomUUID(), object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: modelId, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 } })}\n\n`);
+		response.write(
+			`data: ${JSON.stringify({ id: randomUUID(), object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: modelId, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 } })}\n\n`
+		);
 		response.end("data: [DONE]\n\n");
 	}
 }
 
-async function startGateway(dataDir: string, workspace: string, agentDir: string): Promise<{ child: ChildProcess; port: number; logs: () => string }> {
+async function startGateway(
+	dataDir: string,
+	workspace: string,
+	agentDir: string
+): Promise<{ child: ChildProcess; port: number; logs: () => string }> {
 	const child = spawn(process.execPath, ["--import", "tsx", "apps/gateway/src/main.ts"], {
 		cwd: process.cwd(),
 		env: {
@@ -177,8 +210,12 @@ async function startGateway(dataDir: string, workspace: string, agentDir: string
 	children.add(child);
 	let output = "";
 	let errors = "";
-	child.stdout?.on("data", (chunk) => { output += String(chunk); });
-	child.stderr?.on("data", (chunk) => { errors += String(chunk); });
+	child.stdout?.on("data", (chunk) => {
+		output += String(chunk);
+	});
+	child.stderr?.on("data", (chunk) => {
+		errors += String(chunk);
+	});
 	const port = await new Promise<number>((resolvePort, reject) => {
 		const timeout = setTimeout(() => reject(new Error(`Gateway startup timed out\n${output}\n${errors}`)), 20_000);
 		const inspect = () => {
@@ -242,8 +279,18 @@ class Client {
 
 	async request(command: Command): Promise<CommandResult> {
 		const requestId = randomUUID();
-		this.ws.send(JSON.stringify({ type: "request", requestId, idempotencyKey: requestId, command } satisfies ClientMessage));
-		const response = await this.waitFor((message) => message.type === "response" && message.requestId === requestId, command.type);
+		this.ws.send(
+			JSON.stringify({
+				type: "request",
+				requestId,
+				idempotencyKey: requestId,
+				command,
+			} satisfies ClientMessage)
+		);
+		const response = await this.waitFor(
+			(message) => message.type === "response" && message.requestId === requestId,
+			command.type
+		);
 		assert(response.type === "response", "Expected command response");
 		if (!response.ok) throw new Error(`${command.type}: ${response.error.code}: ${response.error.message}`);
 		return response.result;
@@ -257,13 +304,27 @@ async function openClient(port: number, clientId: string): Promise<Client> {
 		ws.once("error", reject);
 	});
 	const client = new Client(ws);
-	ws.send(JSON.stringify({ type: "hello", protocolVersion: 1, clientId, capabilities: ["session.resume"] } satisfies ClientMessage));
+	ws.send(
+		JSON.stringify({
+			type: "hello",
+			protocolVersion: 1,
+			clientId,
+			capabilities: ["session.resume"],
+		} satisfies ClientMessage)
+	);
 	await client.waitFor((message) => message.type === "hello", "gateway hello");
 	return client;
 }
 
 async function createSession(client: Client): Promise<string> {
-	const result = await client.request({ type: "session.create", workspaceId: "local-workspace", model: { provider, id: modelId }, thinkingLevel: "off", sandboxMode: "workspace_write", approvalPolicy: "on_risk" });
+	const result = await client.request({
+		type: "session.create",
+		workspaceId: "local-workspace",
+		model: { provider, id: modelId },
+		thinkingLevel: "off",
+		sandboxMode: "workspace_write",
+		approvalPolicy: "on_risk",
+	});
 	assert(result.type === "session.created", "Session creation failed");
 	return result.snapshot.session.id;
 }
@@ -282,7 +343,11 @@ async function waitForTerminalRun(client: Client, sessionId: string): Promise<Ru
 
 async function runFault(client: Client, marker: string): Promise<{ sessionId: string; run: RunSummary }> {
 	const sessionId = await createSession(client);
-	const accepted = await client.request({ type: "turn.prompt", sessionId, content: [{ type: "text", text: `${marker}: reply briefly` }] });
+	const accepted = await client.request({
+		type: "turn.prompt",
+		sessionId,
+		content: [{ type: "text", text: `${marker}: reply briefly` }],
+	});
 	assert(accepted.type === "turn.accepted", `${marker} turn was not accepted`);
 	return { sessionId, run: await waitForTerminalRun(client, sessionId) };
 }
@@ -296,8 +361,16 @@ async function main(): Promise<void> {
 	let client: Client | undefined;
 	let gateway: Awaited<ReturnType<typeof startGateway>> | undefined;
 	try {
-		await Promise.all([mkdir(dataDir, { recursive: true }), mkdir(workspace, { recursive: true }), mkdir(agentDir, { recursive: true }), mock.start()]);
-		const registry = new CustomModelRegistry({ filePath: join(dataDir, "custom-models.enc"), encryptionKey });
+		await Promise.all([
+			mkdir(dataDir, { recursive: true }),
+			mkdir(workspace, { recursive: true }),
+			mkdir(agentDir, { recursive: true }),
+			mock.start(),
+		]);
+		const registry = new CustomModelRegistry({
+			filePath: join(dataDir, "custom-models.enc"),
+			encryptionKey,
+		});
 		await registry.set({
 			provider,
 			id: modelId,
@@ -315,17 +388,30 @@ async function main(): Promise<void> {
 		client = await openClient(gateway.port, "pi-fault-gate-1");
 
 		const rateLimit = await runFault(client, "FAULT_RATE_LIMIT");
-		assert(rateLimit.run.status === "completed" && rateLimit.run.attempt === 2, `Rate-limit recovery failed: ${JSON.stringify(rateLimit.run)}`);
+		assert(
+			rateLimit.run.status === "completed" && rateLimit.run.attempt === 2,
+			`Rate-limit recovery failed: ${JSON.stringify(rateLimit.run)}`
+		);
 		assert(rateLimit.run.traceId, "Rate-limit run did not retain a trace ID");
 
 		const disconnect = await runFault(client, "FAULT_DISCONNECT");
-		assert(disconnect.run.status === "completed" && disconnect.run.attempt === 2, `Disconnect recovery failed: ${JSON.stringify(disconnect.run)}`);
+		assert(
+			disconnect.run.status === "completed" && disconnect.run.attempt === 2,
+			`Disconnect recovery failed: ${JSON.stringify(disconnect.run)}`
+		);
 
 		const timeout = await runFault(client, "FAULT_TIMEOUT");
-		assert(timeout.run.status === "failed" && timeout.run.failureKind === "provider_timeout", `Timeout classification failed: ${JSON.stringify(timeout.run)}`);
+		assert(
+			timeout.run.status === "failed" && timeout.run.failureKind === "provider_timeout",
+			`Timeout classification failed: ${JSON.stringify(timeout.run)}`
+		);
 
 		const restartSessionId = await createSession(client);
-		const accepted = await client.request({ type: "turn.prompt", sessionId: restartSessionId, content: [{ type: "text", text: "FAULT_RESTART: reply briefly" }] });
+		const accepted = await client.request({
+			type: "turn.prompt",
+			sessionId: restartSessionId,
+			content: [{ type: "text", text: "FAULT_RESTART: reply briefly" }],
+		});
 		assert(accepted.type === "turn.accepted", "Restart turn was not accepted");
 		await mock.waitForRestartRequest();
 		const firstGateway = gateway;
@@ -337,27 +423,69 @@ async function main(): Promise<void> {
 		const attached = await client.request({ type: "session.attach", sessionId: restartSessionId });
 		assert(attached.type === "session.attached", "Restarted session could not be attached");
 		const restartRun = await waitForTerminalRun(client, restartSessionId);
-		assert(restartRun.status === "interrupted" && restartRun.failureKind === "runtime_restart", `Restart reconciliation failed: ${JSON.stringify(restartRun)}`);
+		assert(
+			restartRun.status === "interrupted" && restartRun.failureKind === "runtime_restart",
+			`Restart reconciliation failed: ${JSON.stringify(restartRun)}`
+		);
 		assert(restartRun.traceId, "Restarted run lost its trace ID");
-		const reconciled = await client.request({ type: "session.snapshot.get", sessionId: restartSessionId });
+		const reconciled = await client.request({
+			type: "session.snapshot.get",
+			sessionId: restartSessionId,
+		});
 		assert(reconciled.type === "session.snapshot", "Restarted snapshot query failed");
 		assert(reconciled.snapshot.session.phase === "idle", "Restarted session did not reconcile to idle");
-		assert(reconciled.snapshot.transcript.filter((item) => item.type === "user").length === 1, "Restart duplicated the user message");
-		assert(reconciled.snapshot.transcript.filter((item) => item.type === "assistant").length === 1, "Restart did not record exactly one interrupted assistant item");
-		const continued = await client.request({ type: "turn.prompt", sessionId: restartSessionId, content: [{ type: "text", text: "NORMAL_AFTER_RESTART: reply briefly" }] });
+		assert(
+			reconciled.snapshot.transcript.filter((item) => item.type === "user").length === 1,
+			"Restart duplicated the user message"
+		);
+		assert(
+			reconciled.snapshot.transcript.filter((item) => item.type === "assistant").length === 1,
+			"Restart did not record exactly one interrupted assistant item"
+		);
+		const continued = await client.request({
+			type: "turn.prompt",
+			sessionId: restartSessionId,
+			content: [{ type: "text", text: "NORMAL_AFTER_RESTART: reply briefly" }],
+		});
 		assert(continued.type === "turn.accepted", "Restarted session did not accept a new turn");
 		const continuedRun = await waitForTerminalRun(client, restartSessionId);
-		assert(continuedRun.status === "completed", `Restarted session could not continue: ${JSON.stringify(continuedRun)}`);
+		assert(
+			continuedRun.status === "completed",
+			`Restarted session could not continue: ${JSON.stringify(continuedRun)}`
+		);
 
-		process.stdout.write(`${JSON.stringify({
-			ok: true,
-			scenarios: {
-				rateLimit: { status: rateLimit.run.status, attempts: rateLimit.run.attempt, traceId: rateLimit.run.traceId },
-				disconnect: { status: disconnect.run.status, attempts: disconnect.run.attempt, traceId: disconnect.run.traceId },
-				timeout: { status: timeout.run.status, failureKind: timeout.run.failureKind, traceId: timeout.run.traceId },
-				restart: { status: restartRun.status, failureKind: restartRun.failureKind, traceId: restartRun.traceId, continuedStatus: continuedRun.status },
-			},
-		}, null, 2)}\n`);
+		process.stdout.write(
+			`${JSON.stringify(
+				{
+					ok: true,
+					scenarios: {
+						rateLimit: {
+							status: rateLimit.run.status,
+							attempts: rateLimit.run.attempt,
+							traceId: rateLimit.run.traceId,
+						},
+						disconnect: {
+							status: disconnect.run.status,
+							attempts: disconnect.run.attempt,
+							traceId: disconnect.run.traceId,
+						},
+						timeout: {
+							status: timeout.run.status,
+							failureKind: timeout.run.failureKind,
+							traceId: timeout.run.traceId,
+						},
+						restart: {
+							status: restartRun.status,
+							failureKind: restartRun.failureKind,
+							traceId: restartRun.traceId,
+							continuedStatus: continuedRun.status,
+						},
+					},
+				},
+				null,
+				2
+			)}\n`
+		);
 	} catch (error) {
 		if (gateway) process.stderr.write(gateway.logs());
 		throw error;

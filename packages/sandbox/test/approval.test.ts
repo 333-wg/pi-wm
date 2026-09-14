@@ -3,13 +3,23 @@ import { SessionOrchestrator, SqliteOrchestratorStore } from "@wuming/orchestrat
 import { describe, expect, it } from "vitest";
 import { ApprovalBroker } from "../src/index.js";
 
-const runtime: AgentRuntime = { async executeTurn() { return { items: [] }; } };
+const runtime: AgentRuntime = {
+	async executeTurn() {
+		return { items: [] };
+	},
+};
 
 async function session(
 	store: SqliteOrchestratorStore,
-	options: { sandboxMode?: "read_only" | "workspace_write"; approvalPolicy?: "always" | "on_risk" | "on_failure" | "never" } = {},
+	options: {
+		sandboxMode?: "read_only" | "workspace_write" | "unrestricted";
+		approvalPolicy?: "always" | "on_risk" | "on_failure" | "never";
+	} = {}
 ) {
-	const orchestrator = new SessionOrchestrator(store, runtime, { clock: () => 100, idFactory: () => "session-1" });
+	const orchestrator = new SessionOrchestrator(store, runtime, {
+		clock: () => 100,
+		idFactory: () => "session-1",
+	});
 	return orchestrator.createSession({
 		principalId: "user-1",
 		idempotencyKey: "create-1",
@@ -31,6 +41,56 @@ async function pendingApproval(store: SqliteOrchestratorStore, sessionId: string
 }
 
 describe("ApprovalBroker", () => {
+	it.each(["never", "on_failure"] as const)("refuses sensitive source inspection under %s", async (approvalPolicy) => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const created = await session(store, { approvalPolicy });
+			const broker = new ApprovalBroker({ store });
+			await expect(
+				broker.authorize({
+					sessionId: created.snapshot.session.id,
+					toolCallId: "inspect",
+					risk: "low",
+					summary: "Inspect source",
+					capabilities: [{ type: "filesystem.read", paths: ["SKILL.md"] }],
+					requireExplicitApproval: true,
+				})
+			).rejects.toMatchObject({ code: "approval_denied" });
+			expect(store.loadSnapshot(created.snapshot.session.id)?.pendingApprovals).toEqual([]);
+		} finally {
+			store.close();
+		}
+	});
+
+	it("requires a human decision for sensitive low-risk reads and consumes the permit", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const created = await session(store, { approvalPolicy: "on_risk" });
+			const broker = new ApprovalBroker({ store });
+			const pending = broker.authorize({
+				sessionId: created.snapshot.session.id,
+				toolCallId: "inspect",
+				risk: "low",
+				summary: "Inspect source",
+				capabilities: [{ type: "filesystem.read", paths: ["SKILL.md"] }],
+				requireExplicitApproval: true,
+			});
+			const approval = await pendingApproval(store, created.snapshot.session.id);
+			await broker.respond({
+				principalId: "user-1",
+				idempotencyKey: "inspect-decision",
+				sessionId: created.snapshot.session.id,
+				approvalId: approval.id,
+				decision: "approve",
+			});
+			const permit = await pending;
+			expect(permit).toEqual({ approvalId: approval.id });
+			broker.completeAuthorization(permit!);
+		} finally {
+			store.close();
+		}
+	});
+
 	it("auto-authorizes low-risk reads under on_risk", async () => {
 		const store = new SqliteOrchestratorStore(":memory:");
 		const created = await session(store);
@@ -46,11 +106,36 @@ describe("ApprovalBroker", () => {
 		store.close();
 	});
 
+	it("does not re-prompt full access sessions for risky tools", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const created = await session(store, {
+				sandboxMode: "unrestricted",
+				approvalPolicy: "on_risk",
+			});
+			const broker = new ApprovalBroker({ store });
+			await broker.authorize({
+				sessionId: created.snapshot.session.id,
+				toolCallId: "exec-1",
+				risk: "high",
+				summary: "Run local command",
+				capabilities: [{ type: "process.exec", executable: "cmd.exe", args: ["/c", "npm test"] }],
+			});
+			expect(store.loadSnapshot(created.snapshot.session.id)?.pendingApprovals).toEqual([]);
+		} finally {
+			store.close();
+		}
+	});
+
 	it("persists, settles, resumes, and deduplicates an approved write", async () => {
 		const store = new SqliteOrchestratorStore(":memory:");
 		const created = await session(store);
 		let nextId = 0;
-		const broker = new ApprovalBroker({ store, clock: () => 200, idFactory: () => `approval-${++nextId}` });
+		const broker = new ApprovalBroker({
+			store,
+			clock: () => 200,
+			idFactory: () => `approval-${++nextId}`,
+		});
 		const authorization = broker.authorize({
 			sessionId: created.snapshot.session.id,
 			toolCallId: "write-1",
@@ -80,13 +165,15 @@ describe("ApprovalBroker", () => {
 		const store = new SqliteOrchestratorStore(":memory:");
 		const created = await session(store, { sandboxMode: "read_only", approvalPolicy: "always" });
 		const broker = new ApprovalBroker({ store });
-		await expect(broker.authorize({
-			sessionId: created.snapshot.session.id,
-			toolCallId: "write-1",
-			risk: "high",
-			summary: "Write outside policy",
-			capabilities: [{ type: "filesystem.write", paths: ["file.txt"] }],
-		})).rejects.toMatchObject({ code: "approval_denied" });
+		await expect(
+			broker.authorize({
+				sessionId: created.snapshot.session.id,
+				toolCallId: "write-1",
+				risk: "high",
+				summary: "Write outside policy",
+				capabilities: [{ type: "filesystem.write", paths: ["file.txt"] }],
+			})
+		).rejects.toMatchObject({ code: "approval_denied" });
 		expect(store.loadSnapshot(created.snapshot.session.id)?.pendingApprovals).toEqual([]);
 		store.close();
 	});
@@ -95,20 +182,24 @@ describe("ApprovalBroker", () => {
 		const store = new SqliteOrchestratorStore(":memory:");
 		const created = await session(store, { sandboxMode: "read_only", approvalPolicy: "never" });
 		const broker = new ApprovalBroker({ store });
-		await expect(broker.authorize({
-			sessionId: created.snapshot.session.id,
-			toolCallId: "mcp-read-1",
-			risk: "low",
-			summary: "Read documentation",
-			capabilities: [{ type: "mcp.call", serverId: "docs", toolName: "search", readOnly: true }],
-		})).resolves.toBeUndefined();
-		await expect(broker.authorize({
-			sessionId: created.snapshot.session.id,
-			toolCallId: "mcp-write-1",
-			risk: "high",
-			summary: "Mutate external state",
-			capabilities: [{ type: "mcp.call", serverId: "database", toolName: "execute", readOnly: false }],
-		})).rejects.toMatchObject({ code: "approval_denied" });
+		await expect(
+			broker.authorize({
+				sessionId: created.snapshot.session.id,
+				toolCallId: "mcp-read-1",
+				risk: "low",
+				summary: "Read documentation",
+				capabilities: [{ type: "mcp.call", serverId: "docs", toolName: "search", readOnly: true }],
+			})
+		).resolves.toBeUndefined();
+		await expect(
+			broker.authorize({
+				sessionId: created.snapshot.session.id,
+				toolCallId: "mcp-write-1",
+				risk: "high",
+				summary: "Mutate external state",
+				capabilities: [{ type: "mcp.call", serverId: "database", toolName: "execute", readOnly: false }],
+			})
+		).rejects.toMatchObject({ code: "approval_denied" });
 		store.close();
 	});
 
@@ -116,20 +207,24 @@ describe("ApprovalBroker", () => {
 		const store = new SqliteOrchestratorStore(":memory:");
 		const created = await session(store, { sandboxMode: "read_only", approvalPolicy: "never" });
 		const broker = new ApprovalBroker({ store });
-		await expect(broker.authorize({
-			sessionId: created.snapshot.session.id,
-			toolCallId: "fetch-1",
-			risk: "low",
-			summary: "Fetch documentation",
-			capabilities: [{ type: "network.connect", hosts: ["example.com"] }],
-		})).resolves.toBeUndefined();
-		await expect(broker.authorize({
-			sessionId: created.snapshot.session.id,
-			toolCallId: "process-1",
-			risk: "high",
-			summary: "Run process",
-			capabilities: [{ type: "process.exec", executable: "sh", args: [] }],
-		})).rejects.toMatchObject({ code: "approval_denied" });
+		await expect(
+			broker.authorize({
+				sessionId: created.snapshot.session.id,
+				toolCallId: "fetch-1",
+				risk: "low",
+				summary: "Fetch documentation",
+				capabilities: [{ type: "network.connect", hosts: ["example.com"] }],
+			})
+		).resolves.toBeUndefined();
+		await expect(
+			broker.authorize({
+				sessionId: created.snapshot.session.id,
+				toolCallId: "process-1",
+				risk: "high",
+				summary: "Run process",
+				capabilities: [{ type: "process.exec", executable: "sh", args: [] }],
+			})
+		).rejects.toMatchObject({ code: "approval_denied" });
 		store.close();
 	});
 
@@ -146,7 +241,13 @@ describe("ApprovalBroker", () => {
 			failure: "exit code 1",
 		});
 		const approval = await pendingApproval(store, created.snapshot.session.id);
-		await broker.respond({ principalId: "user-1", idempotencyKey: "retry-approval", sessionId: created.snapshot.session.id, approvalId: approval.id, decision: "approve" });
+		await broker.respond({
+			principalId: "user-1",
+			idempotencyKey: "retry-approval",
+			sessionId: created.snapshot.session.id,
+			approvalId: approval.id,
+			decision: "approve",
+		});
 		const permit = await retry;
 		broker.completeAuthorization(permit);
 		store.close();

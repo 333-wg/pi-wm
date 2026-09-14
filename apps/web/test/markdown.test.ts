@@ -1,4 +1,7 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { Markdown } from "../src/components/Markdown.js";
 import type { BlockNode, InlineNode } from "../src/lib/markdown.js";
 import { parseInline, parseMarkdown } from "../src/lib/markdown.js";
 
@@ -74,8 +77,40 @@ describe("inline emphasis", () => {
 describe("links", () => {
 	it("reads a labelled link and keeps inline markup in the label", () => {
 		expect(parseInline("[the **docs**](https://example.com/a)")).toEqual([
-			{ type: "link", href: "https://example.com/a", children: [text("the "), { type: "strong", children: [text("docs")] }] },
+			{
+				type: "link",
+				href: "https://example.com/a",
+				children: [text("the "), { type: "strong", children: [text("docs")] }],
+			},
 		]);
+	});
+
+	it("keeps URLs and link syntax inside a link label as text", () => {
+		expect(parseInline("[outer https://inner.example](https://outer.example)")).toEqual([
+			{
+				type: "link",
+				href: "https://outer.example",
+				children: [text("outer https://inner.example")],
+			},
+		]);
+		expect(parseInline("[outer [inner](https://inner.example)](https://outer.example)")).toEqual([
+			{
+				type: "link",
+				href: "https://outer.example",
+				children: [text("outer [inner](https://inner.example)")],
+			},
+		]);
+	});
+
+	it("never renders an anchor inside another anchor", () => {
+		const markup = renderToStaticMarkup(
+			createElement(Markdown, {
+				text: "[outer https://inner.example](https://outer.example)",
+			})
+		);
+
+		expect(markup.match(/<a\b/g)).toHaveLength(1);
+		expect(markup).toContain("outer https://inner.example");
 	});
 
 	it("drops a link title and angle brackets around the target", () => {
@@ -131,12 +166,19 @@ describe("link safety", () => {
 describe("headings, rules and paragraphs", () => {
 	it("reads every heading level and drops the closing hashes", () => {
 		expect(only("# Title")).toEqual({ type: "heading", level: 1, children: [text("Title")] });
-		expect(only("###### Deep ###")).toEqual({ type: "heading", level: 6, children: [text("Deep")] });
+		expect(only("###### Deep ###")).toEqual({
+			type: "heading",
+			level: 6,
+			children: [text("Deep")],
+		});
 	});
 
 	it("needs a space and at most six hashes to be a heading", () => {
 		expect(only("#NoSpace")).toEqual({ type: "paragraph", children: [text("#NoSpace")] });
-		expect(only("####### too deep")).toEqual({ type: "paragraph", children: [text("####### too deep")] });
+		expect(only("####### too deep")).toEqual({
+			type: "paragraph",
+			children: [text("####### too deep")],
+		});
 	});
 
 	it("reads a thematic break, including the spaced form", () => {
@@ -155,30 +197,58 @@ describe("headings, rules and paragraphs", () => {
 	});
 
 	it("normalises CRLF before splitting lines", () => {
-		expect(only("one\r\ntwo")).toEqual({ type: "paragraph", children: [text("one"), { type: "break" }, text("two")] });
+		expect(only("one\r\ntwo")).toEqual({
+			type: "paragraph",
+			children: [text("one"), { type: "break" }, text("two")],
+		});
 		// A paragraph trims each line, so the stray `\r` only survives where the
 		// text is kept verbatim.
-		expect(only("```\r\none\r\ntwo\r\n```")).toEqual({ type: "code", lang: "", text: "one\ntwo", open: false });
+		expect(only("```\r\none\r\ntwo\r\n```")).toEqual({
+			type: "code",
+			lang: "",
+			text: "one\ntwo",
+			open: false,
+		});
 	});
 });
 
 describe("fenced code", () => {
 	it("reads the language in lower case and the body verbatim", () => {
-		expect(only("```TS\nconst a = 1;\n```")).toEqual({ type: "code", lang: "ts", text: "const a = 1;", open: false });
+		expect(only("```TS\nconst a = 1;\n```")).toEqual({
+			type: "code",
+			lang: "ts",
+			text: "const a = 1;",
+			open: false,
+		});
 	});
 
 	it("reports an unterminated fence as still open instead of swallowing the rest", () => {
 		// This is the streaming case: the closing fence has not arrived yet.
-		expect(only("```py\nprint(1)")).toEqual({ type: "code", lang: "py", text: "print(1)", open: true });
+		expect(only("```py\nprint(1)")).toEqual({
+			type: "code",
+			lang: "py",
+			text: "print(1)",
+			open: true,
+		});
 	});
 
 	it("accepts tilde fences and strips the fence indentation from the body", () => {
 		expect(only("~~~\nplain\n~~~")).toEqual({ type: "code", lang: "", text: "plain", open: false });
-		expect(only("  ```\n  indented\n  ```")).toEqual({ type: "code", lang: "", text: "indented", open: false });
+		expect(only("  ```\n  indented\n  ```")).toEqual({
+			type: "code",
+			lang: "",
+			text: "indented",
+			open: false,
+		});
 	});
 
 	it("drops the blank lines a model leaves before the closing fence", () => {
-		expect(only("```\nbody\n\n\n```")).toEqual({ type: "code", lang: "", text: "body", open: false });
+		expect(only("```\nbody\n\n\n```")).toEqual({
+			type: "code",
+			lang: "",
+			text: "body",
+			open: false,
+		});
 	});
 
 	it("keeps markdown inside a fence uninterpreted", () => {
@@ -209,13 +279,22 @@ describe("lists", () => {
 	});
 
 	it("calls a list loose once a blank line separates its items", () => {
-		expect(only("- one\n\n- two")).toMatchObject({ type: "list", tight: false, items: [item("one"), item("two")] });
+		expect(only("- one\n\n- two")).toMatchObject({
+			type: "list",
+			tight: false,
+			items: [item("one"), item("two")],
+		});
 	});
 
 	it("nests an indented list inside the item above it", () => {
 		expect(only("- outer\n  - inner")).toMatchObject({
 			type: "list",
-			items: [[{ type: "paragraph", children: [text("outer")] }, { type: "list", items: [item("inner")] }]],
+			items: [
+				[
+					{ type: "paragraph", children: [text("outer")] },
+					{ type: "list", items: [item("inner")] },
+				],
+			],
 		});
 	});
 
@@ -252,7 +331,3 @@ describe("quotes and tables", () => {
 		expect(only("| a | b |")).toMatchObject({ type: "paragraph" });
 	});
 });
-
-
-
-

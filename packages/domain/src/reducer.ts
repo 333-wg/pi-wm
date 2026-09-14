@@ -1,15 +1,17 @@
-import type { ApprovalRequest, SessionSnapshot, TranscriptItem, Usage, UsageToolSummary, UsageTurnSummary } from "@wuming/protocol";
+import type {
+	ApprovalRequest,
+	SessionSnapshot,
+	TranscriptItem,
+	Usage,
+	UsageToolSummary,
+	UsageTurnSummary,
+} from "@wuming/protocol";
 import type { SessionEvent } from "./events.js";
 
 export class SessionInvariantError extends Error {
 	constructor(
-		readonly code:
-			| "missing_creation"
-			| "duplicate_creation"
-			| "session_mismatch"
-			| "revision_gap"
-			| "approval_invalid",
-		message: string,
+		readonly code: "missing_creation" | "duplicate_creation" | "session_mismatch" | "revision_gap" | "approval_invalid",
+		message: string
 	) {
 		super(message);
 		this.name = "SessionInvariantError";
@@ -63,10 +65,18 @@ function upsertUsageTool(items: UsageToolSummary[], tool: UsageToolSummary): Usa
 		toolName: existing.toolName,
 		callCount: existing.callCount + tool.callCount,
 		usage: addUsage(existing.usage, tool.usage),
-		...((existing.durationMs !== undefined || tool.durationMs !== undefined) ? { durationMs: (existing.durationMs ?? 0) + (tool.durationMs ?? 0) } : {}),
-		...((existing.succeededCount !== undefined || tool.succeededCount !== undefined) ? { succeededCount: (existing.succeededCount ?? 0) + (tool.succeededCount ?? 0) } : {}),
-		...((existing.failedCount !== undefined || tool.failedCount !== undefined) ? { failedCount: (existing.failedCount ?? 0) + (tool.failedCount ?? 0) } : {}),
-		...((existing.abortedCount !== undefined || tool.abortedCount !== undefined) ? { abortedCount: (existing.abortedCount ?? 0) + (tool.abortedCount ?? 0) } : {}),
+		...(existing.durationMs !== undefined || tool.durationMs !== undefined
+			? { durationMs: (existing.durationMs ?? 0) + (tool.durationMs ?? 0) }
+			: {}),
+		...(existing.succeededCount !== undefined || tool.succeededCount !== undefined
+			? { succeededCount: (existing.succeededCount ?? 0) + (tool.succeededCount ?? 0) }
+			: {}),
+		...(existing.failedCount !== undefined || tool.failedCount !== undefined
+			? { failedCount: (existing.failedCount ?? 0) + (tool.failedCount ?? 0) }
+			: {}),
+		...(existing.abortedCount !== undefined || tool.abortedCount !== undefined
+			? { abortedCount: (existing.abortedCount ?? 0) + (tool.abortedCount ?? 0) }
+			: {}),
 		...(existing.mcpServerId || tool.mcpServerId ? { mcpServerId: existing.mcpServerId ?? tool.mcpServerId! } : {}),
 		...(existing.mcpToolName || tool.mcpToolName ? { mcpToolName: existing.mcpToolName ?? tool.mcpToolName! } : {}),
 	};
@@ -116,6 +126,7 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 			usageByTool: [],
 			usageByTurn: [],
 			budgetWarnings: [],
+			verificationWarnings: [],
 			...(event.costBudgetUsd === undefined ? {} : { costBudgetUsd: event.costBudgetUsd }),
 			...(event.tokenBudget === undefined ? {} : { tokenBudget: event.tokenBudget }),
 			...(event.budgetWarningThreshold === undefined ? {} : { budgetWarningThreshold: event.budgetWarningThreshold }),
@@ -129,7 +140,7 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 	if (event.revision !== current.revision + 1) {
 		throw new SessionInvariantError(
 			"revision_gap",
-			`Expected revision ${current.revision + 1}, received ${event.revision}`,
+			`Expected revision ${current.revision + 1}, received ${event.revision}`
 		);
 	}
 
@@ -151,17 +162,29 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 				queuedFollowUpCount: event.queuedFollowUpCount,
 			};
 		case "session.model.changed":
-			return { ...next, model: event.model };
+			return {
+				...next,
+				model: event.model,
+				contextUsage: { model: event.model, tokens: null, basis: "unknown" },
+			};
 		case "session.thinking.changed":
 			return { ...next, thinkingLevel: event.thinkingLevel };
 		case "session.policy.changed":
 			return { ...next, sandboxMode: event.sandboxMode, approvalPolicy: event.approvalPolicy };
 		case "approval.requested":
-			return { ...next, pendingApprovals: addPendingApproval(current.pendingApprovals, event.approval) };
+			return {
+				...next,
+				pendingApprovals: addPendingApproval(current.pendingApprovals, event.approval),
+			};
 		case "approval.settled":
-			return { ...next, pendingApprovals: settlePendingApproval(current.pendingApprovals, event.approval) };
+			return {
+				...next,
+				pendingApprovals: settlePendingApproval(current.pendingApprovals, event.approval),
+			};
 		case "session.usage.replaced":
 			return { ...next, usage: event.usage };
+		case "session.context.updated":
+			return { ...next, contextUsage: event.contextUsage };
 		case "session.usage.recorded": {
 			const previousTurns = current.usageByTurn ?? [];
 			const previousModels = current.usageByModel ?? [];
@@ -170,21 +193,72 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 			const existingTurn = turnIndex === -1 ? undefined : previousTurns[turnIndex]!;
 			const requests = turnIndex === -1 ? event.requests : [...(existingTurn?.requests ?? []), ...event.requests];
 			const eventSkills = event.skills ?? [];
-			const skills = turnIndex === -1 ? eventSkills : [...new Set([...(existingTurn?.skills ?? []), ...eventSkills])].slice(0, 8);
-			const turn: UsageTurnSummary = turnIndex === -1
-				? { turnId: event.turnId, mode: event.mode, model: event.model, attempts: event.attempt, usage: event.usage, tools: event.tools, requests, skills }
-				: { turnId: existingTurn!.turnId, mode: existingTurn!.mode, model: existingTurn!.model, attempts: Math.max(existingTurn!.attempts, event.attempt), usage: addUsage(existingTurn!.usage, event.usage), tools: event.tools.reduce(upsertUsageTool, existingTurn!.tools), requests, skills };
-		const turns = [...previousTurns];
-		if (turnIndex === -1) turns.push(turn); else turns[turnIndex] = turn;
-		const modelIndex = previousModels.findIndex((candidate) => candidate.model.provider === event.model.provider && candidate.model.id === event.model.id);
-		const models = [...previousModels];
-		if (modelIndex === -1) models.push({ model: event.model, turnCount: 1, usage: event.usage });
-		else { const existingModel = models[modelIndex]!; models[modelIndex] = { model: existingModel.model, usage: addUsage(existingModel.usage, event.usage), turnCount: existingModel.turnCount + (turnIndex === -1 ? 1 : 0) }; }
-		const tools = event.tools.reduce(upsertUsageTool, previousTools);
-		return { ...next, usageByTurn: turns.slice(-500), usageByModel: models.slice(-100), usageByTool: tools.slice(-500) };
+			const skills =
+				turnIndex === -1 ? eventSkills : [...new Set([...(existingTurn?.skills ?? []), ...eventSkills])].slice(0, 128);
+			const turn: UsageTurnSummary =
+				turnIndex === -1
+					? {
+							turnId: event.turnId,
+							mode: event.mode,
+							model: event.model,
+							attempts: event.attempt,
+							usage: event.usage,
+							tools: event.tools,
+							requests,
+							skills,
+						}
+					: {
+							turnId: existingTurn!.turnId,
+							mode: existingTurn!.mode,
+							model: existingTurn!.model,
+							attempts: Math.max(existingTurn!.attempts, event.attempt),
+							usage: addUsage(existingTurn!.usage, event.usage),
+							tools: event.tools.reduce(upsertUsageTool, existingTurn!.tools),
+							requests,
+							skills,
+						};
+			const turns = [...previousTurns];
+			if (turnIndex === -1) turns.push(turn);
+			else turns[turnIndex] = turn;
+			const modelIndex = previousModels.findIndex(
+				(candidate) => candidate.model.provider === event.model.provider && candidate.model.id === event.model.id
+			);
+			const models = [...previousModels];
+			if (modelIndex === -1) models.push({ model: event.model, turnCount: 1, usage: event.usage });
+			else {
+				const existingModel = models[modelIndex]!;
+				models[modelIndex] = {
+					model: existingModel.model,
+					usage: addUsage(existingModel.usage, event.usage),
+					turnCount: existingModel.turnCount + (turnIndex === -1 ? 1 : 0),
+				};
+			}
+			const tools = event.tools.reduce(upsertUsageTool, previousTools);
+			return {
+				...next,
+				usageByTurn: turns.slice(-500),
+				usageByModel: models.slice(-100),
+				usageByTool: tools.slice(-500),
+			};
 		}
 		case "session.budget.warning":
-			return { ...next, budgetWarnings: [...(current.budgetWarnings ?? []), event.warning].slice(-32) };
+			return {
+				...next,
+				budgetWarnings: [...(current.budgetWarnings ?? []), event.warning].slice(-32),
+			};
+		case "session.verification.missing":
+			return {
+				...next,
+				verificationWarnings: [
+					...(current.verificationWarnings ?? []),
+					{
+						id: event.eventId,
+						operationId: event.operationId,
+						changedTools: event.changedTools,
+						createdAt: event.timestamp,
+					},
+				].slice(-32),
+			};
 		case "session.budget.changed": {
 			const budgeted = { ...next };
 			if (event.costBudgetUsd === null) delete budgeted.costBudgetUsd;
@@ -205,9 +279,10 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 			const { archivedAt: _previousArchivedAt, ...sessionWithoutArchive } = next.session;
 			return {
 				...next,
-				session: event.archivedAt === undefined
-					? sessionWithoutArchive
-					: { ...sessionWithoutArchive, archivedAt: event.archivedAt },
+				session:
+					event.archivedAt === undefined
+						? sessionWithoutArchive
+						: { ...sessionWithoutArchive, archivedAt: event.archivedAt },
 			};
 		}
 	}

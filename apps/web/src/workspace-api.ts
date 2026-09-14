@@ -1,7 +1,17 @@
-import type { GitDiff, GitStatus, WorkspaceDirectory, WorkspaceFileView, WorkspaceSearch, WorkspaceSummary } from "@wuming/protocol";
+import type {
+	GitDiff,
+	GitStatus,
+	GitAction,
+	GitActionResult,
+	GitDetails,
+	WorkspaceDirectory,
+	WorkspaceFileView,
+	WorkspaceSearch,
+	WorkspaceSummary,
+} from "@wuming/protocol";
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
-	const value = await response.json().catch(() => ({})) as { error?: string };
+	const value = (await response.json().catch(() => ({}))) as { error?: string };
 	return new Error(value.error ?? `${fallback}，状态码 ${response.status}`);
 }
 
@@ -22,6 +32,18 @@ function workspacePath(workspaceId: string, suffix: string): string {
 }
 
 export const workspaceApi = {
+	gitDetails(token: string, workspaceId: string) {
+		return get<GitDetails>(token, workspacePath(workspaceId, "git/details"));
+	},
+	async gitAction(token: string, workspaceId: string, action: GitAction) {
+		const response = await fetch(workspacePath(workspaceId, "git/action"), {
+			method: "POST",
+			headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+			body: JSON.stringify(action),
+		});
+		if (!response.ok) throw await responseError(response, "Git 操作失败");
+		return response.json() as Promise<GitActionResult>;
+	},
 	async pickProject(token: string) {
 		const response = await fetch("/api/projects/pick", {
 			method: "POST",
@@ -80,7 +102,10 @@ export const workspaceApi = {
 		return get<WorkspaceDirectory>(token, workspacePath(workspaceId, "tree"), { path });
 	},
 	search(token: string, workspaceId: string, query: string, limit = 20) {
-		return get<WorkspaceSearch>(token, workspacePath(workspaceId, "search"), { query, limit: String(limit) });
+		return get<WorkspaceSearch>(token, workspacePath(workspaceId, "search"), {
+			query,
+			limit: String(limit),
+		});
 	},
 	read(token: string, workspaceId: string, path: string) {
 		return get<WorkspaceFileView>(token, workspacePath(workspaceId, "file"), { path });

@@ -1,0 +1,206 @@
+{
+	"evaluatedAt": "2026-09-06T11:26:04.561Z",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"scope": "isolated read-only real-model skill routing and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "greeting-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 2658,
+				"outputTokens": 71,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 2729,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "translation-zh",
+			"passed": true,
+			"operationStatus": "completed",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 2358,
+				"outputTokens": 52,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 2410,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "debug-en",
+			"passed": false,
+			"operationStatus": "completed",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": true,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 3
+					}
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					}
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "math.js"
+					}
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 3,
+						"path": ".wuming"
+					}
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": ".wuming/skills/manual-check/SKILL.md"
+					}
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 5,
+						"path": ".wuming/skills"
+					}
+				},
+				{
+					"name": "skill_list",
+					"status": "complete",
+					"input": {}
+				}
+			],
+			"usage": {
+				"inputTokens": 4500,
+				"outputTokens": 970,
+				"cacheReadTokens": 10619,
+				"cacheWriteTokens": 0,
+				"totalTokens": 16089,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "review-zh",
+			"passed": false,
+			"operationStatus": "completed",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"depth": 2
+					}
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "math.js"
+					}
+				}
+			],
+			"usage": {
+				"inputTokens": 432,
+				"outputTokens": 489,
+				"cacheReadTokens": 7483,
+				"cacheWriteTokens": 0,
+				"totalTokens": 8404,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "recovery-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "manual-explicit",
+			"passed": false,
+			"operationStatus": "failed",
+			"used": ["manual-check"],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		}
+	]
+}

@@ -91,9 +91,16 @@ export class ImportedProjectCatalog {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 		if (!manifest) return catalog;
-		if (manifest.version !== 1 || !Array.isArray(manifest.projects)) throw new Error("Imported project manifest is invalid");
+		if (manifest.version !== 1 || !Array.isArray(manifest.projects))
+			throw new Error("Imported project manifest is invalid");
 		for (const record of manifest.projects) {
-			if (!record || typeof record.id !== "string" || typeof record.name !== "string" || typeof record.path !== "string") continue;
+			if (
+				!record ||
+				typeof record.id !== "string" ||
+				typeof record.name !== "string" ||
+				typeof record.path !== "string"
+			)
+				continue;
 			const path = resolve(record.path);
 			try {
 				if (!(await stat(path)).isDirectory()) continue;
@@ -106,7 +113,9 @@ export class ImportedProjectCatalog {
 	}
 
 	configurations(): WorkspaceConfiguration[] {
-		return [...this.#projects.values()].filter((project) => project.hiddenAt === undefined).map(({ id, name, path }) => ({ id, name, path }));
+		return [...this.#projects.values()]
+			.filter((project) => project.hiddenAt === undefined)
+			.map(({ id, name, path }) => ({ id, name, path }));
 	}
 
 	async addLocal(pathValue: string, kind: "file" | "directory"): Promise<WorkspaceSummary> {
@@ -165,10 +174,12 @@ export class ImportedProjectCatalog {
 		const path = safeRelativePath(pathValue);
 		const replacing = draft.files.has(path);
 		if (!replacing && draft.files.size >= this.#maxFiles) throw projectError("Project contains too many files", 413);
-		if (draft.totalBytes + content.length > this.#maxTotalBytes) throw projectError("Project exceeds the total upload limit", 413);
+		if (draft.totalBytes + content.length > this.#maxTotalBytes)
+			throw projectError("Project exceeds the total upload limit", 413);
 		const target = resolve(draft.path, ...path.split("/"));
 		const escaped = relative(draft.path, target);
-		if (escaped.startsWith(`..${sep}`) || escaped === "..") throw projectError("Project file path escapes the project", 400);
+		if (escaped.startsWith(`..${sep}`) || escaped === "..")
+			throw projectError("Project file path escapes the project", 400);
 		await mkdir(dirname(target), { recursive: true });
 		await writeFile(target, content);
 		if (!replacing) draft.files.add(path);
@@ -176,7 +187,10 @@ export class ImportedProjectCatalog {
 		draft.updatedAt = this.#clock();
 	}
 
-	async complete(ownerId: string, projectId: string): Promise<{ configuration: WorkspaceConfiguration; workspace: WorkspaceSummary }> {
+	async complete(
+		ownerId: string,
+		projectId: string
+	): Promise<{ configuration: WorkspaceConfiguration; workspace: WorkspaceSummary }> {
 		const draft = this.#ownedDraft(ownerId, projectId);
 		if (draft.files.size === 0) throw projectError("Project must contain at least one file", 400);
 		const record: ImportedProjectRecord = {
@@ -224,7 +238,10 @@ export class ImportedProjectCatalog {
 	}
 
 	async #save(): Promise<void> {
-		const manifest: ImportedProjectManifest = { version: 1, projects: [...this.#projects.values()] };
+		const manifest: ImportedProjectManifest = {
+			version: 1,
+			projects: [...this.#projects.values()],
+		};
 		const temporary = `${this.#manifestPath}.${process.pid}.tmp`;
 		await writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 		await rename(temporary, this.#manifestPath);

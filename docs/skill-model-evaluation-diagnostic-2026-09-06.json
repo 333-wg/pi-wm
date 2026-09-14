@@ -1,0 +1,174 @@
+{
+	"evaluatedAt": "2026-09-06T11:32:36.976Z",
+	"provider": "custom-api456-me-58cddd0f64",
+	"modelId": "deepseek-v4-pro",
+	"scope": "isolated read-only real-model skill routing and recovery smoke; not broad benchmark coverage",
+	"cases": [
+		{
+			"id": "debug-zh",
+			"passed": false,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "## 排查结果\n\n### 1. `config.txt` 读取失败原因\n\n`config.txt` 在工作区根目录中**不存在**，系统返回 `ENOENT: no such file or directory` 错误。根目录下仅存在以下文件：\n\n| 文件 | 存在 |\n|------|------|\n| `config.txt` | ❌ 不存在 |\n| `config.local.txt` | ✅ 存在 |\n| `math.js` | ✅ 存在 |\n| `.wuming/` | ✅ 存在 |\n\n### 2. 可用配置文件及 proof 字段原值\n\n实际存在的配置文件是 **`config.local.txt`**，其内容为：\n\n```\nproof=SKILL_PROOF_fcf98a2a-438d-4e7c-a2a3-2b5ffa171fe2\n```\n\n**proof 字段原值**：`SKILL_PROOF_fcf98a2a-438d-4e7c-a2a3-2b5ffa171fe2`\n\n**依据**：该值直接来自工作区根目录下 `config.local.txt` 文件的读取结果（通过 `read_file` 工具读取，文件大小 55 字节，内容为单行 `proof=SKILL_PROOF_fcf98a2a-438d-4e7c-a2a3-2b5ffa171fe2`）。这是当前工作区中唯一包含 `proof` 字段的有效配置文件。",
+			"used": [],
+			"firstFailure": 3,
+			"laterRead": true,
+			"midTurnLoad": false,
+			"proofVerified": true,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": "."
+					},
+					"output": ".: 3 entry(ies)\n.wuming/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": ".wuming"
+					},
+					"output": ".wuming: 1 entry(ies)\n.wuming/skills/"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "config.local.txt"
+					},
+					"output": "proof=SKILL_PROOF_fcf98a2a-438d-4e7c-a2a3-2b5ffa171fe2\n"
+				},
+				{
+					"name": "read_file",
+					"status": "error",
+					"input": {
+						"path": "config.txt"
+					},
+					"output": "ENOENT: no such file or directory, realpath 'C:\\Users\\Administrator\\AppData\\Local\\Temp\\wuming-real-skills-zpnXOY\\workspace\\config.txt'\n\nWuming recovery (configuration, attempt 1): Inspect actual paths, dependencies and available tools. Correct the prerequisite or choose an authorized alternative."
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": ".wuming/skills"
+					},
+					"output": ".wuming/skills: 1 entry(ies)\n.wuming/skills/manual-check/\nRecovery observation: {\"status\":\"changed_attempt_succeeded\",\"previousTool\":\"read_file\",\"tool\":\"ls\",\"inputDigest\":\"43e088c99a9ecd9c0d8c6db29bd3d63b4e25ed6790fc689ac89f279ed8b17268\"}. A changed tool/input succeeded; this alone does not prove the original task is complete."
+				},
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {
+						"path": ".wuming/skills/manual-check"
+					},
+					"output": ".wuming/skills/manual-check: 1 entry(ies)\n.wuming/skills/manual-check/SKILL.md\t187\nRecovery observation: {\"status\":\"changed_attempt_succeeded\",\"previousTool\":\"read_file\",\"tool\":\"ls\",\"inputDigest\":\"a625ff44eb489b87c9c19808ed33143ec575ae2261b5e9663f4d055bd837547d\"}. A changed tool/input succeeded; this alone does not prove the original task is complete."
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": ".wuming/skills/manual-check/SKILL.md"
+					},
+					"output": "---\nname: manual-check\ndescription: A manually selected diagnostic reply\ndisable-model-invocation: true\n---\nFor this diagnostic request reply exactly MANUAL_SKILL_OK. No tools are needed.\nRecovery observation: {\"status\":\"changed_attempt_succeeded\",\"previousTool\":\"read_file\",\"tool\":\"read_file\",\"inputDigest\":\"13d9af4fd038a95398265eb7c899a784706be1c105d21fdec7375dbecac42f86\"}. A changed tool/input succeeded; this alone does not prove the original task is complete."
+				}
+			],
+			"usage": {
+				"inputTokens": 7809,
+				"outputTokens": 1192,
+				"cacheReadTokens": 11643,
+				"cacheWriteTokens": 0,
+				"totalTokens": 20644,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "review-zh",
+			"passed": false,
+			"operationStatus": "completed",
+			"error": "",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "## math.js `add` 函数审查结果\n\n### 代码\n\n```javascript\nexport function add(a, b) { return a - b; }\n```\n\n### 确定存在的问题\n\n**逻辑错误**：`add` 函数名表示\"加法\"，但实现却返回 `a - b`（减法）。\n\n- 函数名：`add`（应执行加法）\n- 实际实现：`a - b`（执行的是减法）\n\n### 影响\n\n任何调用此函数的代码都会得到错误的计算结果。例如：\n\n| 预期 | 实际 |\n|------|------|\n| `add(3, 2) = 5` | 返回 `1` |\n| `add(10, 5) = 15` | 返回 `5` |\n\n### 结论\n\n这是一个**确定存在的 bug**：`add` 函数的实现与函数名/语义不匹配，应将 `-` 改为 `+`。",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [
+				{
+					"name": "ls",
+					"status": "complete",
+					"input": {},
+					"output": ".: 3 entry(ies)\n.wuming/\nconfig.local.txt\t55\nmath.js\t44"
+				},
+				{
+					"name": "read_file",
+					"status": "complete",
+					"input": {
+						"path": "C:/Users/Administrator/AppData/Local/Temp/wuming-real-skills-zpnXOY/workspace/math.js"
+					},
+					"output": "export function add(a, b) { return a - b; }\n"
+				}
+			],
+			"usage": {
+				"inputTokens": 3113,
+				"outputTokens": 390,
+				"cacheReadTokens": 4470,
+				"cacheWriteTokens": 0,
+				"totalTokens": 7973,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "recovery-zh",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": [],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": false,
+			"tools": [],
+			"usage": {
+				"inputTokens": 121,
+				"outputTokens": 54,
+				"cacheReadTokens": 2235,
+				"cacheWriteTokens": 0,
+				"totalTokens": 2410,
+				"costUsd": 0
+			}
+		},
+		{
+			"id": "manual-explicit",
+			"passed": false,
+			"operationStatus": "failed",
+			"error": "429: {\"message\":\"openai_error\",\"type\":\"bad_response_status_code\",\"param\":\"\",\"code\":\"bad_response_status_code\"}",
+			"failureKind": "provider",
+			"contextFragments": ["system:base", "skill:manual-check", "skills:discovery"],
+			"contextOmitted": [],
+			"finalReply": "",
+			"used": ["manual-check"],
+			"firstFailure": -1,
+			"laterRead": false,
+			"midTurnLoad": false,
+			"proofVerified": null,
+			"tools": [],
+			"usage": {
+				"inputTokens": 0,
+				"outputTokens": 0,
+				"cacheReadTokens": 0,
+				"cacheWriteTokens": 0,
+				"totalTokens": 0,
+				"costUsd": 0
+			}
+		}
+	]
+}

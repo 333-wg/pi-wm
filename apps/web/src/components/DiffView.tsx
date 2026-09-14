@@ -1,11 +1,5 @@
 import { memo, useMemo } from "react";
-import {
-	collapseContext,
-	countChanges,
-	diffLines,
-	type DiffRow,
-	parseUnifiedDiff,
-} from "../lib/diff";
+import { collapseContext, countChanges, diffLines, type DiffRow, parseUnifiedDiff, splitDiffRows } from "../lib/diff";
 
 function DiffRows({ rows, numbered = true }: { rows: DiffRow[]; numbered?: boolean }) {
 	return (
@@ -25,7 +19,7 @@ function DiffRows({ rows, numbered = true }: { rows: DiffRow[]; numbered?: boole
 						<span className="diff-marker">{row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "}</span>
 						<span className="diff-text">{row.text || " "}</span>
 					</div>
-				),
+				)
 			)}
 		</div>
 	);
@@ -67,7 +61,7 @@ export function editDiffStat(before: string, after: string): { added: number; re
 	return countChanges(diffLines(before, after));
 }
 
-export const UnifiedDiff = memo(function UnifiedDiff({ patch }: { patch: string }) {
+export const UnifiedDiff = memo(function UnifiedDiff({ patch, split = false }: { patch: string; split?: boolean }) {
 	const parsed = useMemo(() => parseUnifiedDiff(patch), [patch]);
 	if (parsed.binary) return <p className="empty-hint">二进制文件差异无法显示。</p>;
 	if (parsed.hunks.length === 0) return <p className="empty-hint">没有可显示的差异。</p>;
@@ -76,7 +70,22 @@ export const UnifiedDiff = memo(function UnifiedDiff({ patch }: { patch: string 
 			{parsed.hunks.map((hunk, index) => (
 				<div className="diff-hunk" key={index}>
 					<div className="diff-hunk-header">{hunk.header}</div>
-					<DiffRows rows={hunk.lines} />
+					{split ? (
+						<div className="diff-split">
+							{splitDiffRows(hunk.lines).map((pair, row) => (
+								<div className="diff-split-row" key={row}>
+									{pair.map((line, side) => (
+										<div className={`diff-split-cell ${line?.kind ?? "empty"}`} key={side}>
+											<span className="diff-gutter">{side === 0 ? line?.oldNumber : line?.newNumber}</span>
+											<span className="diff-text">{line?.text || " "}</span>
+										</div>
+									))}
+								</div>
+							))}
+						</div>
+					) : (
+						<DiffRows rows={hunk.lines} />
+					)}
 				</div>
 			))}
 		</div>

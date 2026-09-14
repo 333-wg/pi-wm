@@ -30,7 +30,7 @@ export interface ThemeState {
  */
 export function useTheme(): ThemeState {
 	const [choice, setChoice] = useState<ThemeChoice>(() =>
-		readStoredChoice(typeof window === "undefined" ? undefined : window.localStorage),
+		readStoredChoice(typeof window === "undefined" ? undefined : window.localStorage)
 	);
 	const [systemDark, setSystemDark] = useState(prefersDark);
 
