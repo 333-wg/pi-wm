@@ -48,6 +48,7 @@ import { workspaceApi } from "./workspace-api.js";
 import { readStoredPermission, writeStoredPermission } from "./lib/permission-preference.js";
 import { readStoredThinking, thinkingLevelForModel, writeStoredThinking } from "./lib/thinking-preference.js";
 import { isImplicitWorkspace } from "./lib/workspaces.js";
+import { desktopConnection } from "./lib/desktop.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -207,7 +208,9 @@ function upsertTranscript(snapshot: SessionSnapshot, item: SessionSnapshot["tran
 
 export function useWumingClient() {
 	const liveOrder = useRef(0);
-	const [token, setTokenState] = useState(() => localStorage.getItem("wuming.token") ?? "");
+	const [token, setTokenState] = useState(
+		() => desktopConnection()?.token ?? localStorage.getItem("wuming.token") ?? ""
+	);
 	const [reconnectAttempt, setReconnectAttempt] = useState(0);
 	const [state, setState] = useState<ClientState>(initialState);
 	useEffect(() => {
@@ -752,7 +755,10 @@ export function useWumingClient() {
 		}
 		setState((current) => ({ ...current, connection: "connecting", error: undefined }));
 		const scheme = location.protocol === "https:" ? "wss" : "ws";
-		const ws = new WebSocket(`${scheme}://${location.host}/api/ws`, ["wuming.v1", bearerProtocol(token)]);
+		const ws = new WebSocket(desktopConnection()?.websocketUrl ?? `${scheme}://${location.host}/api/ws`, [
+			"wuming.v1",
+			bearerProtocol(token),
+		]);
 
 		const request = (command: Command, idempotencyKey = id()) =>
 			new Promise<CommandResult>((resolve, reject) => {
@@ -794,7 +800,7 @@ export function useWumingClient() {
 
 		const applyMessage = (message: ServerMessage) => {
 			if (message.type === "hello") {
-				localStorage.setItem("wuming.token", token);
+				if (!desktopConnection()) localStorage.setItem("wuming.token", token);
 				capabilitiesRef.current = message.capabilities;
 				setState((current) => ({
 					...current,

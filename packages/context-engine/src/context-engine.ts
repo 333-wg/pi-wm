@@ -119,10 +119,13 @@ function renderSystemPrompt(baseSystemPrompt: string, selected: SelectedCandidat
 }
 
 function selectedOrder(left: SelectedCandidate, right: SelectedCandidate): number {
+	const scope = cacheScope(left.fragment);
 	return (
-		CACHE_ORDER[cacheScope(left.fragment)] - CACHE_ORDER[cacheScope(right.fragment)] ||
+		CACHE_ORDER[scope] - CACHE_ORDER[cacheScope(right.fragment)] ||
 		Number(Boolean(right.fragment.required)) - Number(Boolean(left.fragment.required)) ||
-		right.score - left.score ||
+		// Relevance chooses what fits; it must not reorder an unchanged reusable prefix.
+		priority(right.fragment) - priority(left.fragment) ||
+		KIND_WEIGHT[right.fragment.kind] - KIND_WEIGHT[left.fragment.kind] ||
 		left.fragment.id.localeCompare(right.fragment.id)
 	);
 }

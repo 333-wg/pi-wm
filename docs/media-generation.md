@@ -60,7 +60,7 @@ Skills use these host tools instead of embedding credentials or provider scripts
 ```text
 media_model_status({})
 generate_image({ prompt, model?, size?, quality?, referenceArtifactId? })
-generate_video({ prompt, size?, seconds? })
+generate_video({ prompt, size?, seconds?, aspectRatio?, referenceArtifactId?, referenceImageUrl? })
 get_generated_video({ jobId })
 ```
 
@@ -99,15 +99,88 @@ Generation requires a writable session and follows its approval policy for
 network and secret use. There are no automatic billable POST retries. Fees
 charged by media providers are not included in conversational token accounting.
 
+## Video Adapters and References
+
+Video settings default to automatic protocol selection. The registry in
+`apps/gateway/src/media-video.ts` owns capabilities, validation, serialization,
+remote task IDs, polling paths and result normalization. Extend that registry
+for a documented provider contract, rather than branching in tool execution.
+
+- Official Agnes v2.0 uses the legacy adapter. Official Agnes 2.5 and 2.5 Flash
+  automatically use the new `agnes-v2.5` adapter.
+- Other endpoints retain OpenAI Videos-compatible transport. Known Sora models
+  receive their duration and size limits; unrelated models do not inherit them.
+  Unknown native Agnes models fail before submission.
+- Settings can override transport once per service: OpenAI multipart, OpenAI
+  JSON, Agnes v2.0 or Agnes 2.5. A relay's model name does not prove its protocol.
+  Custom native APIs still need dedicated adapters. This is not universal
+  compatibility with arbitrary vendor APIs. Detection never creates paid jobs.
+
+The status tool and host policy expose the actual video model and secret-free
+`videoCapabilities`: protocol, validation confidence, durations, resolutions,
+aspect ratios and reference transports. A successful status lookup is only
+diagnostic, not proof of successful generation.
+
+Agnes 2.5 sends JSON with `mode`, resolution tier `size`, `aspect_ratio` and
+string `seconds` (4-12). Flash supports only 720P; standard 2.5 also supports
+1080P, 1K and 2K. Prefer `aspectRatio` and omit size for default 720P. Legacy
+pixel-size arguments are aspect-ratio hints for this tier-based API:
+1024x1024 maps to 720P/1:1, not exact 1024-pixel output. Normalized parameters
+are returned with the job. Unsupported explicit tiers or durations are rejected,
+not silently downgraded or shortened.
+
+Use one reference input, never both:
+
+- `referenceArtifactId`: an existing workspace image. The backend validates
+  workspace access, byte limits and PNG/JPEG/WebP type. It uploads multipart
+  `input_reference`, or Base64-encodes it as JSON `input_reference.image_url`.
+  Base64 stays out of model context, tool arguments, results and job metadata.
+- `referenceImageUrl`: an existing public HTTPS image URL. Agnes 2.5 submits
+  `images: [url]` with `mode: reference`; compatible JSON uses
+  `input_reference.image_url`. Refer to `<Picture 1>` in Agnes prompts.
+
+OpenAI's image-reference contract explicitly accepts Base64 Data URLs. Agnes
+2.5 documentation requires publicly reachable image URLs and does not document
+Base64 acceptance. A real completed generation on 2026-09-14 nevertheless
+verified `images: ["data:image/png;base64,..."]` on the official
+`agnes-video-2.5-flash` endpoint. The adapter now automatically Base64-encodes
+workspace references for that exact model/host and reports verified capability.
+No settings change or public image hosting is needed. Standard 2.5 and relays
+do not inherit this verification; their documented default remains public URL.
+The service-level **Force Base64 Data URL** override is available for other
+connections with independently established support and is marked compatibility
+mode, not verified support. Its preference is saved once, not per skill.
+Rejections never fall back to text-only video, public hosting or another POST.
+
+The live test requested 4 seconds, 720P, 1:1 with one synthetic reference image.
+One submission completed and produced a decodable, visibly moving MP4 retaining
+the reference appearance. The actual file was 960x960 and 4.458333 seconds, so
+resolution tiers and requested durations are not treated as exact file metadata.
+The result used top-level `url`, not the documented `metadata.url`; both response
+forms are supported. See `agnes-video-reference-verification-2026-09-14.json`.
+The test never submitted a raw-Base64 fallback because the first format succeeded.
+
+Sources checked for these contracts:
+
+- `https://agnes-ai.com/en/docs/agnes-video-25.md`
+- `https://agnes-ai.com/en/docs/agnes-video-25-flash.md`
+- `https://github.com/openai/openai-node/blob/master/src/resources/videos.ts`
+
+Errors preserve bounded diagnostic fields with credentials, signed URLs,
+inline media and bearer tokens redacted. Raw provider bodies are not persisted.
+A failed video submission blocks further submissions in the same turn even
+after a changed prompt or successful settings lookup. A fresh user-directed
+turn can retry; preflight errors before submission can be corrected directly.
+
 ## Video Jobs and Display
 
 The official `agnes-video-v2.0` model at `https://apihub.agnes-ai.com/v1`
-(or the bare origin) automatically uses the Agnes adapter. Other models, custom
-path prefixes, and third-party hosts continue to use the OpenAI transport.
+(or the bare origin) automatically uses the legacy Agnes adapter. Agnes 2.5 and
+Flash use the newer adapter above; relays default to OpenAI transport.
 Agnes creation sends JSON to `POST <base>/videos` and requires `video_id` in
 the response; it does not guess that a legacy `id` is a video ID. Retrieval uses
 `GET /agnesapi?video_id=...&model_name=agnes-video-v2.0` on the configured
-origin, then downloads the completed `metadata.url` through the same public-DNS
+origin, then downloads the completed `metadata.url` or top-level `url` through the same public-DNS
 pinning and byte-limited downloader used for image results, without the API key.
 The adapter follows the official video reference and Python example:
 
@@ -121,6 +194,8 @@ limit; longer requests are rejected before authorization or submission, never
 silently shortened. This adapter currently covers text-to-video only.
 Each job persists its submission protocol. Existing job databases migrate with
 the OpenAI default, preserving old polling paths and connection fingerprints.
+Changing a protocol or reference-format preference does not alter the polling
+protocol or connection identity of an already submitted job.
 No failed or interrupted submission automatically switches protocols or retries.
 
 The OpenAI video adapter uses multipart `POST <base>/videos`,
@@ -128,6 +203,14 @@ The OpenAI video adapter uses multipart `POST <base>/videos`,
 Creation returns a locally scoped job ID persisted in `media-jobs.db`.
 Retrieval waits up to 60 seconds before returning pending; subsequent retrievals
 do not submit new jobs. Jobs are bound to the session and original connection.
+New jobs wait 30 seconds before the first status query, then 45 seconds and up to
+60 seconds between pending responses. Schedules and query leases are persisted:
+repeated/concurrent tool calls and gateway restarts cannot reset the wait.
+Retrieval HTTP 429 and transient server/network errors remain pending instead of
+triggering the generic repeated-tool-failure guard. Backoff starts at 60 seconds,
+doubles up to 300 seconds, and honors a longer Retry-After (seconds or HTTP date).
+HTTP 429 also cools down other jobs on the same saved connection. Pending output
+includes the next query time; waiting remains cancellable and never resubmits.
 Completed MP4/WebM files become authenticated, persistent artifacts. Retrieval
 survives a gateway restart and reuses an already stored artifact.
 

@@ -1,15 +1,4 @@
-import {
-	Activity,
-	AlertCircle,
-	Check,
-	ExternalLink,
-	Maximize2,
-	Pause,
-	Play,
-	Target,
-	Trash2,
-	Wrench,
-} from "lucide-react";
+import { Activity, AlertCircle, Check, ExternalLink, Pause, Play, Target, Trash2, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { GoalSummary } from "@wuming/protocol";
 import type { LiveGoalActivity } from "../use-wuming-client.js";
@@ -50,7 +39,6 @@ export function GoalActivityCard({
 	onResume,
 	onCancel,
 	onDelete,
-	onOpen,
 	onOpenRun,
 	activity,
 }: {
@@ -62,7 +50,6 @@ export function GoalActivityCard({
 	onResume: (goalId: string) => Promise<GoalSummary>;
 	onCancel: (goalId: string) => Promise<GoalSummary>;
 	onDelete: (goalId: string) => Promise<string>;
-	onOpen: () => void;
 	onOpenRun: (sessionId: string) => Promise<void>;
 }) {
 	const active = isRunning(goal.status);
@@ -111,7 +98,9 @@ export function GoalActivityCard({
 			<div className="goal-activity-copy">
 				<div className="goal-activity-heading">
 					<strong>{statusText(goal)}</strong>
-					<span className="goal-activity-elapsed">{goal.objective}</span>
+					<span className="goal-activity-objective" title={goal.objective}>
+						{goal.objective}
+					</span>
 					<span className="goal-activity-dot">•</span>
 					<span className="goal-activity-elapsed">{elapsed}</span>
 				</div>
@@ -207,15 +196,6 @@ export function GoalActivityCard({
 						<span className="goal-activity-stop" />
 					</button>
 				)}
-				<button
-					type="button"
-					className="goal-activity-icon-button"
-					title="打开目标详情"
-					aria-label="打开目标详情"
-					onClick={onOpen}
-				>
-					<Maximize2 size={15} />
-				</button>
 			</div>
 		</article>
 	);

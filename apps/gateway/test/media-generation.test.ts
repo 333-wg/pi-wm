@@ -50,7 +50,9 @@ async function fixture() {
 	const download = vi.fn().mockResolvedValue(png);
 	const approvals = { authorize: vi.fn().mockResolvedValue(undefined), completeAuthorization: vi.fn() };
 	const services: MediaGenerationService[] = [];
-	const service = () => {
+	const service = (
+		timing: Pick<ConstructorParameters<typeof MediaGenerationService>[0], "pollMs" | "now" | "wait"> = {}
+	) => {
 		const value = new MediaGenerationService({
 			models,
 			artifacts,
@@ -58,6 +60,7 @@ async function fixture() {
 			fetch: fetchMock,
 			download,
 			pollMs: 1,
+			...timing,
 		});
 		services.push(value);
 		return value;
@@ -311,6 +314,145 @@ describe("image generation via official and relay endpoints", () => {
 });
 
 describe("durable video generation", () => {
+	it("uses Agnes 2.5 Flash automatically and preserves the submitted protocol across preference changes", async () => {
+		const f = await fixture();
+		await f.configure("video", "https://apihub.agnes-ai.com/v1", "agnes-video-2.5-flash");
+		f.fetchMock.mockResolvedValueOnce(json({ id: "task_id", video_id: "video_id" }));
+		const submitted = await f.invoke("generate_video", { prompt: "scene", size: "1024x1024", seconds: 8 });
+		expect(JSON.parse(f.fetchMock.mock.calls[0]![1]!.body as string)).toMatchObject({
+			size: "720P",
+			aspect_ratio: "1:1",
+			mode: "text",
+		});
+		const jobId = (submitted.details as { jobId: string }).jobId;
+		await f.models.set({
+			kind: "video",
+			baseUrl: "https://apihub.agnes-ai.com/v1",
+			model: "agnes-video-2.5-flash",
+			videoProtocol: "openai",
+			videoReferenceFormat: "data-url",
+		});
+		f.fetchMock.mockResolvedValueOnce(
+			json({ status: "completed", metadata: { url: "https://cdn.example/video.mp4" } })
+		);
+		f.download.mockResolvedValueOnce(mp4);
+		expect((await f.invoke("get_generated_video", { jobId })).details).toHaveProperty("artifact");
+		expect(String(f.fetchMock.mock.calls[1]![0])).toContain(
+			"/agnesapi?video_id=video_id&model_name=agnes-video-2.5-flash"
+		);
+	});
+	it.each(["openai", "openai-json"] as const)(
+		"sends workspace image references using %s without exposing Base64 in results",
+		async (videoProtocol) => {
+			const f = await fixture();
+			await f.configure("video");
+			await f.models.set({
+				kind: "video",
+				baseUrl: "https://relay.example/v1",
+				model: "video-custom-id",
+				videoProtocol,
+			});
+			const artifact = await f.artifacts.create({
+				workspaceId: "workspace",
+				ownerId: "user",
+				name: "reference.png",
+				content: png,
+			});
+			f.fetchMock.mockResolvedValueOnce(json({ id: "video_123" }));
+			const result = await f.invoke("generate_video", {
+				prompt: "Animate reference",
+				referenceArtifactId: artifact.ref.id,
+			});
+			const request = f.fetchMock.mock.calls[0]![1]!;
+			if (videoProtocol === "openai") expect((request.body as FormData).get("input_reference")).toBeInstanceOf(Blob);
+			else
+				expect(JSON.parse(request.body as string).input_reference.image_url).toBe(
+					"data:image/png;base64," + png.toString("base64")
+				);
+			expect(JSON.stringify(result)).not.toContain(png.toString("base64"));
+			expect(JSON.stringify(result)).not.toContain("private-media-key");
+		}
+	);
+	it("automatically encodes official Flash references and retrieves live top-level URL results", async () => {
+		const f = await fixture();
+		await f.configure("video", "https://apihub.agnes-ai.com/v1", "agnes-video-2.5-flash");
+		const artifact = await f.artifacts.create({
+			workspaceId: "workspace",
+			ownerId: "user",
+			name: "reference.png",
+			content: png,
+		});
+		const params = { prompt: "Animate <Picture 1>", referenceArtifactId: artifact.ref.id };
+		f.fetchMock.mockResolvedValueOnce(json({ video_id: "video_123" }));
+		const submitted = await f.invoke("generate_video", params);
+		expect(JSON.parse(f.fetchMock.mock.calls[0]![1]!.body as string)).toMatchObject({
+			mode: "reference",
+			images: ["data:image/png;base64," + png.toString("base64")],
+		});
+		f.fetchMock.mockResolvedValueOnce(json({ status: "completed", url: "https://cdn.example/video.mp4" }));
+		f.download.mockResolvedValueOnce(mp4);
+		const result = await f.invoke("get_generated_video", { jobId: (submitted.details as { jobId: string }).jobId });
+		expect(result.details).toHaveProperty("artifact");
+		expect(f.fetchMock).toHaveBeenCalledTimes(2);
+		expect(f.download).toHaveBeenCalledWith("https://cdn.example/video.mp4", {
+			maxBytes: 100 * 1024 * 1024,
+			signal: expect.any(AbortSignal),
+		});
+	});
+	it("rejects inaccessible references and invalid parameters without submission", async () => {
+		const f = await fixture();
+		await f.configure("video");
+		const artifact = await f.artifacts.create({
+			workspaceId: "other-workspace",
+			ownerId: "user",
+			name: "private.png",
+			content: png,
+		});
+		await expect(f.invoke("generate_video", { prompt: "scene", referenceArtifactId: artifact.ref.id })).rejects.toThrow(
+			"not accessible"
+		);
+		await f.configure("video", "https://apihub.agnes-ai.com/v1", "agnes-video-2.5-flash");
+		await expect(f.invoke("generate_video", { prompt: "scene", size: "1080P" })).rejects.toThrow(
+			"Unsupported video resolution"
+		);
+		expect(f.fetchMock).not.toHaveBeenCalled();
+	});
+	it("returns useful sanitized provider errors without resubmitting or persisting a job", async () => {
+		const f = await fixture();
+		await f.configure("video");
+		f.fetchMock.mockResolvedValueOnce(
+			json({ detail: "size must be 720P; key=private-media-key; see https://example.com?token=signed-secret" }, 400)
+		);
+		const result = f.invoke("generate_video", { prompt: "scene" });
+		await expect(result).rejects.toMatchObject({
+			code: "media_submission_failed",
+			details: { httpStatus: 400, retryable: false },
+		});
+		await expect(result).rejects.toThrow("size must be 720P");
+		await expect(result).rejects.not.toThrow("private-media-key");
+		await expect(result).rejects.not.toThrow("signed-secret");
+		expect(f.fetchMock).toHaveBeenCalledTimes(1);
+	});
+	it("lists the actual video model and its capabilities without network access or secrets", async () => {
+		const f = await fixture();
+		await f.configure("video", "https://apihub.agnes-ai.com/v1", "agnes-video-2.5-flash");
+		const result = await f.invoke("media_model_status", {});
+		const status = JSON.parse((result.content[0] as { text: string }).text).defaults[1];
+		expect(status).toMatchObject({
+			configured: true,
+			defaultModel: "agnes-video-2.5-flash",
+			videoCapabilities: {
+				protocol: "agnes-v2.5",
+				validation: "verified",
+				sizes: ["720P"],
+				referenceInputs: ["artifact", "public-url"],
+				artifactTransport: "data-url",
+			},
+		});
+		expect(JSON.stringify(result)).not.toContain("apihub.agnes-ai.com");
+		expect(JSON.stringify(result)).not.toContain("private-media-key");
+		expect(f.fetchMock).not.toHaveBeenCalled();
+	});
 	it("submits Agnes JSON once, prefers video_id, and retrieves a durable attachment without forwarding credentials", async () => {
 		const f = await fixture();
 		await f.configure("video", "https://apihub.agnes-ai.com/v1", "agnes-video-v2.0");
@@ -456,6 +598,138 @@ describe("durable video generation", () => {
 		await expect(f.invoke("get_generated_video", { jobId }, snapshot("another-session"))).rejects.toThrow(
 			"does not exist"
 		);
+	});
+
+	it("waits gradually across retrieval calls and service restarts without resubmitting", async () => {
+		const f = await fixture();
+		await f.configure("video");
+		let now = 1_800_000_000_000;
+		const start = now;
+		const waits: number[] = [];
+		const timing = {
+			pollMs: 30_000,
+			now: () => now,
+			wait: async (ms: number, signal: AbortSignal) => {
+				signal.throwIfAborted();
+				waits.push(ms);
+				now += ms;
+			},
+		};
+		f.fetchMock
+			.mockResolvedValueOnce(json({ id: "video_slow" }))
+			.mockResolvedValueOnce(json({ status: "pending" }))
+			.mockResolvedValueOnce(json({ status: "completed" }))
+			.mockResolvedValueOnce(new Response(new Uint8Array(mp4)));
+		const submitted = await f.invoke("generate_video", { prompt: "scene" }, snapshot(), undefined, f.service(timing));
+		const params = { jobId: (submitted.details as { jobId: string }).jobId };
+		const first = await f.invoke("get_generated_video", params, snapshot(), undefined, f.service(timing));
+		expect(first.content).toEqual(
+			expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("pending") })])
+		);
+		expect(now - start).toBe(60_000);
+		expect(f.fetchMock).toHaveBeenCalledTimes(2);
+		const completed = await f.invoke("get_generated_video", params, snapshot(), undefined, f.service(timing));
+		expect(completed.details).toHaveProperty("artifact");
+		expect(waits).toEqual([30_000, 30_000, 15_000]);
+		expect(f.fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+	});
+
+	it("returns pending for 429, persists Retry-After and later completes the same job", async () => {
+		const f = await fixture();
+		await f.configure("video");
+		let now = 1_800_000_000_000;
+		const start = now;
+		const timing = {
+			pollMs: 30_000,
+			now: () => now,
+			wait: async (ms: number, signal: AbortSignal) => {
+				signal.throwIfAborted();
+				now += ms;
+			},
+		};
+		f.fetchMock
+			.mockResolvedValueOnce(json({ id: "video_throttled" }))
+			.mockResolvedValueOnce(
+				new Response("too many video status queries", { status: 429, headers: { "retry-after": "120" } })
+			)
+			.mockResolvedValueOnce(json({ status: "completed" }))
+			.mockResolvedValueOnce(new Response(new Uint8Array(mp4)));
+		const submitted = await f.invoke("generate_video", { prompt: "scene" }, snapshot(), undefined, f.service(timing));
+		const params = { jobId: (submitted.details as { jobId: string }).jobId };
+		for (const elapsed of [60_000, 120_000]) {
+			const pending = await f.invoke("get_generated_video", params, snapshot(), undefined, f.service(timing));
+			expect(pending.content).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ text: expect.stringContaining("rate_limited_or_unavailable") }),
+				])
+			);
+			expect(f.fetchMock).toHaveBeenCalledTimes(2);
+			expect(now - start).toBe(elapsed);
+		}
+		expect(
+			(await f.invoke("get_generated_video", params, snapshot(), undefined, f.service(timing))).details
+		).toHaveProperty("artifact");
+		expect(now - start).toBe(150_000);
+		expect(f.fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+	});
+
+	it.each(["network", "503"])("defers transient %s errors without failing or resubmitting", async (failure) => {
+		const f = await fixture();
+		await f.configure("video");
+		let now = 1_800_000_000_000;
+		const timing = {
+			pollMs: 30_000,
+			now: () => now,
+			wait: async (ms: number) => {
+				now += ms;
+			},
+		};
+		f.fetchMock.mockResolvedValueOnce(json({ id: "video_transient" }));
+		if (failure === "network") f.fetchMock.mockRejectedValueOnce(new Error("connection reset"));
+		else f.fetchMock.mockResolvedValueOnce(json({ error: "busy" }, 503));
+		const submitted = await f.invoke("generate_video", { prompt: "scene" }, snapshot(), undefined, f.service(timing));
+		const result = await f.invoke(
+			"get_generated_video",
+			{ jobId: (submitted.details as { jobId: string }).jobId },
+			snapshot(),
+			undefined,
+			f.service(timing)
+		);
+		expect(result.details).toHaveProperty("jobId");
+		expect(f.fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not duplicate in-flight retrieval across instances and can cancel the waiting caller", async () => {
+		const f = await fixture();
+		await f.configure("video");
+		let resolveResponse!: (response: Response) => void;
+		let started!: () => void;
+		const queryStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		f.fetchMock
+			.mockResolvedValueOnce(json({ id: "video_concurrent" }))
+			.mockImplementationOnce(() => {
+				started();
+				return new Promise<Response>((resolve) => {
+					resolveResponse = resolve;
+				});
+			})
+			.mockResolvedValueOnce(new Response(new Uint8Array(mp4)));
+		const submitted = await f.invoke("generate_video", { prompt: "scene" });
+		const params = { jobId: (submitted.details as { jobId: string }).jobId };
+		const first = f.invoke("get_generated_video", params);
+		await queryStarted;
+		const controller = new AbortController();
+		const second = f.invoke("get_generated_video", params, snapshot(), controller.signal);
+		const aborted = expect(second).rejects.toThrow();
+		controller.abort();
+		await aborted;
+		expect(f.fetchMock).toHaveBeenCalledTimes(2);
+		resolveResponse(json({ status: "completed" }));
+		expect((await first).details).toHaveProperty("artifact");
+		expect((await f.invoke("get_generated_video", params)).details).toHaveProperty("artifact");
+		expect(f.fetchMock).toHaveBeenCalledTimes(3);
 	});
 
 	it("reports provider failure without downloading or resubmitting", async () => {

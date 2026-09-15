@@ -1,4 +1,7 @@
-# Wuming Web
+# Pi-Wm
+
+Pi-Wm is the desktop product name. Internal `@wuming/*` packages, protocol names,
+and existing Wuming data directories remain unchanged for compatibility.
 
 Local-first coding agent built around Pi. The React workbench connects to a
 loopback Wuming host on the user's computer; that local host owns the workspace,
@@ -19,6 +22,11 @@ See:
 - `packages/protocol` for the executable TypeBox contract.
 
 ## Run locally
+
+For the Windows desktop app and installer, see `docs/desktop.md`.
+Developers can run `npm run desktop`; `npm run desktop:dist` creates the
+self-contained Windows x64 internal-test installer. Desktop mode does not
+require the user to start a server or enter the development password.
 
 Requires Node.js 22.19 or newer.
 
@@ -81,6 +89,13 @@ automatic supersession, release it, or forget it. Forgetting physically removes
 the summary and leaves only a body-free audit tombstone; Run history still shows
 how many memories an operation created. Set
 `WUMING_PI_AUTO_COMPACTION=false` only when another layer owns compaction.
+Prompt caching uses deterministic context rendering and canonical tool/schema
+ordering while retaining live workspace updates and provider-native cache controls.
+Leave `WUMING_PI_CACHE_RETENTION` unset to retain Pi/provider defaults, or explicitly
+choose `short`, `long`, or `none`. Long retention requires compatible model/provider
+settings and can increase cache-write costs; `none` removes SDK cache directives
+but cannot guarantee that a provider disables automatic caching. See
+[prompt cache optimization](docs/prompt-cache-optimization.md) for scope and verification.
 The Agents tab creates independent durable child sessions that inherit the
 parent model, sandbox, and approval policy. Each child has its own transcript,
 operation, approvals, and optional cost/token limits; it continues in the

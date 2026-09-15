@@ -8,6 +8,60 @@ const invoke = (tool: ToolDefinition, params = {}, signal?: AbortSignal) =>
 const success = { content: [{ type: "text" as const, text: "ok" }], details: {} };
 
 describe("tool failure feedback", () => {
+	it("blocks changed billable submissions after a provider failure, even after successful status inspection", async () => {
+		let calls = 0;
+		const monitor = new ToolRecoveryMonitor(true);
+		const tool = monitor.wrap(
+			defineTool({
+				name: "generate_video",
+				label: "video",
+				description: "video",
+				parameters: Type.Object({ prompt: Type.String() }),
+				async execute() {
+					calls++;
+					throw Object.assign(new Error("HTTP 400 size must be 720P; do not retry"), {
+						code: "media_submission_failed",
+					});
+				},
+			})
+		);
+		await expect(invoke(tool, { prompt: "first" })).rejects.toMatchObject({ code: "media_submission_failed" });
+		const statusTool = monitor.wrap(
+			defineTool({
+				name: "media_model_status",
+				label: "status",
+				description: "status",
+				parameters: Type.Object({}),
+				async execute() {
+					return success;
+				},
+			})
+		);
+		expect((await invoke(statusTool)).details).toMatchObject({ wumingRecovery: { status: "diagnostic_succeeded" } });
+		await expect(invoke(tool, { prompt: "different" })).rejects.toMatchObject({ code: "media_submission_blocked" });
+		expect(calls).toBe(1);
+		monitor.reset();
+		await expect(invoke(tool, { prompt: "user-directed retry" })).rejects.toMatchObject({
+			code: "media_submission_failed",
+		});
+		expect(calls).toBe(2);
+	});
+	it("allows correcting a validation error before any media submission", async () => {
+		const tool = new ToolRecoveryMonitor().wrap(
+			defineTool({
+				name: "generate_video",
+				label: "video",
+				description: "video",
+				parameters: Type.Object({ seconds: Type.Integer() }),
+				async execute(_id, params) {
+					if (params.seconds > 12) throw new Error("Invalid duration");
+					return success;
+				},
+			})
+		);
+		await expect(invoke(tool, { seconds: 120 })).rejects.toThrow("Invalid duration");
+		expect((await invoke(tool, { seconds: 8 })).content[0]).toMatchObject({ text: "ok" });
+	});
 	it("reminds about skill reassessment only when the capability is available", async () => {
 		const definition = defineTool({
 			name: "read_file",

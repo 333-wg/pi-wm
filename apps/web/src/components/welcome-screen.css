@@ -1,0 +1,523 @@
+.welcome-screen {
+	--welcome-ink: #214f3b;
+	--welcome-muted: #50745f;
+	--welcome-line: #dbece1;
+	--welcome-accent: #216d49;
+	--welcome-paper: #fff;
+	--welcome-tint: #f4faf6;
+	--welcome-error: #a33932;
+	color-scheme: light;
+	min-height: 100dvh;
+	height: 100dvh;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	color: var(--welcome-ink);
+	background: linear-gradient(125deg, #e1f2e7 0%, #f5f8ee 48%, #f5f3e2 100%);
+	font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+	letter-spacing: 0;
+}
+.welcome-screen *,
+.welcome-screen *::before,
+.welcome-screen *::after {
+	box-sizing: border-box;
+}
+.welcome-screen h1,
+.welcome-screen h2,
+.welcome-screen p {
+	margin: 0;
+}
+.welcome-header {
+	height: 76px;
+	flex: 0 0 auto;
+	background: transparent;
+}
+.welcome-header-inner {
+	max-width: 1216px;
+	height: 100%;
+	margin: auto;
+	padding: 0 32px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 24px;
+}
+.welcome-brand {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 23px;
+	font-weight: 650;
+	white-space: nowrap;
+}
+.welcome-brand img {
+	width: 39px;
+	height: 39px;
+}
+.welcome-brand-chinese {
+	font-family: "KaiTi", "STKaiti", serif;
+	font-size: 23px;
+	margin-left: 14px;
+	padding-left: 14px;
+	border-left: 1px solid var(--welcome-line);
+}
+.welcome-header-note,
+.welcome-private {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--welcome-muted);
+	font-size: 13px;
+}
+.welcome-main {
+	width: min(100%, 1044px);
+	flex-shrink: 0;
+	margin: 0 auto;
+	padding: 65px 32px 48px;
+}
+.welcome-eyebrow {
+	color: var(--welcome-muted);
+	font-size: 12px;
+	font-weight: 600;
+}
+.welcome-intro h1 {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-top: 12px;
+	font-size: 34px;
+	line-height: 1.4;
+	font-weight: 600;
+}
+.welcome-intro h1 img {
+	width: 43px;
+	height: 43px;
+}
+.welcome-intro .welcome-description {
+	margin-top: 12px;
+	color: var(--welcome-muted);
+	font-size: 15px;
+	line-height: 1.8;
+}
+.welcome-panel {
+	margin-top: 30px;
+	display: grid;
+	grid-template-columns: 0.95fr 1.05fr;
+	overflow: hidden;
+	border: 1px solid var(--welcome-line);
+	border-radius: 8px;
+	background: var(--welcome-paper);
+	box-shadow: 0 10px 32px #24543c03;
+}
+.welcome-story {
+	padding: 38px 40px 34px;
+}
+.welcome-section-label {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	color: var(--welcome-muted);
+	font-size: 13px;
+	font-weight: 600;
+}
+.welcome-story h2 {
+	font-family: "KaiTi", "STKaiti", "Microsoft YaHei", serif;
+	font-size: 34px;
+	line-height: 1.55;
+	font-weight: 500;
+	margin-top: 26px;
+}
+.welcome-story .welcome-story-copy {
+	color: var(--welcome-muted);
+	font-size: 14px;
+	line-height: 1.95;
+	margin-top: 16px;
+}
+.welcome-signature {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-top: 30px;
+	padding-top: 23px;
+	border-top: 1px solid var(--welcome-line);
+}
+.welcome-signature img {
+	width: 51px;
+	height: 51px;
+	transform: rotate(-10deg);
+}
+.welcome-signature strong {
+	display: block;
+	font-size: 13px;
+	font-weight: 500;
+}
+.welcome-signature span {
+	display: block;
+	margin-top: 7px;
+	color: var(--welcome-muted);
+	font-size: 9px;
+}
+.welcome-form {
+	padding: 37px 40px 30px;
+	border-left: 1px solid var(--welcome-line);
+	background: var(--welcome-tint);
+	min-width: 0;
+}
+.welcome-step {
+	color: var(--welcome-muted);
+	font-size: 11px;
+}
+.welcome-form h2 {
+	margin-top: 13px;
+	font-size: 23px;
+	line-height: 1.5;
+	font-weight: 600;
+}
+.welcome-form-heading p {
+	margin-top: 9px;
+	font-size: 13px;
+	color: var(--welcome-muted);
+	line-height: 1.8;
+}
+.welcome-password-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-top: 30px;
+}
+.welcome-password-label {
+	display: block;
+	font-size: 13px;
+	font-weight: 600;
+}
+.welcome-hint {
+	position: relative;
+	flex-shrink: 0;
+}
+.welcome-screen .welcome-hint-trigger {
+	-webkit-tap-highlight-color: transparent;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	min-height: 28px;
+	padding: 4px 0 4px 8px;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--welcome-muted);
+	font-size: 11px;
+	cursor: pointer;
+}
+.welcome-screen .welcome-hint-trigger:hover {
+	color: var(--welcome-accent);
+}
+.welcome-hint-popover {
+	position: absolute;
+	z-index: 2;
+	bottom: calc(100% + 9px);
+	right: 0;
+	width: 208px;
+	padding: 17px 19px;
+	border: 1px solid #bfd8c8;
+	border-radius: 8px;
+	background: #edf7ef;
+	color: var(--welcome-ink);
+	box-shadow: 0 6px 22px #214f3b12;
+}
+.welcome-hint-popover::after {
+	content: "";
+	position: absolute;
+	right: 23px;
+	bottom: -5px;
+	width: 8px;
+	height: 8px;
+	border-right: 1px solid #bfd8c8;
+	border-bottom: 1px solid #bfd8c8;
+	background: #edf7ef;
+	transform: rotate(45deg);
+}
+.welcome-hint::before {
+	content: "";
+	position: absolute;
+	bottom: 100%;
+	left: 0;
+	width: 100%;
+	height: 10px;
+}
+.welcome-hint-caption {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11px;
+	color: var(--welcome-muted);
+}
+.welcome-hint-popover code {
+	display: block;
+	margin-top: 10px;
+	font-family: Consolas, monospace;
+	font-size: 24px;
+	line-height: 1.3;
+	font-weight: 600;
+}
+.welcome-hint-note {
+	display: block;
+	margin-top: 7px;
+	color: var(--welcome-muted);
+	font-size: 10px;
+}
+.welcome-password {
+	display: flex;
+	align-items: center;
+	gap: 11px;
+	height: 52px;
+	padding-left: 15px;
+	margin-top: 10px;
+	background: var(--welcome-paper);
+	border: 1px solid #b1c9ba;
+	border-radius: 6px;
+	color: var(--welcome-muted);
+	transition:
+		border-color 150ms,
+		box-shadow 150ms;
+}
+.welcome-password:focus-within {
+	border-color: var(--welcome-accent);
+	box-shadow: 0 0 0 3px #216d4914;
+}
+.welcome-password.has-error {
+	border-color: var(--welcome-error);
+}
+.welcome-password > svg {
+	flex-shrink: 0;
+}
+.welcome-screen .welcome-password input {
+	width: 100%;
+	min-width: 0;
+	height: 100%;
+	padding: 0;
+	color: var(--welcome-ink);
+	font-size: 14px;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	outline: none;
+}
+.welcome-password input::placeholder {
+	color: #6b7d72;
+}
+.welcome-screen .welcome-visibility {
+	display: grid;
+	place-items: center;
+	flex: 0 0 46px;
+	width: 46px;
+	height: 46px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--welcome-muted);
+}
+.welcome-screen .welcome-visibility:hover {
+	background: #e9f3ed;
+}
+.welcome-password-message {
+	min-height: 45px;
+	padding-top: 10px;
+	font-size: 11px;
+	line-height: 1.7;
+	color: var(--welcome-muted);
+}
+.welcome-password-message span {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+}
+.welcome-password-message svg {
+	flex: 0 0 auto;
+	margin-top: 2px;
+}
+.welcome-password-message [role="alert"] {
+	color: var(--welcome-error);
+}
+.welcome-screen .welcome-submit {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	width: 100%;
+	min-height: 50px;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	padding: 12px 18px;
+	background: var(--welcome-accent);
+	color: var(--welcome-paper);
+	font-size: 14px;
+	font-weight: 600;
+	box-shadow: 0 4px 10px #216d4910;
+	transition: background 150ms;
+}
+.welcome-screen .welcome-submit:hover:not(:disabled) {
+	background: #175337;
+}
+.welcome-screen .welcome-submit:disabled {
+	background: var(--welcome-accent);
+	opacity: 0.82;
+	cursor: not-allowed;
+}
+.welcome-screen button:focus-visible {
+	outline: 2px solid var(--welcome-accent);
+	outline-offset: 4px;
+}
+.welcome-form .welcome-form-footer {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 7px;
+	margin-top: 22px;
+	font-size: 11px;
+	color: var(--welcome-muted);
+}
+.welcome-footer {
+	display: flex;
+	justify-content: space-between;
+	gap: 24px;
+	margin-top: 27px;
+	color: var(--welcome-muted);
+	font-size: 12px;
+	line-height: 1.8;
+}
+.welcome-footer span {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+}
+.welcome-footer svg {
+	flex-shrink: 0;
+}
+.welcome-bottom {
+	margin-top: auto;
+	padding: 20px 24px 25px;
+	color: var(--welcome-muted);
+	text-align: center;
+	font-size: 11px;
+}
+.welcome-bottom span {
+	padding: 0 8px;
+}
+.welcome-spinner {
+	animation: welcome-spin 1s linear infinite;
+}
+@keyframes welcome-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@media (min-height: 950px) and (min-width: 760px) {
+	.welcome-main {
+		padding-top: 90px;
+	}
+}
+@media (max-width: 760px) {
+	.welcome-header {
+		height: 66px;
+	}
+	.welcome-header-inner {
+		padding: 0 22px;
+	}
+	.welcome-header-note {
+		display: none;
+	}
+	.welcome-main {
+		padding: 36px 22px;
+		max-width: 560px;
+	}
+	.welcome-intro h1 {
+		font-size: 27px;
+		gap: 8px;
+	}
+	.welcome-intro h1 img {
+		width: 34px;
+		height: 34px;
+	}
+	.welcome-intro .welcome-description {
+		font-size: 13px;
+	}
+	.welcome-panel {
+		grid-template-columns: 1fr;
+		margin-top: 23px;
+	}
+	.welcome-story {
+		padding: 25px 26px;
+	}
+	.welcome-story h2 {
+		margin-top: 14px;
+		font-size: 28px;
+	}
+	.welcome-story h2 br {
+		display: none;
+	}
+	.welcome-story .welcome-story-copy {
+		margin-top: 10px;
+		font-size: 12px;
+	}
+	.welcome-signature {
+		display: none;
+	}
+	.welcome-form {
+		padding: 26px;
+		border-left: 0;
+		border-top: 1px solid var(--welcome-line);
+	}
+	.welcome-form h2 {
+		font-size: 21px;
+		margin-top: 8px;
+	}
+	.welcome-password-heading {
+		margin-top: 23px;
+	}
+	.welcome-screen .welcome-hint-trigger {
+		min-height: 44px;
+	}
+	.welcome-footer {
+		flex-direction: column;
+		gap: 9px;
+		margin-top: 22px;
+		font-size: 11px;
+	}
+	.welcome-bottom {
+		padding-bottom: 20px;
+	}
+}
+@media (max-width: 380px) {
+	.welcome-brand-chinese {
+		display: none;
+	}
+	.welcome-main {
+		padding-right: 16px;
+		padding-left: 16px;
+	}
+	.welcome-intro h1 {
+		font-size: 24px;
+	}
+	.welcome-story,
+	.welcome-form {
+		padding: 23px 20px;
+	}
+	.welcome-story h2 {
+		font-size: 24px;
+	}
+	.welcome-private {
+		font-size: 11px;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.welcome-spinner {
+		animation: none;
+	}
+	.welcome-screen * {
+		transition: none;
+	}
+}

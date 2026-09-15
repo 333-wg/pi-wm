@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import type { ContextFragment } from "@wuming/context-engine";
 import type { MediaModelSettings } from "@wuming/protocol";
+import { videoCapabilities } from "./media-video.js";
 
 export type MediaDefaults = ReadonlyArray<
-	Pick<MediaModelSettings, "kind"> & Partial<Pick<MediaModelSettings, "model" | "models">>
+	Pick<MediaModelSettings, "kind"> &
+		Partial<Pick<MediaModelSettings, "model" | "models" | "baseUrl" | "videoProtocol" | "videoReferenceFormat">>
 >;
 
 export const MEDIA_SKILL_ROUTING_POLICY = [
@@ -13,6 +15,7 @@ export const MEDIA_SKILL_ROUTING_POLICY = [
 	"Image settings may contain multiple selected models. Omit generate_image.model to use the default; only pass another ID listed by media_model_status when the user explicitly requests it. A skill's hard-coded model is not a user override. Never fan out to every selected model or retry with another model automatically; each generation may incur charges.",
 	"A skill's missing API-key environment variable is NOT a missing host model. Use media_model_status to check current defaults if uncertain or settings changed. If a default is genuinely missing, ask only for that kind in Wuming Settings > Models. If the model/tool lacks a required feature, explain the specific incompatibility; do not pretend success or request duplicate credentials.",
 	"Only send supported tool arguments. Do not silently drop required creative constraints or change the user's desired result. Keep ordinary local preparation/postprocessing under normal permissions. Host artifacts display in chat; never invent media links. Video polling must use the returned jobId rather than starting another billable job.",
+	"Video defaults include the actual defaultModel and videoCapabilities. Configured means saved, not tested. Respect supported durations, sizes and referenceInputs. Prefer aspectRatio and default resolution. Pass referenceArtifactId for the user's attached/generated image; the host handles file upload or Base64. Do not put Base64 in prompts or tool arguments, invent public URLs, publish private images, or replace image-to-video with text-only generation. A successful media_model_status lookup does not recover a failed generation. After a submitted generation fails, report the error and wait for user direction; do not retry with a different prompt, duration or protocol.",
 ].join("\n");
 
 export function mediaModelStatus(defaults: MediaDefaults) {
@@ -22,10 +25,20 @@ export function mediaModelStatus(defaults: MediaDefaults) {
 			kind,
 			configured: Boolean(config),
 			generationTool: kind === "image" ? "generate_image" : "generate_video",
-			...(kind === "image" && config?.model
+			...(config?.model
 				? {
 						defaultModel: config.model,
 						models: [...(config.models ?? [config.model])],
+					}
+				: {}),
+			...(kind === "video" && config?.model && config.baseUrl
+				? {
+						videoCapabilities: videoCapabilities({
+							baseUrl: config.baseUrl,
+							model: config.model,
+							...(config.videoProtocol ? { videoProtocol: config.videoProtocol } : {}),
+							...(config.videoReferenceFormat ? { videoReferenceFormat: config.videoReferenceFormat } : {}),
+						}),
 					}
 				: {}),
 		};

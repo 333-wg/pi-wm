@@ -138,6 +138,21 @@ describe("ContextEngine", () => {
 		expect(stableChanged.plan.cachePrefixDigest).not.toBe(first.plan.cachePrefixDigest);
 	});
 
+	it.each(["stable", "session", "turn"] as const)(
+		"keeps unchanged %s fragments in the same wire order when query relevance changes",
+		(scope) => {
+			const fragments = [
+				fragment("policy:auth", "authentication refresh", { kind: "policy", cacheScope: scope }),
+				fragment("policy:colors", "button typography", { kind: "policy", cacheScope: scope }),
+			];
+			const first = engine.assemble(input(fragments, { query: "authentication refresh" }));
+			const second = engine.assemble(input([...fragments].reverse(), { query: "button typography" }));
+			expect(second.systemPrompt).toBe(first.systemPrompt);
+			expect(second.injectedPromptSuffix).toBe(first.injectedPromptSuffix);
+			expect(second.plan.cachePrefixDigest).toBe(first.plan.cachePrefixDigest);
+		}
+	);
+
 	it("accounts for observed context while replacing the prior system prompt", () => {
 		const available = engine.assemble(
 			input([], {

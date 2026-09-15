@@ -3,6 +3,9 @@ import { CompactionActivity } from "./components/CompactionActivity.js";
 import { GoalActivityCard } from "./components/GoalActivityCard";
 import { SkillManagerDialog } from "./components/SkillManagerDialog.js";
 import { MediaModelSettings } from "./components/MediaModelSettings.js";
+import { WelcomeScreen } from "./components/WelcomeScreen.js";
+import { ApprovalPanel } from "./components/ApprovalPanel.js";
+import { DESKTOP_WELCOME_KEY, isDesktopWelcomePassword, readDesktopWelcome } from "./lib/welcome.js";
 import {
 	Activity,
 	ArrowDown,
@@ -77,7 +80,6 @@ import {
 	useState,
 } from "react";
 import type {
-	ApprovalRequest,
 	ArtifactRef,
 	AutomationRunSummary,
 	AutomationSchedule,
@@ -89,7 +91,6 @@ import type {
 	CustomModelSettings as CustomModelSettingsValue,
 	ContentPart,
 	ExecutionEnvironment,
-	GoalSummary,
 	GoalPlanSpec,
 	GoalAutomationSummary,
 	MemoryAction,
@@ -117,6 +118,7 @@ import type {
 } from "@wuming/protocol";
 import { type LiveAssistant, type LiveRetry, type LiveTool, useWumingClient } from "./use-wuming-client.js";
 import { workspaceApi } from "./workspace-api.js";
+import { desktopConnection } from "./lib/desktop.js";
 import { Markdown } from "./components/Markdown.js";
 import { ChangesView as WorkspaceChangesView } from "./components/ChangesView.js";
 import {
@@ -276,10 +278,6 @@ function GatewayPasswordForm({
 	);
 }
 
-function riskLabel(value: string): string {
-	return ({ low: "低风险", medium: "中风险", high: "高风险" } as Record<string, string>)[value] ?? value;
-}
-
 function sandboxLabel(value: string | undefined): string {
 	if (!value) return "-";
 	return (
@@ -380,7 +378,7 @@ function ProjectImportDialog({
 				<div className="dialog-header">
 					<div>
 						<h2 id="project-dialog-title">打开项目</h2>
-						<span>{local ? "使用这台电脑上的文件和文件夹" : "导入到 Wuming 工作区"}</span>
+						<span>{local ? "使用这台电脑上的文件和文件夹" : "导入到 Pi-Wm 工作区"}</span>
 					</div>
 					<button className="icon-button" type="button" title="关闭" disabled={busy} onClick={onClose}>
 						<X size={18} />
@@ -1045,12 +1043,6 @@ function formatDuration(startedAt: number | undefined, end: number, unavailable 
 	return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 }
 
-function formatElapsedDuration(milliseconds: number): string {
-	if (milliseconds < 1000) return "0 秒";
-	const seconds = Math.floor(milliseconds / 1000);
-	return seconds < 60 ? seconds + " 秒" : Math.floor(seconds / 60) + " 分 " + (seconds % 60) + " 秒";
-}
-
 function formatRunTime(timestamp: number): string {
 	return new Intl.DateTimeFormat(undefined, {
 		hour: "2-digit",
@@ -1133,7 +1125,7 @@ function redactDiagnostic(value: string): string {
 
 function runDiagnostic(snapshot: SessionSnapshot | undefined, run: RunSummary): string {
 	return [
-		"Wuming 运行诊断",
+		"Pi-Wm 运行诊断",
 		`生成时间：${new Date().toLocaleString("zh-CN")}`,
 		`会话 ID：${run.sessionId}`,
 		`运行 ID：${run.id}`,
@@ -1514,7 +1506,7 @@ function TranscriptItemView({
 			)}
 			<div className="message-body">
 				<div className="message-meta">
-					<strong>{item.type === "user" ? "你" : "Wuming"}</strong>
+					<strong>{item.type === "user" ? "你" : "Pi-Wm"}</strong>
 					{item.type === "assistant" && item.status !== "complete" && <span>{statusLabel(item.status)}</span>}
 					<time
 						className="message-time"
@@ -1581,7 +1573,7 @@ function LiveAssistantView({ item, compacting = false }: { item: LiveAssistant; 
 			</div>
 			<div className="message-body">
 				<div className="message-meta">
-					<strong>Wuming</strong>
+					<strong>Pi-Wm</strong>
 					<span className="live-label">实时</span>
 				</div>
 				{item.text && <Markdown text={item.text} className="prose streaming" />}
@@ -1649,60 +1641,6 @@ function LiveToolView({
 				/>
 			)}
 		</div>
-	);
-}
-
-function ApprovalPanel({
-	approval,
-	onRespond,
-}: {
-	approval: ApprovalRequest;
-	onRespond: (decision: "approve" | "deny") => Promise<void>;
-}) {
-	const [responding, setResponding] = useState<"approve" | "deny" | undefined>();
-	const [error, setError] = useState<string>();
-	const respond = async (decision: "approve" | "deny") => {
-		setResponding(decision);
-		setError(undefined);
-		try {
-			await onRespond(decision);
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
-			setResponding(undefined);
-		}
-	};
-	return (
-		<section className={`approval-panel risk-${approval.risk}`} aria-label="需要批准工具调用">
-			<div className="approval-icon">
-				<ShieldAlert size={18} />
-			</div>
-			<div className="approval-copy">
-				<div className="approval-heading">
-					<strong>需要批准工具调用</strong>
-					<span>{riskLabel(approval.risk)}</span>
-				</div>
-				<p>{approval.summary}</p>
-				<div className="approval-capabilities">
-					{approval.capabilities.map((capability, index) => (
-						<code key={`${capability.type}-${index}`}>{capability.type}</code>
-					))}
-				</div>
-				{error && (
-					<div className="message-error">
-						<CircleAlert size={14} />
-						{error}
-					</div>
-				)}
-			</div>
-			<div className="approval-actions">
-				<button className="approval-deny" disabled={responding !== undefined} onClick={() => void respond("deny")}>
-					<X size={15} /> 拒绝
-				</button>
-				<button className="approval-allow" disabled={responding !== undefined} onClick={() => void respond("approve")}>
-					<Check size={15} /> 允许
-				</button>
-			</div>
-		</section>
 	);
 }
 
@@ -3220,530 +3158,7 @@ function SubagentsView({
 	);
 }
 
-const GOAL_ACTIVE_STATUSES: readonly GoalSummary["status"][] = ["queued", "running", "awaiting_approval", "cancelling"];
 const GOAL_REVIEW_ROUND_CHOICES: readonly number[] = [1, 2, 3, 4, 5];
-
-const GOAL_REVIEW_PHASE_LABELS: Record<NonNullable<GoalSummary["reviewPhase"]>, string> = {
-	pending: "尚未开始",
-	executing: "正在执行",
-	reviewing: "正在评审",
-	passed: "评审通过",
-	failed: "评审未通过",
-	cancelled: "已取消",
-};
-
-/** The review phase is finer grained than the goal status: a goal being reviewed still reports "running". */
-function goalActivityLabel(goal: GoalSummary): string {
-	if (goal.status === "cancelling") return "正在停止";
-	if (goal.status === "awaiting_approval") return "等待批准工具调用";
-	if (goal.status === "queued") return "等待开始";
-	if (goal.reviewPhase === "reviewing")
-		return goal.round === undefined ? "正在评审结果" : `正在评审第 ${goal.round} 轮结果`;
-	if (goal.reviewPhase === "executing" && goal.round !== undefined) return `正在执行第 ${goal.round} 轮`;
-	return "正在执行";
-}
-
-function GoalsView({
-	goals,
-	focusGoalId,
-	disabled,
-	archived,
-	onCreate,
-	onStart,
-	onPause,
-	onResume,
-	onCancel,
-	onDelete,
-	onRespondApproval,
-	onRefresh,
-	onOpenSession,
-}: {
-	goals: GoalSummary[];
-	focusGoalId: string | undefined;
-	disabled: boolean;
-	archived: boolean;
-	onCreate: (input: {
-		objective: string;
-		title?: string;
-		successCriteria?: string;
-		maxRounds?: number;
-		plan?: GoalPlanSpec;
-	}) => Promise<GoalSummary>;
-	onStart: (goalId: string) => Promise<GoalSummary>;
-	onPause: (goalId: string) => Promise<GoalSummary>;
-	onResume: (goalId: string) => Promise<GoalSummary>;
-	onCancel: (goalId: string) => Promise<GoalSummary>;
-	onDelete: (goalId: string) => Promise<string>;
-	onRespondApproval: (sessionId: string, approvalId: string, decision: "approve" | "deny") => Promise<void>;
-	onRefresh: () => Promise<GoalSummary[]>;
-	onOpenSession: (sessionId: string) => Promise<void>;
-}) {
-	const [selectedId, setSelectedId] = useState<string>();
-	const [title, setTitle] = useState("");
-	const [objective, setObjective] = useState("");
-	const [reviewEnabled, setReviewEnabled] = useState(false);
-	const [successCriteria, setSuccessCriteria] = useState("");
-	const [maxRounds, setMaxRounds] = useState(3);
-	const [creating, setCreating] = useState(false);
-	const [refreshing, setRefreshing] = useState(false);
-	const [action, setAction] = useState<{ goalId: string; kind: "start" | "pause" | "resume" | "cancel" | "delete" }>();
-	const [formError, setFormError] = useState<string>();
-	const [actionError, setActionError] = useState<string>();
-	const [now, setNow] = useState(() => Date.now());
-	const selected = goals.find((goal) => goal.id === selectedId) ?? goals[0];
-	const [planEnabled, setPlanEnabled] = useState(false);
-	const [plan, setPlan] = useState<GoalPlanSpec>(newGoalPlan);
-
-	useEffect(() => {
-		if (!selectedId || !goals.some((goal) => goal.id === selectedId)) setSelectedId(goals[0]?.id);
-	}, [goals, selectedId]);
-
-	useEffect(() => {
-		if (focusGoalId && goals.some((goal) => goal.id === focusGoalId)) setSelectedId(focusGoalId);
-	}, [focusGoalId, goals]);
-
-	useEffect(() => {
-		if (!selected || !GOAL_ACTIVE_STATUSES.includes(selected.status)) return;
-		const timer = window.setInterval(() => setNow(Date.now()), 1000);
-		return () => window.clearInterval(timer);
-	}, [selected?.id, selected?.status]);
-
-	const submit = async (event: FormEvent) => {
-		event.preventDefault();
-		if (creating || disabled) return;
-		const normalizedObjective = objective.trim();
-		if (!normalizedObjective) return setFormError("请填写目标描述");
-		const normalizedCriteria = successCriteria.trim();
-		if (reviewEnabled && !normalizedCriteria) return setFormError("启用评审循环时请填写成功标准");
-		setCreating(true);
-		setFormError(undefined);
-		try {
-			const created = await onCreate({
-				objective: normalizedObjective,
-				...(title.trim() ? { title: title.trim() } : {}),
-				...(planEnabled ? { plan } : {}),
-				...(reviewEnabled ? { successCriteria: normalizedCriteria, maxRounds } : {}),
-			});
-			setSelectedId(created.id);
-			setActionError(undefined);
-			setPlanEnabled(false);
-			setPlan(newGoalPlan());
-			setTitle("");
-			setObjective("");
-			setSuccessCriteria("");
-			setReviewEnabled(false);
-			setMaxRounds(3);
-		} catch (cause) {
-			setFormError(cause instanceof Error ? cause.message : String(cause));
-		} finally {
-			setCreating(false);
-		}
-	};
-
-	const refresh = async () => {
-		if (refreshing) return;
-		setRefreshing(true);
-		setFormError(undefined);
-		try {
-			await onRefresh();
-		} catch (cause) {
-			setFormError(cause instanceof Error ? cause.message : String(cause));
-		} finally {
-			setRefreshing(false);
-		}
-	};
-
-	const act = async (goalId: string, kind: "start" | "pause" | "resume" | "cancel" | "delete") => {
-		if (action || disabled) return;
-		setAction({ goalId, kind });
-		setActionError(undefined);
-		try {
-			if (kind === "start") await onStart(goalId);
-			else if (kind === "pause") await onPause(goalId);
-			else if (kind === "resume") await onResume(goalId);
-			else if (kind === "cancel") await onCancel(goalId);
-			else await onDelete(goalId);
-		} catch (cause) {
-			setActionError(cause instanceof Error ? cause.message : String(cause));
-		} finally {
-			setAction(undefined);
-		}
-	};
-
-	const active = selected !== undefined && GOAL_ACTIVE_STATUSES.includes(selected.status);
-	const starting = selected !== undefined && action?.goalId === selected.id && action.kind === "start";
-	const cancelling = selected !== undefined && action?.goalId === selected.id && action.kind === "cancel";
-	const pausing = selected !== undefined && action?.goalId === selected.id && action.kind === "pause";
-	const resuming = selected !== undefined && action?.goalId === selected.id && action.kind === "resume";
-	const elapsedMs = selected
-		? selected.pausedAt !== undefined
-			? (selected.accumulatedRunMs ?? 0)
-			: (selected.accumulatedRunMs ?? 0) +
-				(selected.startedAt === undefined ? 0 : Math.max(0, (selected.finishedAt ?? now) - selected.startedAt))
-		: 0;
-	return (
-		<section className="subagents-workbench goals-workbench" aria-label="目标">
-			<aside className="subagents-sidebar">
-				<div className="workbench-heading">
-					<div>
-						<strong>目标</strong>
-						<span>{goals.length} 个目标</span>
-					</div>
-					<button className="icon-button" title="刷新目标" disabled={refreshing} onClick={() => void refresh()}>
-						<RefreshCw className={refreshing ? "spin" : ""} size={15} />
-					</button>
-				</div>
-				<form className="subagent-create goal-create" onSubmit={(event) => void submit(event)}>
-					<label>
-						<span>目标</span>
-						<textarea
-							rows={4}
-							maxLength={20_000}
-							required
-							placeholder="交付内容与完成条件"
-							value={objective}
-							readOnly={disabled}
-							onChange={(event) => setObjective(event.target.value)}
-						/>
-					</label>
-					<label>
-						<span>名称</span>
-						<input
-							maxLength={500}
-							placeholder="自动生成"
-							value={title}
-							readOnly={disabled}
-							onChange={(event) => setTitle(event.target.value)}
-						/>
-					</label>
-					<label className="goal-review-toggle">
-						<input
-							type="checkbox"
-							checked={reviewEnabled}
-							disabled={disabled || planEnabled}
-							onChange={(event) => setReviewEnabled(event.target.checked)}
-						/>
-						<span>启用评审循环</span>
-					</label>
-					{reviewEnabled && (
-						<>
-							<label>
-								<span>成功标准</span>
-								<textarea
-									rows={3}
-									maxLength={4000}
-									required
-									placeholder="评审判定通过的条件"
-									value={successCriteria}
-									readOnly={disabled}
-									onChange={(event) => setSuccessCriteria(event.target.value)}
-								/>
-							</label>
-							<label className="goal-rounds">
-								<span>最大轮次</span>
-								<select
-									aria-label="最大轮次"
-									value={maxRounds}
-									disabled={disabled}
-									onChange={(event) => setMaxRounds(Number(event.target.value))}
-								>
-									{GOAL_REVIEW_ROUND_CHOICES.map((round) => (
-										<option value={round} key={round}>
-											{round} 轮
-										</option>
-									))}
-								</select>
-							</label>
-						</>
-					)}
-					<label className="goal-review-toggle">
-						<input
-							type="checkbox"
-							checked={planEnabled}
-							disabled={disabled || creating}
-							onChange={(event) => {
-								setPlanEnabled(event.target.checked);
-								if (event.target.checked) setReviewEnabled(false);
-							}}
-						/>
-						<span>多步骤计划</span>
-					</label>
-					{planEnabled && <GoalPlanEditor value={plan} onChange={setPlan} disabled={disabled || creating} />}
-					<button
-						className="subagent-create-button"
-						type="submit"
-						disabled={disabled || creating || !objective.trim() || (reviewEnabled && !successCriteria.trim())}
-					>
-						{creating ? <RefreshCw className="spin" size={15} /> : <Plus size={15} />}
-						{creating ? "正在创建..." : "创建目标"}
-					</button>
-				</form>
-				{archived && (
-					<div className="goal-readonly">
-						<Archive size={14} />
-						已归档会话为只读状态，无法创建或控制目标
-					</div>
-				)}
-				{formError && (
-					<div className="workbench-error">
-						<CircleAlert size={14} />
-						{formError}
-					</div>
-				)}
-				<nav className="subagent-list" aria-label="目标列表">
-					{goals.map((goal) => (
-						<button
-							className={`subagent-entry ${selected?.id === goal.id ? "selected" : ""}`}
-							type="button"
-							key={goal.id}
-							onClick={() => setSelectedId(goal.id)}
-						>
-							<i className={`subagent-status status-${goal.status}`} />
-							<span>
-								<strong>{goal.title}</strong>
-								<small>
-									{statusLabel(goal.status)} · {formatRunTime(goal.updatedAt)}
-								</small>
-							</span>
-						</button>
-					))}
-					{goals.length === 0 && <div className="subagent-list-empty">暂无目标</div>}
-				</nav>
-			</aside>
-			<div className="subagent-detail">
-				{selected ? (
-					<>
-						<header className="subagent-detail-heading">
-							<div>
-								<Target size={16} />
-								<span>
-									<strong>{selected.title}</strong>
-									<small>{selected.id}</small>
-								</span>
-							</div>
-							<div className="goal-actions">
-								{selected.status === "pending" && (
-									<button
-										className="goal-start"
-										type="button"
-										title="启动目标"
-										disabled={disabled || action !== undefined}
-										onClick={() => void act(selected.id, "start")}
-									>
-										{starting ? <RefreshCw className="spin" size={13} /> : <Play size={13} />}
-										{starting ? "正在启动" : "启动"}
-									</button>
-								)}
-								{selected.status === "paused" && (
-									<button
-										className="goal-start"
-										type="button"
-										title="继续目标"
-										disabled={disabled || action !== undefined}
-										onClick={() => void act(selected.id, "resume")}
-									>
-										{resuming ? <RefreshCw className="spin" size={13} /> : <Play size={13} />}
-										{resuming ? "正在继续" : "继续"}
-									</button>
-								)}
-								{GOAL_ACTIVE_STATUSES.includes(selected.status) && (
-									<button
-										className="goal-start"
-										type="button"
-										title="暂停目标"
-										disabled={disabled || action !== undefined}
-										onClick={() => void act(selected.id, "pause")}
-									>
-										{pausing ? <RefreshCw className="spin" size={13} /> : <Pause size={13} />}
-										{pausing ? "正在暂停" : "暂停"}
-									</button>
-								)}
-								{(selected.status === "pending" || active) && (
-									<button
-										className="subagent-cancel"
-										type="button"
-										title="取消目标"
-										disabled={disabled || action !== undefined || selected.status === "cancelling"}
-										onClick={() => void act(selected.id, "cancel")}
-									>
-										{cancelling ? <RefreshCw className="spin" size={13} /> : <Square size={13} />}
-										{selected.status === "cancelling" ? "正在取消" : cancelling ? "正在取消" : "取消"}
-									</button>
-								)}
-								{(selected.status === "paused" || ["completed", "failed", "cancelled"].includes(selected.status)) && (
-									<button
-										className="subagent-cancel"
-										type="button"
-										title="删除目标"
-										disabled={disabled || action !== undefined}
-										onClick={() => void act(selected.id, "delete")}
-									>
-										{action?.kind === "delete" ? <RefreshCw className="spin" size={13} /> : <Trash2 size={13} />}
-										{action?.kind === "delete" ? "正在删除" : "删除"}
-									</button>
-								)}
-							</div>
-						</header>
-						<div className="subagent-detail-scroll">
-							<div className="subagent-meta">
-								<span className={`subagent-status-label status-${selected.status}`}>
-									<i />
-									{statusLabel(selected.status)}
-								</span>
-								<span>{formatTokens(selected.usage.totalTokens)} Token</span>
-								<span>{formatMoney(selected.usage.costUsd)}</span>
-								{(selected.startedAt !== undefined || selected.accumulatedRunMs !== undefined) && (
-									<span>已运行 {formatElapsedDuration(elapsedMs)}</span>
-								)}
-							</div>
-							{actionError && (
-								<div className="workbench-error">
-									<CircleAlert size={14} />
-									{actionError}
-								</div>
-							)}
-							<section className="subagent-section">
-								<h2>目标</h2>
-								<p>{selected.objective}</p>
-							</section>
-							{selected.plan && <GoalPlanView plan={selected.plan} onOpenSession={onOpenSession} />}
-							{selected.status === "pending" && (
-								<div className="goal-pending">
-									<Hourglass size={15} />
-									<span>目标已创建但尚未启动，点击“启动”开始后台执行。</span>
-								</div>
-							)}
-							{selected.successCriteria && (
-								<section className="subagent-section">
-									<h2>成功标准</h2>
-									<p>{selected.successCriteria}</p>
-								</section>
-							)}
-							{selected.reviewPhase !== undefined && (
-								<section className="subagent-section goal-review-section">
-									<h2>评审循环</h2>
-									<div className="goal-review-meta">
-										<span className={`goal-review-phase phase-${selected.reviewPhase}`}>
-											<i />
-											{GOAL_REVIEW_PHASE_LABELS[selected.reviewPhase]}
-										</span>
-										{selected.maxRounds !== undefined && (
-											<span>
-												{(selected.round ?? 0) >= 1
-													? `第 ${selected.round}/${selected.maxRounds} 轮`
-													: `最多 ${selected.maxRounds} 轮`}
-											</span>
-										)}
-									</div>
-									{selected.reviewHistory !== undefined && selected.reviewHistory.length > 0 ? (
-										<ol className="goal-review-history" aria-label="评审记录">
-											{selected.reviewHistory.map((record) => (
-												<li className={`goal-review-record verdict-${record.verdict}`} key={record.round}>
-													<div className="goal-review-record-heading">
-														<strong>第 {record.round} 轮</strong>
-														<span className="goal-review-verdict">
-															{record.verdict === "pass" ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
-															{record.verdict === "pass" ? "通过" : "未通过"}
-														</span>
-														<small>{formatRunTime(record.reviewedAt)}</small>
-													</div>
-													<p className="goal-review-feedback">{record.feedback || "评审未给出说明。"}</p>
-													{record.checks !== undefined && (
-														<ul className="goal-review-checks" aria-label={`第 ${record.round} 轮验收项`}>
-															{record.checks.map((check, index) => (
-																<li className={`status-${check.status}`} key={`${check.criterion}-${index}`}>
-																	<div>
-																		{check.status === "pass" ? <Check size={12} /> : <X size={12} />}
-																		<strong>{check.criterion}</strong>
-																	</div>
-																	<p>{check.evidence}</p>
-																</li>
-															))}
-														</ul>
-													)}
-													<div className="goal-review-tools">
-														<Wrench size={11} />
-														<strong>工具轨迹</strong>
-														{record.toolsUsed?.length ? (
-															record.toolsUsed.map((tool) => <code key={tool}>{tool}</code>)
-														) : (
-															<small>本轮未记录工具调用</small>
-														)}
-													</div>
-												</li>
-											))}
-										</ol>
-									) : (
-										<p className="goal-review-empty">尚无评审记录。</p>
-									)}
-								</section>
-							)}
-							<section className="subagent-section goal-usage-section">
-								<h2>用量</h2>
-								<dl className="goal-usage">
-									<div>
-										<dt>输入</dt>
-										<dd>{formatTokens(selected.usage.inputTokens)}</dd>
-									</div>
-									<div>
-										<dt>输出</dt>
-										<dd>{formatTokens(selected.usage.outputTokens)}</dd>
-									</div>
-									<div>
-										<dt>缓存读</dt>
-										<dd>{formatTokens(selected.usage.cacheReadTokens)}</dd>
-									</div>
-									<div>
-										<dt>缓存写</dt>
-										<dd>{formatTokens(selected.usage.cacheWriteTokens)}</dd>
-									</div>
-									<div>
-										<dt>合计</dt>
-										<dd>{formatTokens(selected.usage.totalTokens)}</dd>
-									</div>
-									<div>
-										<dt>成本</dt>
-										<dd>{formatMoney(selected.usage.costUsd)}</dd>
-									</div>
-								</dl>
-							</section>
-							{selected.pendingApprovals.map((approval) => (
-								<ApprovalPanel
-									key={approval.id}
-									approval={approval}
-									onRespond={(decision) => onRespondApproval(approval.sessionId, approval.id, decision)}
-								/>
-							))}
-							{selected.result !== undefined && (
-								<section className="subagent-section">
-									<h2>结果</h2>
-									<pre>{selected.result || "目标已完成，但没有文本结果。"}</pre>
-								</section>
-							)}
-							{selected.error && (
-								<section className="subagent-error">
-									<CircleAlert size={15} />
-									<span>{selected.error}</span>
-								</section>
-							)}
-							{active && selected.pendingApprovals.length === 0 && (
-								<div className="subagent-running">
-									<Activity size={17} />
-									<span>{goalActivityLabel(selected)}</span>
-								</div>
-							)}
-						</div>
-					</>
-				) : (
-					<div className="workbench-empty">
-						<Target size={24} />
-						<span>创建一个目标</span>
-					</div>
-				)}
-			</div>
-		</section>
-	);
-}
 
 const AUTOMATION_RUN_ACTIVE_STATUSES: readonly AutomationRunSummary["status"][] = [
 	"dispatching",
@@ -5558,9 +4973,8 @@ function ProjectNavigationItem({
 export function App() {
 	const client = useWumingClient();
 	const [workbenchView, setWorkbenchView] = useState<
-		"chat" | "agents" | "goals" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp"
+		"chat" | "agents" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp"
 	>("chat");
-	const [goalFocusId, setGoalFocusId] = useState<string>();
 	const [skillManagerOpen, setSkillManagerOpen] = useState(false);
 	const [mobileNav, setMobileNav] = useState(false);
 	const [newChatBusy, setNewChatBusy] = useState(false);
@@ -5576,7 +4990,12 @@ export function App() {
 	const [resizingSidebar, setResizingSidebar] = useState(false);
 	const [showRight, setShowRight] = useState(() => window.innerWidth > 1080);
 	const [onboarding, setOnboarding] = useState(() => localStorage.getItem(ONBOARDING_STORAGE_KEY) !== "true");
-	const [settingsOpen, setSettingsOpen] = useState(() => localStorage.getItem(ONBOARDING_STORAGE_KEY) !== "true");
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [welcomeComplete, setWelcomeComplete] = useState(false);
+	const [desktopUnlocked, setDesktopUnlocked] = useState(
+		() => !desktopConnection() || readDesktopWelcome(localStorage)
+	);
+	const [welcomeError, setWelcomeError] = useState<string>();
 	const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
 	const [projectDialogOpen, setProjectDialogOpen] = useState(false);
 	const [paletteOpen, setPaletteOpen] = useState(false);
@@ -5587,6 +5006,27 @@ export function App() {
 	const [collapsedProjectIds, setCollapsedProjectIds] = useState(() => new Set<string>());
 	const [tokenDraft, setTokenDraft] = useState(client.token);
 	const [connectSubmitted, setConnectSubmitted] = useState(false);
+	const welcomeAttemptStarted = useRef(false);
+	useEffect(() => {
+		if (client.connection !== "connected" || !desktopUnlocked) return;
+		setWelcomeComplete(true);
+		setOnboarding(false);
+		try {
+			localStorage.setItem(ONBOARDING_STORAGE_KEY, "true");
+		} catch {
+			/* Keep the current session usable when storage is unavailable. */
+		}
+	}, [client.connection, desktopUnlocked]);
+	useEffect(() => {
+		if (client.connection === "connecting") welcomeAttemptStarted.current = true;
+		if (
+			!welcomeComplete &&
+			connectSubmitted &&
+			(client.connection === "error" || (client.connection === "disconnected" && welcomeAttemptStarted.current))
+		) {
+			setWelcomeError("密码不正确或服务暂时无法连接，请重试。");
+		}
+	}, [client.connection, connectSubmitted, welcomeComplete]);
 	const [composerEdit, setComposerEdit] = useState<ComposerEdit>();
 	const [messageBusyId, setMessageBusyId] = useState<string>();
 	const [messageError, setMessageError] = useState<{ itemId: string; message: string }>();
@@ -5597,7 +5037,8 @@ export function App() {
 	const [pendingTail, setPendingTail] = useState(false);
 	const seenTailRef = useRef(0);
 	const pinnedAtRef = useRef<number | undefined>(undefined);
-	const localGateway = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+	const localGateway =
+		Boolean(desktopConnection()) || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 	const onboardingRequiresModel =
 		onboarding &&
 		client.connection === "connected" &&
@@ -5912,6 +5353,7 @@ export function App() {
 		};
 	}, [
 		following,
+		welcomeComplete,
 		workbenchView,
 		client.snapshot?.session.id,
 		client.snapshot?.transcript.length,
@@ -5978,7 +5420,7 @@ export function App() {
 			name: string,
 			title: string,
 			hint: string,
-			view: "chat" | "agents" | "goals" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp",
+			view: "chat" | "agents" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp",
 			icon: ReactNode
 		): ComposerCommand => ({
 			name,
@@ -6376,6 +5818,39 @@ export function App() {
 			<strong>{t("customModelsUnavailable")}</strong>
 		</div>
 	);
+	if (!welcomeComplete) {
+		return (
+			<WelcomeScreen
+				busy={!welcomeError && client.connection === "connecting" && desktopUnlocked}
+				error={welcomeError}
+				onEdit={() => {
+					setWelcomeError(undefined);
+					setConnectSubmitted(false);
+				}}
+				onSubmit={(password) => {
+					setWelcomeError(undefined);
+					welcomeAttemptStarted.current = false;
+					if (desktopConnection()) {
+						if (!isDesktopWelcomePassword(password)) {
+							setWelcomeError("密码不正确，再试一次吧。");
+							return;
+						}
+						try {
+							localStorage.setItem(DESKTOP_WELCOME_KEY, "true");
+						} catch {
+							/* Session-only unlock. */
+						}
+						setDesktopUnlocked(true);
+						setConnectSubmitted(true);
+					} else {
+						setTokenDraft(password);
+						setConnectSubmitted(true);
+						client.setToken(password);
+					}
+				}}
+			/>
+		);
+	}
 	const settingsSections: Array<{
 		id: SettingsSection;
 		label: string;
@@ -6417,8 +5892,8 @@ export function App() {
 		>
 			<aside className={`sidebar ${mobileNav ? "mobile-open" : ""}`}>
 				<div className="brand-row">
-					<div className="brand-mark">W</div>
-					<strong>Wuming</strong>
+					<div className="brand-mark">P</div>
+					<strong>Pi-Wm</strong>
 					<button
 						className="icon-button desktop-sidebar-toggle"
 						type="button"
@@ -6906,10 +6381,6 @@ export function App() {
 										setShowRight(false);
 										setWorkbenchView("chat");
 									}}
-									onOpen={() => {
-										setGoalFocusId(inlineGoal.id);
-										setWorkbenchView("goals");
-									}}
 								/>
 							)}
 							{client.error && (
@@ -7089,29 +6560,6 @@ export function App() {
 						onRefresh={() =>
 							client.snapshot ? client.refreshSubagents(client.snapshot.session.id) : Promise.resolve([])
 						}
-					/>
-				)}
-				{workbenchView === "goals" && (
-					<GoalsView
-						goals={client.goals}
-						focusGoalId={goalFocusId}
-						disabled={
-							!client.snapshot || client.snapshot.session.archivedAt !== undefined || client.connection !== "connected"
-						}
-						archived={client.snapshot?.session.archivedAt !== undefined}
-						onCreate={client.createGoal}
-						onStart={client.startGoal}
-						onPause={client.pauseGoal}
-						onResume={client.resumeGoal}
-						onCancel={client.cancelGoal}
-						onDelete={client.deleteGoal}
-						onRespondApproval={client.respondApproval}
-						onRefresh={() => (client.snapshot ? client.refreshGoals(client.snapshot.session.id) : Promise.resolve([]))}
-						onOpenSession={async (sessionId) => {
-							await client.attachSession(sessionId);
-							setShowRight(false);
-							setWorkbenchView("chat");
-						}}
 					/>
 				)}
 				{workbenchView === "automations" && (

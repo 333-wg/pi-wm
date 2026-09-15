@@ -129,11 +129,11 @@ export function PermissionPicker({
 			{open && (
 				<div className="permission-menu" role="menu" aria-label="工具权限模式">
 					<div className="permission-menu-heading">
-						<span>应如何批准 Wuming 操作？</span>
+						<span>应如何批准 Pi-Wm 操作？</span>
 						<span>所有项目和对话</span>
 					</div>
 					<div className="permission-options">
-						{OPTIONS.map((option) => (
+						{OPTIONS.filter((option) => option.id !== "ask").map((option) => (
 							<button
 								className={`permission-option mode-${option.id}`}
 								type="button"

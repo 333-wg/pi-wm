@@ -143,7 +143,7 @@ it("disables Pi host tools while keeping Wuming custom tools active", async () =
 		// Pi would otherwise introduce itself and describe its own tool names. The
 		// prompt is rendered from the live tool set, so the custom tool appears in it.
 		const prompt = session.getSystemPrompt?.() ?? "";
-		expect(prompt.startsWith("You are Wuming (无名), a coding agent.")).toBe(true);
+		expect(prompt.startsWith("You are Pi-Wm, a coding agent.")).toBe(true);
 		expect(prompt).toContain("- write: Test-only Wuming write tool");
 		expect(prompt).toContain("Sandbox mode: workspace_write");
 		expect(prompt).not.toContain("This must be assembled by Wuming");

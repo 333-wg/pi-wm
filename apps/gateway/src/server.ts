@@ -210,6 +210,7 @@ export interface GatewayServerOptions {
   capabilities?: Capability[];
   executionEnvironment?: ExecutionEnvironment;
   allowedOrigins?: string[];
+  strictLoopbackHost?: boolean;
   maxPayloadBytes?: number;
   clock?: () => number;
   idFactory?: () => string;
@@ -319,6 +320,7 @@ export class GatewayServer implements AsyncDisposable {
   readonly #capabilities: Capability[];
   readonly #executionEnvironment: ExecutionEnvironment;
   readonly #allowedOrigins: Set<string>;
+  readonly #strictLoopbackHost: boolean;
   readonly #clock: () => number;
   readonly #idFactory: () => string;
   readonly #onError: (error: unknown) => void;
@@ -375,6 +377,7 @@ export class GatewayServer implements AsyncDisposable {
           : (process.env.SHELL ?? '/bin/sh'),
     };
     this.#allowedOrigins = new Set(options.allowedOrigins ?? []);
+    this.#strictLoopbackHost = options.strictLoopbackHost ?? false;
     this.#clock = options.clock ?? Date.now;
     this.#idFactory = options.idFactory ?? randomUUID;
     this.#onError = options.onError ?? (() => {});
@@ -865,6 +868,10 @@ export class GatewayServer implements AsyncDisposable {
   }
 
   #originAllowed(request: IncomingMessage): boolean {
+    if (this.#strictLoopbackHost) {
+      const address = this.#http.address();
+      if (!address || typeof address === 'string' || request.headers.host !== `127.0.0.1:${address.port}`) return false;
+    }
     const origin = request.headers.origin;
     if (!origin) return true;
     if (this.#allowedOrigins.has(origin)) return true;

@@ -1,4 +1,22 @@
-import type { ContextUsageState, SessionSnapshot } from "@wuming/protocol";
+import type { ContextUsageState, SessionSnapshot, Usage } from "@wuming/protocol";
+
+export interface CacheUsage {
+	inputTokens: number;
+	readTokens: number;
+	writeTokens: number;
+	/** Share of input tokens served from cache, not the share of requests that hit. */
+	hitRatio: number | null;
+}
+
+export function cacheUsage(usage: Pick<Usage, "inputTokens" | "cacheReadTokens" | "cacheWriteTokens">): CacheUsage {
+	const inputTokens = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+	return {
+		inputTokens,
+		readTokens: usage.cacheReadTokens,
+		writeTokens: usage.cacheWriteTokens,
+		hitRatio: inputTokens > 0 ? usage.cacheReadTokens / inputTokens : null,
+	};
+}
 
 export interface ContextUsage {
 	tokens: number | null;
@@ -6,6 +24,7 @@ export interface ContextUsage {
 	/** Clamped to 1 so an over-budget estimate cannot overflow the bar. */
 	ratio: number | null;
 	basis: ContextUsageState["basis"];
+	cache?: { latest: CacheUsage | undefined; session: CacheUsage; requestCount: number };
 }
 
 export function estimateContext(
@@ -16,11 +35,29 @@ export function estimateContext(
 		return undefined;
 	const sameModel = (model: SessionSnapshot["model"]) =>
 		model.provider === snapshot.model.provider && model.id === snapshot.model.id;
+	const requests = snapshot.usageByTurn?.flatMap((turn) => turn.requests) ?? [];
+	const latest = requests.at(-1);
+	// Sum model requests only: session billing can also include media/tool usage.
+	const session = cacheUsage(
+		requests.reduce(
+			(total, request) => ({
+				inputTokens: total.inputTokens + request.usage.inputTokens,
+				cacheReadTokens: total.cacheReadTokens + request.usage.cacheReadTokens,
+				cacheWriteTokens: total.cacheWriteTokens + request.usage.cacheWriteTokens,
+			}),
+			{ inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+		)
+	);
 	const occupancy = (tokens: number | null, basis: ContextUsageState["basis"]): ContextUsage => ({
 		tokens,
 		contextWindow,
 		ratio: tokens === null ? null : Math.min(1, tokens / contextWindow),
 		basis,
+		cache: {
+			latest: latest && sameModel(latest.model) ? cacheUsage(latest.usage) : undefined,
+			session,
+			requestCount: requests.length,
+		},
 	});
 	// Explicit unknown values invalidate historical usage after compaction/model changes.
 	if (snapshot.contextUsage) {

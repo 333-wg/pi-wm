@@ -1,0 +1,28 @@
+{
+	"appId": "com.wuming.desktop",
+	"productName": "Pi-Wm",
+	"electronLanguages": ["en-US", "zh-CN", "zh-TW"],
+	"directories": { "app": "apps/desktop", "output": "release" },
+	"files": ["src/**/*", "package.json"],
+	"extraResources": [
+		{ "from": ".desktop-stage/runtime", "to": "runtime", "filter": ["**/*", "!node_modules{,/**/*}"] },
+		{ "from": ".desktop-stage/runtime/node_modules", "to": "runtime/node_modules", "filter": ["**/*"] }
+	],
+	"afterPack": "scripts/verify-desktop-package.mjs",
+	"asar": true,
+	"npmRebuild": false,
+	"win": {
+		"target": [{ "target": "nsis", "arch": ["x64"] }],
+		"executableName": "Pi-Wm",
+		"artifactName": "Pi-Wm-${version}-Setup-${arch}.${ext}"
+	},
+	"nsis": {
+		"oneClick": false,
+		"perMachine": false,
+		"allowToChangeInstallationDirectory": true,
+		"createDesktopShortcut": true,
+		"createStartMenuShortcut": true,
+		"deleteAppDataOnUninstall": false,
+		"runAfterFinish": false
+	}
+}

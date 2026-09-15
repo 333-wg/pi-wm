@@ -324,15 +324,31 @@ test("persists default media settings without returning keys", async ({ page }, 
 	await form.getByRole("button", { name: "保存", exact: true }).click();
 	await expect(form.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
 	await settings.scrollIntoViewIfNeeded();
+	const videoForm = settings.locator("form").filter({ hasText: "默认生视频模型" });
+	await videoForm.getByLabel("接口协议").selectOption("openai-json");
+	await videoForm.getByRole("checkbox", { name: "参考图使用 Base64 Data URL" }).check();
+	await videoForm.getByRole("button", { name: "保存", exact: true }).click();
+	await expect(videoForm.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+	await page.reload();
+	await page.getByRole("button", { name: "设置", exact: true }).click();
+	await page.locator(".settings-navigation button").filter({ hasText: "模型" }).click();
+	await expect(videoForm.getByLabel("接口协议")).toHaveValue("openai-json");
+	await expect(videoForm.getByRole("checkbox", { name: "参考图使用 Base64 Data URL" })).toBeChecked();
+	await expect(videoForm.getByLabel("API Key")).toHaveValue("");
+	await videoForm.scrollIntoViewIfNeeded();
 	await page.screenshot({ path: testInfo.outputPath("media-settings-desktop.png") });
 	await page.setViewportSize({ width: 390, height: 844 });
-	await form.scrollIntoViewIfNeeded();
-	for (const input of await form.locator("input").all()) {
+	await videoForm.scrollIntoViewIfNeeded();
+	for (const input of await videoForm.locator("input, select").all()) {
 		const box = (await input.boundingBox())!;
 		expect(box.x).toBeGreaterThanOrEqual(0);
 		expect(box.x + box.width).toBeLessThanOrEqual(390);
 	}
 	await page.screenshot({ path: testInfo.outputPath("media-settings-mobile.png") });
+	await videoForm.getByLabel("接口协议").selectOption("auto");
+	await videoForm.getByRole("checkbox", { name: "参考图使用 Base64 Data URL" }).uncheck();
+	await videoForm.getByRole("button", { name: "保存", exact: true }).click();
+	await expect(videoForm.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
 	expect(requests.some((request) => request.startsWith("GET /v1/models/"))).toBe(false);
 	expect(
 		requests.some((request) => request.startsWith("POST /v1/images") || request.startsWith("POST /v1/videos"))
@@ -369,15 +385,15 @@ test("fetches only matching media candidates using saved or unsaved connections"
 	await imageForm.getByRole("button", { name: "保存", exact: true }).click();
 	await expect(imageForm.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
 	await videoForm.getByRole("button", { name: "获取模型" }).click();
-	await expect(videoForm.getByRole("combobox").locator("option")).toHaveText([
+	await expect(videoForm.getByLabel("已获取的生视频模型").locator("option")).toHaveText([
 		"选择模型",
 		"agnes-video-v2.0",
 		"configured-video",
 		"sora-2",
 	]);
-	await videoForm.getByRole("combobox").selectOption("agnes-video-v2.0");
+	await videoForm.getByLabel("已获取的生视频模型").selectOption("agnes-video-v2.0");
 	await expect(videoForm.getByLabel("模型 ID")).toHaveValue("agnes-video-v2.0");
-	await expect(videoForm.getByLabel("接口协议")).toHaveValue("视频任务接口（OpenAI / Agnes v2.0）");
+	await expect(videoForm.getByLabel("接口协议")).toHaveValue("auto");
 	await videoForm.scrollIntoViewIfNeeded();
 	await page.screenshot({ path: testInfo.outputPath("video-discovery-desktop.png") });
 	await page.setViewportSize({ width: 390, height: 844 });
@@ -427,6 +443,7 @@ test("fetches only matching media candidates using saved or unsaved connections"
 test("shows generated image and playable video outside collapsed tool traces, including after reload", async ({
 	page,
 }, testInfo) => {
+	test.setTimeout(90_000);
 	await page.addInitScript(() =>
 		localStorage.setItem("wuming.permission", JSON.stringify({ sandboxMode: "unrestricted", approvalPolicy: "never" }))
 	);
@@ -442,7 +459,8 @@ test("shows generated image and playable video outside collapsed tool traces, in
 	const img = page.locator(".tool-row .tool-image-preview");
 	const player = page.locator(".tool-row video");
 	await expect(img).toBeVisible({ timeout: 20_000 });
-	await expect(player).toBeVisible({ timeout: 20_000 });
+	// Production scheduling intentionally waits 30 seconds before the first video query.
+	await expect(player).toBeVisible({ timeout: 45_000 });
 	expect(await img.evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBe(480);
 	await expect.poll(() => player.evaluate((node) => (node as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
 	await player.evaluate((node) => (node as HTMLVideoElement).play());
@@ -475,6 +493,7 @@ test("shows generated image and playable video outside collapsed tool traces, in
 test("previews and downloads generated media before the assistant finishes, then preserves it after reload", async ({
 	page,
 }, testInfo) => {
+	test.setTimeout(90_000);
 	let releaseReply!: () => void;
 	finalReplyGate = new Promise<void>((resolve) => {
 		releaseReply = resolve;
@@ -497,7 +516,7 @@ test("previews and downloads generated media before the assistant finishes, then
 		const liveVideo = page.locator(".live-tool video");
 		await expect(liveImage).toBeVisible({ timeout: 20_000 });
 		await expect.poll(() => liveImage.evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBe(480);
-		await expect(liveVideo).toBeVisible();
+		await expect(liveVideo).toBeVisible({ timeout: 45_000 });
 		await expect
 			.poll(() => liveVideo.evaluate((node) => (node as HTMLVideoElement).readyState))
 			.toBeGreaterThanOrEqual(2);
@@ -550,6 +569,7 @@ test("previews and downloads generated media before the assistant finishes, then
 
 for (const mode of ["auto", "manual"] as const) {
 	test(`uses host defaults for a ${mode} local skill without configuring its provider`, async ({ page }) => {
+		test.setTimeout(90_000);
 		await page.addInitScript(() =>
 			localStorage.setItem(
 				"wuming.permission",
@@ -585,7 +605,7 @@ for (const mode of ["auto", "manual"] as const) {
 			})
 			.toBe("image");
 		await expect(img).toBeVisible({ timeout: 20_000 });
-		await expect(player).toBeVisible({ timeout: 20_000 });
+		await expect(player).toBeVisible({ timeout: 45_000 });
 		await expect.poll(() => player.evaluate((node) => (node as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
 		expect(skillEvidence).toContain(mode);
 		expect(providerErrors).toEqual([]);

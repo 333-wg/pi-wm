@@ -144,23 +144,18 @@ test.beforeEach(async ({ page }, testInfo) => {
 });
 
 test(firstConnectionTitle, async ({ page }) => {
-	const dialog = page.getByRole("dialog", { name: "首次设置" });
-	await expect(dialog).toBeVisible();
-	const password = dialog.getByLabel("访问密码");
+	const welcome = page.locator(".welcome-screen");
+	await expect(welcome).toBeVisible();
+	const password = welcome.getByLabel("访问密码");
 	await password.fill("wrong-password");
-	await dialog.getByRole("button", { name: "连接", exact: true }).click();
-	await expect(dialog.getByRole("alert")).toContainText("密码不正确");
+	await welcome.getByRole("button", { name: "开启工作空间", exact: true }).click();
+	await expect(welcome.getByRole("alert")).toContainText("密码不正确");
 
 	await password.fill(token);
-	await dialog.getByRole("button", { name: "连接", exact: true }).click();
+	await welcome.getByRole("button", { name: "开启工作空间", exact: true }).click();
 	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
-	await expect(dialog.getByText("连接成功", { exact: true })).toBeVisible();
-	await expect(dialog.getByText("大模型", { exact: true })).toBeVisible();
-	await expect(dialog.getByRole("combobox", { name: "默认模型" })).toHaveValue(
-		JSON.stringify({ provider: "demo", id: "wuming-demo" })
-	);
-	await dialog.getByRole("button", { name: "完成设置" }).click();
-	await expect(dialog).toBeHidden();
+	await expect(welcome).toBeHidden();
+	await expect(page.getByRole("textbox", { name: "消息" })).toBeEnabled();
 	await expect.poll(() => page.evaluate(() => localStorage.getItem("wuming.token"))).toBe(token);
 
 	await page.reload();
@@ -290,7 +285,7 @@ test("approves a tool and stops a long-running turn", async ({ page }) => {
 	await expect(stop).toBeHidden();
 	await expect(page.getByRole("textbox", { name: "消息" })).toHaveAttribute(
 		"placeholder",
-		"给 Wuming 发送任务或问题（@ 引用文件，/ 快捷命令）"
+		"给 Pi-Wm 发送任务或问题（@ 引用文件，/ 快捷命令）"
 	);
 });
 

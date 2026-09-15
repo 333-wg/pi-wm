@@ -20,7 +20,6 @@ describe("Agnes video protocol", () => {
 		{ baseUrl: "https://apihub.agnes-ai.com/custom/v1" },
 		{ baseUrl: "https://apihub.agnes-ai.com:8443/v1" },
 		{ model: "sora-2" },
-		{ model: "agnes-video-unknown" },
 	])("preserves the existing transport for other connections: %j", (change) => {
 		const request = videoRequest({ ...config, ...change }, { prompt: "scene", size: "1280x720", seconds: 4 });
 		expect(request.protocol).toBe("openai");

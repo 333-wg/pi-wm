@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionSnapshot, Usage } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
-import { estimateContext } from "../src/lib/context-usage.js";
+import { cacheUsage, estimateContext } from "../src/lib/context-usage.js";
 import { ContextMeter, ContextPill } from "../src/components/ContextMeter.js";
 
 const model = { provider: "test", id: "large" };
@@ -34,7 +34,7 @@ const snapshot: SessionSnapshot = {
 describe("context occupancy", () => {
 	it("prefers compacted occupancy over expensive summary request usage", () => {
 		const value = estimateContext({ ...snapshot, contextUsage: { model, tokens: 12000, basis: "compaction" } }, 128000);
-		expect(value).toEqual({ tokens: 12000, contextWindow: 128000, ratio: 0.09375, basis: "compaction" });
+		expect(value).toMatchObject({ tokens: 12000, contextWindow: 128000, ratio: 0.09375, basis: "compaction" });
 	});
 	it("does not fall back to stale requests when compaction has no estimate", () => {
 		expect(
@@ -84,5 +84,66 @@ describe("context occupancy", () => {
 		const zero = estimateContext({ ...snapshot, contextUsage: { model, tokens: 0, basis: "compaction" } }, 128000)!;
 		expect(zero.ratio).toBe(0);
 		expect(renderToStaticMarkup(createElement(ContextMeter, { usage: zero }))).toContain("width:0%");
+	});
+});
+
+describe("context cache details", () => {
+	it("uses all input categories but excludes output from the hit ratio", () => {
+		expect(cacheUsage({ inputTokens: 100, cacheReadTokens: 800, cacheWriteTokens: 100 })).toEqual({
+			inputTokens: 1000,
+			readTokens: 800,
+			writeTokens: 100,
+			hitRatio: 0.8,
+		});
+		expect(cacheUsage({ inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }).hitRatio).toBeNull();
+		expect(cacheUsage({ inputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 }).hitRatio).toBe(0);
+		expect(cacheUsage({ inputTokens: 0, cacheReadTokens: 100, cacheWriteTokens: 0 }).hitRatio).toBe(1);
+	});
+	it("separates latest request from token-weighted session totals and tool billing", () => {
+		const first = { ...usage, inputTokens: 900, cacheReadTokens: 0, cacheWriteTokens: 0 };
+		const last = { ...usage, inputTokens: 0, cacheReadTokens: 100, cacheWriteTokens: 0 };
+		const turn = snapshot.usageByTurn![0]!;
+		const value = estimateContext(
+			{
+				...snapshot,
+				usageByTurn: [
+					{
+						...turn,
+						requests: [
+							{ requestId: "r1", model, usage: first },
+							{ requestId: "r2", model, usage: last },
+						],
+					},
+				],
+			},
+			128000
+		)!;
+		expect(value.cache).toMatchObject({
+			requestCount: 2,
+			latest: { hitRatio: 1 },
+			session: { inputTokens: 1000, hitRatio: 0.1 },
+		});
+		for (const component of [ContextPill, ContextMeter]) {
+			const html = renderToStaticMarkup(createElement(component, { usage: value }));
+			expect(html).toContain("缓存命中率（输入 token）：100.0%");
+			expect(html).toContain("缓存命中率（输入 token）：10.0%");
+			expect(html).toContain("缓存写入：0 token");
+		}
+	});
+	it("retains historical session statistics but never labels old-model usage as the current request", () => {
+		const value = estimateContext({ ...snapshot, model: { ...model, id: "small" } }, 8000)!;
+		expect(value.cache?.latest).toBeUndefined();
+		expect(value.cache?.session.inputTokens).toBe(90000);
+		expect(renderToStaticMarkup(createElement(ContextPill, { usage: value }))).toContain(
+			"最近一次模型请求：暂无输入用量"
+		);
+	});
+	it("does not invent request statistics from legacy session totals", () => {
+		const value = estimateContext(
+			{ ...snapshot, usageByTurn: [], contextUsage: { model, tokens: 12000, basis: "compaction" } },
+			128000
+		)!;
+		expect(value.cache).toMatchObject({ latest: undefined, requestCount: 0, session: { hitRatio: null } });
+		expect(renderToStaticMarkup(createElement(ContextPill, { usage: value }))).not.toContain("NaN");
 	});
 });

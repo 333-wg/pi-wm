@@ -12,3 +12,5 @@ test-results/
 .wuming-pi-agent/
 .fuse_hidden*
 %SystemDrive%/
+release/
+.desktop-stage/

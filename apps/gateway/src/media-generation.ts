@@ -8,7 +8,17 @@ import { SafeWebClient, type ApprovalBroker } from "@wuming/sandbox";
 import { Type } from "typebox";
 import { MediaModelRegistry, mediaResourceUrl, readMediaBody, type MediaConnection } from "./media-models.js";
 import { MEDIA_SKILL_ROUTING_POLICY, mediaModelStatus } from "./media-skill-policy.js";
-import { videoRequest, videoResultResource, type VideoProtocol } from "./media-video.js";
+import {
+	validateVideoRequest,
+	videoRequest,
+	videoRemoteId,
+	videoResult,
+	videoResultResource,
+	type VideoProtocol,
+	type VideoReference,
+} from "./media-video.js";
+import { mediaErrorDetail, mediaResponseError } from "./media-errors.js";
+import { VideoPollSchedule } from "./media-video-polling.js";
 
 type Json = Record<string, unknown>;
 interface VideoJob {
@@ -21,7 +31,11 @@ interface VideoJob {
 }
 const object = (value: unknown): Json =>
 	value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
-const connectionHash = (config: MediaConnection) => createHash("sha256").update(JSON.stringify(config)).digest("hex");
+// The job owns its transport. Changing a preference must not invalidate an in-flight job.
+const connectionHash = (config: MediaConnection) =>
+	createHash("sha256")
+		.update(JSON.stringify({ kind: config.kind, baseUrl: config.baseUrl, model: config.model, apiKey: config.apiKey }))
+		.digest("hex");
 const outputText = (text: string) => [{ type: "text" as const, text }];
 
 export class MediaGenerationService {
@@ -32,7 +46,9 @@ export class MediaGenerationService {
 	readonly #fetch: typeof fetch;
 	readonly #maxImageBytes: number;
 	readonly #maxVideoBytes: number;
-	readonly #pollMs: number;
+	readonly #polling: VideoPollSchedule;
+	readonly #now: () => number;
+	readonly #wait: (ms: number, signal: AbortSignal) => Promise<void>;
 
 	constructor(options: {
 		models: MediaModelRegistry;
@@ -41,6 +57,8 @@ export class MediaGenerationService {
 		maxImageBytes?: number;
 		maxVideoBytes?: number;
 		pollMs?: number;
+		now?: () => number;
+		wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 		fetch?: typeof fetch;
 		download?: (url: string, options: { maxBytes: number; signal?: AbortSignal }) => Promise<Buffer>;
 	}) {
@@ -63,7 +81,9 @@ export class MediaGenerationService {
 		this.#download = options.download ?? ((url, limits) => web.download(url, limits));
 		this.#maxImageBytes = options.maxImageBytes ?? 10 * 1024 * 1024;
 		this.#maxVideoBytes = options.maxVideoBytes ?? 100 * 1024 * 1024;
-		this.#pollMs = options.pollMs ?? 3000;
+		this.#polling = new VideoPollSchedule(this.#db, options.pollMs ?? 30_000);
+		this.#now = options.now ?? Date.now;
+		this.#wait = options.wait ?? ((ms, signal) => delay(ms, undefined, { signal }));
 	}
 
 	close(): void {
@@ -92,15 +112,20 @@ export class MediaGenerationService {
 			});
 		} catch {
 			signal.throwIfAborted();
-			throw new Error(
-				"Media service connection failed. Do not automatically resubmit a generation: the provider may already have accepted and billed it."
+			throw Object.assign(
+				new Error(
+					"Media service connection failed. Do not automatically resubmit a generation: the provider may already have accepted and billed it."
+				),
+				{
+					code: body === undefined ? "media_retrieval_failed" : "media_submission_failed",
+					details: { retryable: body === undefined },
+				}
 			);
 		}
 		if (!response.ok) {
-			await response.body?.cancel();
-			throw new Error(
-				`Media service returned HTTP ${response.status}. Check model access, balance, and API compatibility. Do not automatically retry a billable generation.`
-			);
+			const error = await mediaResponseError(response, config, body !== undefined);
+			signal.throwIfAborted();
+			throw error;
 		}
 		return response;
 	}
@@ -267,45 +292,85 @@ export class MediaGenerationService {
 				name: "generate_video",
 				label: "Generate video",
 				description:
-					"Submit one video to the configured default video model (OpenAI-compatible or official Agnes Video v2.0 API). Agnes supports approximately 1-18 seconds at 24 fps. Returns a durable jobId; use get_generated_video to wait and attach the result. Submission may be billable: never submit a second job merely because the first is pending.",
+					"Submit one video using the configured model's adapter and capabilities. Supports text or reference-image generation when the adapter permits it. The host handles multipart upload or Base64 encoding of referenceArtifactId. Returns a durable jobId and normalized parameters; use get_generated_video to retrieve the result. Never resubmit because a job is pending or failed; each submission may be billable.",
 				promptSnippet: "Start a video generation using the default video model from Settings",
 				promptGuidelines: [
 					"For video skills use generate_video with the user-configured default, not hard-coded skill providers or scripts. Then call get_generated_video until completed or failed. Cancellation stops local waiting, not a provider-side job or its charges.",
+					"Read the current video capabilities in the host policy or media_model_status. Prefer aspectRatio and omit size unless a specific supported resolution is required. Never change an explicitly requested duration or resolution without user direction.",
+					"When the user asks to animate an attached/generated image, pass its real referenceArtifactId. The host uploads or Base64-encodes it when supported. If capabilities only accept public-url, use a user-provided public referenceImageUrl or explain the limitation. Never invent a URL, publish the image to a third party, or silently generate text-only video. For Agnes reference mode refer to the image as <Picture 1> in the prompt.",
 				],
 				parameters: Type.Object(
 					{
 						prompt: Type.String({ minLength: 1, maxLength: 32_000 }),
-						size: Type.Optional(Type.String({ pattern: "^[0-9]{2,4}x[0-9]{2,4}$" })),
+						size: Type.Optional(
+							Type.String({
+								pattern: "^([0-9]{2,4}x[0-9]{2,4}|720[Pp]|1080[Pp]|[12][Kk])$",
+								description:
+									"Optional provider-supported resolution. Omit for the model default; prefer aspectRatio for orientation.",
+							})
+						),
 						seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
+						aspectRatio: Type.Optional(Type.String({ pattern: "^(21:9|16:9|4:3|1:1|3:4|9:16)$" })),
+						referenceArtifactId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+						referenceImageUrl: Type.Optional(
+							Type.String({
+								minLength: 1,
+								maxLength: 4000,
+								description:
+									"Existing public HTTPS reference image URL. Do not put Base64 in tool arguments; use referenceArtifactId for automatic host-side encoding.",
+							})
+						),
 					},
 					{ additionalProperties: false }
 				),
 				execute: async (id, params, externalSignal) => {
 					const config = this.#models.resolve("video");
-					const request = videoRequest(config, params);
+					validateVideoRequest(config, params);
 					const permit = await authorize(id, config, externalSignal);
 					const signal = AbortSignal.any([...(externalSignal ? [externalSignal] : []), AbortSignal.timeout(120_000)]);
+					let submitting = false;
 					try {
+						let reference: VideoReference | undefined;
+						if (params.referenceArtifactId) {
+							const record = this.#artifacts.get(params.referenceArtifactId);
+							if (!record || record.workspaceId !== snapshot.session.workspaceId || record.kind !== "image")
+								throw new Error("Reference image is not accessible in this workspace");
+							if (!["image/png", "image/jpeg", "image/webp"].includes(record.ref.mimeType))
+								throw new Error("Video reference image must be PNG, JPEG or WebP");
+							if (record.ref.size > this.#maxImageBytes)
+								throw new Error("Reference image exceeds video input size limit");
+							const { content } = await this.#artifacts.read(params.referenceArtifactId);
+							if (content.length > this.#maxImageBytes)
+								throw new Error("Reference image exceeds video input size limit");
+							reference = { content: new Uint8Array(content), mimeType: record.ref.mimeType, name: record.ref.name };
+						}
+						const request = videoRequest(config, params, reference);
+						submitting = true;
 						const payload = await this.#json(await this.#request(config, "videos", signal, request.body, request.json));
-						const remoteId = request.protocol === "agnes" ? payload.video_id : payload.id;
-						if (typeof remoteId !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(remoteId))
-							throw new Error("Unsupported video response: expected a video task id. Do not resubmit automatically.");
+						const remoteId = videoRemoteId(request.protocol, payload);
 						const jobId = randomUUID();
 						this.#db
 							.prepare(
 								"INSERT INTO media_video_jobs (id, session_id, remote_id, connection_hash, protocol) VALUES (?, ?, ?, ?, ?)"
 							)
 							.run(jobId, snapshot.session.id, remoteId, connectionHash(config), request.protocol);
+						this.#polling.initialize(jobId, connectionHash(config), this.#now(), true);
 						return {
 							content: outputText(
 								JSON.stringify({
 									jobId,
 									status: "submitted",
+									protocol: request.protocol,
+									parameters: request.parameters,
 									next: "Call get_generated_video with this jobId; do not resubmit.",
 								})
 							),
-							details: { jobId },
+							details: { jobId, protocol: request.protocol, parameters: request.parameters },
 						};
+					} catch (error) {
+						if (submitting && error instanceof Error && !signal.aborted)
+							throw Object.assign(error, { code: "media_submission_failed" });
+						throw error;
 					} finally {
 						if (permit) approvals.completeAuthorization(permit);
 					}
@@ -315,7 +380,7 @@ export class MediaGenerationService {
 				name: "get_generated_video",
 				label: "Retrieve generated video",
 				description:
-					"Wait up to 60 seconds for an existing video job from this session, then return pending or attach the completed video for inline playback. Safe to call again for the same job, including after reconnect/restart. Never creates or bills a new generation.",
+					"Wait up to 60 seconds for an existing video job. The host enforces persistent gradual polling and provider cooldowns, including across repeated calls/restarts. Pending or rate_limited means the job is still awaiting retrieval, not generation failure. Continue only with this jobId; never resubmit. Never creates or bills a new generation.",
 				promptSnippet: "Check a submitted video and show its completed video attachment in chat",
 				parameters: Type.Object(
 					{ jobId: Type.String({ minLength: 1, maxLength: 200 }) },
@@ -341,57 +406,86 @@ export class MediaGenerationService {
 					const permit = await authorize(id, config, externalSignal);
 					const signal = AbortSignal.any([...(externalSignal ? [externalSignal] : []), AbortSignal.timeout(180_000)]);
 					try {
-						const deadline = Date.now() + 60_000;
+						this.#polling.initialize(job.id, job.connection_hash, this.#now());
+						const deadline = this.#now() + 60_000;
+						const pending = () => ({
+							content: outputText(
+								JSON.stringify({
+									jobId: job.id,
+									status: "pending",
+									reason:
+										this.#polling.state(job.id).failures > 0 || this.#polling.state(job.id).cooldown > this.#now()
+											? "rate_limited_or_unavailable"
+											: "generating_or_retrieving",
+									nextPollAt: new Date(this.#polling.nextAt(job.id)).toISOString(),
+									retryAfterSeconds: Math.max(0, Math.ceil((this.#polling.nextAt(job.id) - this.#now()) / 1000)),
+									next: "Generation is not known to have failed. Continue retrieving this same job; the host waits for the scheduled query time. Never submit another generation.",
+								})
+							),
+							details: { jobId: job.id },
+						});
 						while (true) {
-							const payload = await this.#json(
-								await this.#request(config, videoResultResource(config, job.protocol, job.remote_id), signal)
-							);
-							const status = String(payload.status).toLowerCase();
-							if (
-								status === "completed" ||
-								(job.protocol === "agnes" && ["succeeded", "success", "done"].includes(status))
-							) {
-								let content: Buffer;
-								if (job.protocol === "agnes") {
-									const url = object(payload.metadata).url;
-									if (typeof url !== "string" || !url.trim())
-										throw new Error(
-											"Unsupported Agnes video result: expected metadata.url. Retrieve this job again; do not resubmit."
-										);
-									content = await this.#download(url, { maxBytes: this.#maxVideoBytes, signal });
-								} else {
-									const response = await this.#request(
-										config,
-										`videos/${encodeURIComponent(job.remote_id)}/content`,
-										signal
-									);
-									content = await readMediaBody(response, this.#maxVideoBytes);
-								}
-								signal.throwIfAborted();
-								const artifact = await this.#save(snapshot, content, "video");
-								this.#db
-									.prepare("UPDATE media_video_jobs SET artifact = ? WHERE id = ?")
-									.run(JSON.stringify(artifact), job.id);
-								return { content: outputText("Video completed and attached for playback."), details: { artifact } };
-							}
-							if (["failed", "cancelled", "canceled", "error"].includes(status))
-								throw new Error(
-									`Video generation ${status}; provider did not produce a video. Do not resubmit without user direction.`
-								);
-							if (!["queued", "in_progress", "pending", "processing"].includes(status))
-								throw new Error("Unsupported video job status");
-							if (Date.now() >= deadline)
+							signal.throwIfAborted();
+							const saved = this.#db.prepare("SELECT artifact FROM media_video_jobs WHERE id = ?").get(job.id);
+							if (saved?.artifact)
 								return {
-									content: outputText(
-										JSON.stringify({
-											jobId: job.id,
-											status,
-											next: "Call get_generated_video again; do not resubmit.",
-										})
-									),
-									details: { jobId: job.id },
+									content: outputText("Video completed."),
+									details: { artifact: JSON.parse(saved.artifact as string) as ArtifactRef },
 								};
-							await delay(this.#pollMs, undefined, { signal });
+							if (this.#now() >= deadline) return pending();
+							const waitMs = this.#polling.nextAt(job.id) - this.#now();
+							if (waitMs > 0) {
+								await this.#wait(Math.min(waitMs, deadline - this.#now()), signal);
+								continue;
+							}
+							if (!this.#polling.claim(job.id, this.#now())) continue;
+							try {
+								const payload = await this.#json(
+									await this.#request(config, videoResultResource(config, job.protocol, job.remote_id), signal)
+								);
+								const result = videoResult(job.protocol, payload);
+								const status = result.status;
+								if (status === "completed") {
+									let content: Buffer;
+									if (result.url) {
+										content = await this.#download(result.url, { maxBytes: this.#maxVideoBytes, signal });
+									} else {
+										const response = await this.#request(
+											config,
+											`videos/${encodeURIComponent(job.remote_id)}/content`,
+											signal
+										);
+										content = await readMediaBody(response, this.#maxVideoBytes);
+									}
+									signal.throwIfAborted();
+									const artifact = await this.#save(snapshot, content, "video");
+									this.#db
+										.prepare("UPDATE media_video_jobs SET artifact = ? WHERE id = ?")
+										.run(JSON.stringify(artifact), job.id);
+									return { content: outputText("Video completed and attached for playback."), details: { artifact } };
+								}
+								if (status === "failed") {
+									const detail = mediaErrorDetail(payload, config);
+									throw new Error(
+										"Video generation failed; provider did not produce a video." +
+											(detail ? " Provider detail (untrusted): " + detail : "") +
+											" Do not resubmit without user direction."
+									);
+								}
+								this.#polling.pending(job.id, this.#now());
+							} catch (error) {
+								signal.throwIfAborted();
+								const details = error && typeof error === "object" && "details" in error ? object(error.details) : {};
+								if (!details.retryable) throw error;
+								this.#polling.defer(
+									job.id,
+									this.#now(),
+									typeof details.retryAfterMs === "number" ? details.retryAfterMs : 0,
+									details.httpStatus === 429
+								);
+							} finally {
+								this.#polling.release(job.id);
+							}
 						}
 					} finally {
 						if (permit) approvals.completeAuthorization(permit);

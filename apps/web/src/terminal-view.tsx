@@ -50,7 +50,7 @@ export function TerminalView({ token, workspaceId }: { token: string; workspaceI
 		term.loadAddon(fit);
 		term.open(container);
 		fit.fit();
-		term.writeln("Wuming 终端");
+		term.writeln("Pi-Wm 终端");
 		term.writeln("正在连接工作区...");
 		const scheme = location.protocol === "https:" ? "wss" : "ws";
 		const send = (message: object) => {

@@ -63,7 +63,7 @@ for (const action of ["cancel", "new selection", "refresh"] as const) {
 		await page.getByRole("tab", { name: "对话", exact: true }).click();
 		await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveAttribute(
 			"placeholder",
-			"给 Wuming 发送任务或问题（@ 引用文件，/ 快捷命令）"
+			"给 Pi-Wm 发送任务或问题（@ 引用文件，/ 快捷命令）"
 		);
 		await page.getByRole("textbox", { name: "消息", exact: true }).fill("After delayed skill response");
 		await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -112,7 +112,7 @@ for (const width of [1365, 390]) {
 		await expect(page.locator(".composer-wrap").getByRole("status")).toContainText("当前技能：complete");
 		await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveAttribute(
 			"placeholder",
-			"给 Wuming 发送任务或问题（@ 引用文件，/ 快捷命令）"
+			"给 Pi-Wm 发送任务或问题（@ 引用文件，/ 快捷命令）"
 		);
 		await page.getByRole("textbox", { name: "消息", exact: true }).fill("Use the complete skill");
 		await page.getByRole("button", { name: "发送", exact: true }).click();

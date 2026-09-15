@@ -6,6 +6,7 @@ import type {
 	MediaModelConfig,
 	MediaModelDiscoveryConnection,
 	MediaModelSettings as SavedModel,
+	VideoProtocolPreference,
 } from "@wuming/protocol";
 
 interface Props {
@@ -27,6 +28,8 @@ function ModelForm({
 	const [baseUrl, setBaseUrl] = useState(saved?.baseUrl ?? "");
 	const [model, setModel] = useState(saved?.model ?? "");
 	const [apiKey, setApiKey] = useState("");
+	const [videoProtocol, setVideoProtocol] = useState<VideoProtocolPreference>(saved?.videoProtocol ?? "auto");
+	const [base64Reference, setBase64Reference] = useState(saved?.videoReferenceFormat === "data-url");
 	const [busy, setBusy] = useState(false);
 	const [notice, setNotice] = useState("");
 	const [error, setError] = useState("");
@@ -57,18 +60,23 @@ function ModelForm({
 		baseUrl.trim().replace(/\/+$/, "") !== saved?.baseUrl ||
 		model.trim() !== saved?.model ||
 		Boolean(apiKey) ||
+		(kind === "video" &&
+			(videoProtocol !== (saved?.videoProtocol ?? "auto") ||
+				base64Reference !== (saved?.videoReferenceFormat === "data-url"))) ||
 		(kind === "image" &&
 			JSON.stringify([...imageModels].sort()) !== JSON.stringify([...(JSON.parse(savedModelsKey) as string[])].sort()));
 	useEffect(() => {
 		setBaseUrl(saved?.baseUrl ?? "");
 		setModel(saved?.model ?? "");
 		setApiKey("");
+		setVideoProtocol(saved?.videoProtocol ?? "auto");
+		setBase64Reference(saved?.videoReferenceFormat === "data-url");
 		setNotice("");
 		setError("");
 		setCandidates([]);
 		setSelectedModels(JSON.parse(savedModelsKey) as string[]);
 		setSearch("");
-	}, [saved?.baseUrl, saved?.model, savedModelsKey]);
+	}, [saved?.baseUrl, saved?.model, saved?.videoProtocol, saved?.videoReferenceFormat, savedModelsKey]);
 	async function perform(action: () => Promise<void>) {
 		setBusy(true);
 		setNotice("");
@@ -92,6 +100,9 @@ function ModelForm({
 						baseUrl: baseUrl.trim(),
 						model: model.trim(),
 						...(kind === "image" ? { models: imageModels } : {}),
+						...(kind === "video"
+							? { videoProtocol, videoReferenceFormat: base64Reference ? ("data-url" as const) : ("auto" as const) }
+							: {}),
 						...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
 					});
 					setApiKey("");
@@ -106,11 +117,34 @@ function ModelForm({
 			<fieldset disabled={!connected || busy}>
 				<label>
 					接口协议
-					<input
-						readOnly
-						value={kind === "image" ? "OpenAI Images（官方 / 兼容中转）" : "视频任务接口（OpenAI / Agnes v2.0）"}
-					/>
+					{kind === "image" ? (
+						<input readOnly value="OpenAI Images（官方 / 兼容中转）" />
+					) : (
+						<select
+							value={videoProtocol}
+							onChange={(event) => setVideoProtocol(event.target.value as VideoProtocolPreference)}
+						>
+							<option value="auto">自动识别</option>
+							<option value="openai">OpenAI Videos / 兼容中转</option>
+							<option value="openai-json">OpenAI Videos / JSON 中转</option>
+							<option value="agnes-v2.5">Agnes 2.5 / Flash</option>
+							<option value="agnes">Agnes v2.0</option>
+						</select>
+					)}
 				</label>
+				{kind === "video" && (
+					<label
+						className="media-reference-format"
+						title="默认按模型自动选择传图方式；官方 Agnes 2.5 Flash 已自动使用 Base64。仅在其他服务支持时强制启用。"
+					>
+						<input
+							type="checkbox"
+							checked={base64Reference}
+							onChange={(event) => setBase64Reference(event.target.checked)}
+						/>
+						强制参考图使用 Base64 Data URL
+					</label>
+				)}
 				<label>
 					Base URL
 					<input

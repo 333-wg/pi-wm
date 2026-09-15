@@ -1,0 +1,201 @@
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from "electron";
+import { appendFileSync, mkdirSync, renameSync, statSync, existsSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { GatewayHost } from "./gateway-host.mjs";
+import { APP_URL, createAppProtocol, isAppUrl } from "./app-protocol.mjs";
+
+protocol.registerSchemesAsPrivileged([
+	{
+		scheme: "wuming",
+		privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
+	},
+]);
+app.setName("Pi-Wm");
+const profileOverride = app.commandLine.getSwitchValue("user-data-dir");
+if (profileOverride && !isAbsolute(profileOverride)) throw new Error("--user-data-dir must be absolute");
+// Keep existing profiles and the single-instance lock compatible with the previous product name.
+app.setPath("userData", profileOverride || join(app.getPath("appData"), "Wuming"));
+
+let window;
+let host;
+let quitting = false;
+let allowQuit = false;
+let bootPromise;
+let failureDialog = false;
+let connection;
+const here = dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = resolve(here, "../../..");
+const runtimeRoot = app.isPackaged ? join(process.resourcesPath, "runtime") : repositoryRoot;
+
+function focusWindow() {
+	if (!window || window.isDestroyed()) return;
+	if (window.isMinimized()) window.restore();
+	window.show();
+	window.focus();
+}
+
+function openExternal(value) {
+	try {
+		const url = new URL(value);
+		if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password) void shell.openExternal(url.href);
+	} catch {
+		/* Unknown protocols must not reach the operating system. */
+	}
+}
+
+async function fail(error) {
+	if (quitting || failureDialog) return;
+	failureDialog = true;
+	const { response } = await dialog.showMessageBox({
+		type: "error",
+		title: "Pi-Wm",
+		message: "The local service could not run.",
+		detail: `${error.message}\nLogs: ${join(app.getPath("userData"), "logs", "gateway.log")}`,
+		buttons: ["Restart Pi-Wm", "Quit"],
+		defaultId: 0,
+		cancelId: 1,
+	});
+	if (response === 0) app.relaunch();
+	app.quit();
+}
+
+async function boot() {
+	const profile = app.getPath("userData");
+	const dataDirectory = join(profile, "data");
+	const workspace = join(profile, "workspace");
+	const logs = join(profile, "logs");
+	for (const path of [dataDirectory, workspace, logs]) mkdirSync(path, { recursive: true });
+	const logPath = join(logs, "gateway.log");
+	const log = (text) => {
+		try {
+			if (existsSync(logPath) && statSync(logPath).size > 2 * 1024 * 1024) renameSync(logPath, `${logPath}.previous`);
+			appendFileSync(logPath, text);
+		} catch {
+			/* Logging must not terminate a user's task. */
+		}
+	};
+	host = new GatewayHost({
+		nodeExecutable: app.isPackaged ? join(runtimeRoot, "node.exe") : process.env.WUMING_DESKTOP_NODE,
+		entry: join(runtimeRoot, "apps", "gateway", "dist", "main.js"),
+		dataDirectory,
+		workspace,
+		log,
+		...(app.isPackaged ? { browserDirectory: join(runtimeRoot, "browsers") } : {}),
+		...(!app.isPackaged && process.env.WUMING_DESKTOP_TEST_RUNTIME === "demo" ? { runtime: "demo" } : {}),
+		pickProject: async (kind) => {
+			const options = { title: "Open project", properties: [kind === "file" ? "openFile" : "openDirectory"] };
+			const selected = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+			if (selected.canceled || !selected.filePaths[0]) return undefined;
+			return { path: selected.filePaths[0], kind: kind === "file" ? "file" : "directory" };
+		},
+	});
+	host.on("failure", (error) => void fail(error));
+	if (!host.options.nodeExecutable) throw new Error("Start development with npm run desktop");
+	connection = await host.start();
+	if (quitting) return;
+	protocol.handle("wuming", await createAppProtocol({ webRoot: join(runtimeRoot, "apps", "web", "dist"), connection }));
+	ipcMain.handle("desktop:connect", (event) => {
+		if (
+			!window ||
+			event.sender !== window.webContents ||
+			event.senderFrame !== window.webContents.mainFrame ||
+			!isAppUrl(event.senderFrame.url)
+		)
+			throw new Error("Forbidden");
+		return { token: connection.token, websocketUrl: connection.websocketUrl };
+	});
+	window = new BrowserWindow({
+		width: 1360,
+		height: 900,
+		minWidth: 800,
+		minHeight: 600,
+		show: false,
+		title: "Pi-Wm",
+		backgroundColor: "#f7f8f6",
+		webPreferences: {
+			preload: join(here, "preload.cjs"),
+			contextIsolation: true,
+			sandbox: true,
+			nodeIntegration: false,
+			webSecurity: true,
+			webviewTag: false,
+			spellcheck: false,
+		},
+	});
+	window.webContents.session.setPermissionRequestHandler((_contents, permission, callback) =>
+		callback(permission === "clipboard-sanitized-write")
+	);
+	window.webContents.session.setPermissionCheckHandler(
+		(_contents, permission) => permission === "clipboard-sanitized-write"
+	);
+	window.webContents.setWindowOpenHandler(({ url }) => {
+		openExternal(url);
+		return { action: "deny" };
+	});
+	window.webContents.on("will-navigate", (event, url) => {
+		if (!isAppUrl(url)) {
+			event.preventDefault();
+			openExternal(url);
+		}
+	});
+	window.webContents.on("will-attach-webview", (event) => event.preventDefault());
+	window.webContents.on("render-process-gone", (_event, details) => {
+		if (!quitting) void fail(new Error(`Workbench stopped (${details.reason})`));
+	});
+	window.once("ready-to-show", focusWindow);
+	window.on("closed", () => {
+		window = undefined;
+	});
+	Menu.setApplicationMenu(
+		Menu.buildFromTemplate([
+			{
+				label: "Pi-Wm",
+				submenu: [
+					{ label: "Open logs", click: () => void shell.openPath(logs) },
+					{ type: "separator" },
+					{ role: "quit" },
+				],
+			},
+			{ role: "editMenu" },
+			{
+				label: "View",
+				submenu: [
+					{ role: "reload" },
+					{ role: "resetZoom" },
+					{ role: "zoomIn" },
+					{ role: "zoomOut" },
+					{ role: "togglefullscreen" },
+				],
+			},
+		])
+	);
+	await window.loadURL(APP_URL);
+}
+
+if (!app.requestSingleInstanceLock()) {
+	app.quit();
+} else {
+	app.on("second-instance", focusWindow);
+	app.on("activate", focusWindow);
+	app.on("window-all-closed", () => app.quit());
+	app.on("before-quit", (event) => {
+		if (allowQuit) return;
+		event.preventDefault();
+		if (quitting) return;
+		quitting = true;
+		void (async () => {
+			await host?.stop();
+			await bootPromise?.catch(() => {});
+			await host?.stop();
+			allowQuit = true;
+			app.quit();
+		})();
+	});
+	app.whenReady().then(() => {
+		if (!quitting) {
+			bootPromise = boot();
+			void bootPromise.catch(fail);
+		}
+	});
+}

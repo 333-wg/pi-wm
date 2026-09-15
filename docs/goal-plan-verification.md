@@ -3,6 +3,12 @@
 Verified on 2026-09-05 against the current working tree. This record covers the
 local durable-plan increment, not completion of the wider production roadmap.
 
+UI update (2026-09-15): the standalone local-goal detail view and its obsolete
+`e2e/goal-plan.spec.ts` navigation test have been removed. Local goals now stay in
+their owning conversation. `e2e/goal-activity.spec.ts` covers inline controls,
+session navigation, reload persistence, and responsive layout. The plan engine
+and shared automation plan components remain; the evidence below is historical.
+
 ## Gates
 
 - `npm run check`: 12 workspaces, including test sources; light 76/76 and

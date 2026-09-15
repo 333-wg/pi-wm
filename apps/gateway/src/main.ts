@@ -48,6 +48,7 @@ import { ImportedProjectCatalog } from "./projects.js";
 import { showLocalProjectPicker } from "./local-picker.js";
 import { GatewayEvaluationManager } from "./evaluation.js";
 import { resolveExecutionPlacement } from "./execution-placement.js";
+import { createDesktopBridge } from "./desktop-bridge.js";
 
 function envPath(value: string | undefined, fallback: string): string {
 	const selected = value ?? fallback;
@@ -666,6 +667,7 @@ class DemoRuntime implements AgentRuntime {
 }
 
 async function main(): Promise<void> {
+	const desktop = createDesktopBridge();
 	const configuredLogLevel = process.env.WUMING_LOG_LEVEL ?? "info";
 	if (!["debug", "info", "warn", "error"].includes(configuredLogLevel))
 		throw new Error("WUMING_LOG_LEVEL must be debug, info, warn, or error");
@@ -676,6 +678,7 @@ async function main(): Promise<void> {
 	const host = process.env.WUMING_HOST ?? "127.0.0.1";
 	const port = Number(process.env.WUMING_PORT ?? "8787");
 	const token = process.env.WUMING_TOKEN ?? "wuming";
+	if (desktop) delete process.env.WUMING_TOKEN;
 	const dataDir = envPath(process.env.WUMING_DATA_DIR, defaultDataDirectory());
 	mkdirSync(dataDir, { recursive: true });
 	const fallbackWorkspacePath = envPath(process.env.WUMING_WORKSPACE, process.env.INIT_CWD ?? projectRoot);
@@ -834,7 +837,7 @@ async function main(): Promise<void> {
 	const approvals: ApprovalResponder = approvalBroker;
 	let registerRuntimeWorkspace: (workspace: { id: string; path: string }) => Promise<void> = async () => undefined;
 	if (runtimeMode === "pi") {
-		const { createDefaultPiSessionFactory, PiAgentRuntime } = await import("@wuming/pi-adapter");
+		const { createDefaultPiSessionFactory, parsePiCacheRetention, PiAgentRuntime } = await import("@wuming/pi-adapter");
 		const {
 			createSandboxTools,
 			DockerProcessSandbox,
@@ -989,6 +992,7 @@ async function main(): Promise<void> {
 		if (initialToolChoice !== undefined && initialToolChoice !== "required") {
 			throw new Error("WUMING_PI_INITIAL_TOOL_CHOICE must be required when set");
 		}
+		const cacheRetention = parsePiCacheRetention(process.env.WUMING_PI_CACHE_RETENTION);
 		runtime = new PiAgentRuntime({
 			resolveArtifact: (artifact, snapshot) => artifacts.resolve(artifact, snapshot),
 			resolveCapabilityManifests: () => [operationAuditHook],
@@ -1068,6 +1072,7 @@ async function main(): Promise<void> {
 				sessionDataDir: join(dataDir, "pi-sessions"),
 				resolveWorkspace: workspacePathFor,
 				autoCompaction: envBoolean("WUMING_PI_AUTO_COMPACTION", true),
+				...(cacheRetention === undefined ? {} : { cacheRetention }),
 				createCustomTools: async (snapshot) => {
 					const files = fileExecutors.get(snapshot.session.workspaceId);
 					if (!files) throw new Error("Unknown workspace");
@@ -1258,6 +1263,7 @@ async function main(): Promise<void> {
 	}
 	const server = new GatewayServer({
 		auth,
+		...(desktop ? { allowedOrigins: ["wuming://app"], strictLoopbackHost: true } : {}),
 		orchestrator,
 		store,
 		approvals,
@@ -1288,7 +1294,7 @@ async function main(): Promise<void> {
 		},
 		projects: {
 			pick: async (_ownerId, kind) => {
-				const selection = await showLocalProjectPicker(kind);
+				const selection = desktop ? await desktop.pickProject(kind) : await showLocalProjectPicker(kind);
 				return registerProjectWorkspace(await importedProjects.addLocal(selection.path, selection.kind));
 			},
 			create: (ownerId, name) => importedProjects.create(ownerId, name),
@@ -1369,25 +1375,29 @@ async function main(): Promise<void> {
 		);
 	}
 
-	const shutdown = async () => {
-		shuttingDown = true;
-		clearInterval(automationTimer);
-		logger.log("info", "gateway.shutdown.started");
-		await server.close();
-		if (Symbol.asyncDispose in runtime) await (runtime as AgentRuntime & AsyncDisposable)[Symbol.asyncDispose]();
-		await Promise.allSettled([recoveryPromise, automationTickPromise]);
-		if (browserManager) await browserManager[Symbol.asyncDispose]();
-		await Promise.all([...previewManagers.values()].map((manager) => manager[Symbol.asyncDispose]()));
-		await mcpCatalog[Symbol.asyncDispose]();
-		if (terminal) await terminal[Symbol.asyncDispose]();
-		artifacts.close();
-		mediaGeneration?.close();
-		evaluationStore.close();
-		store.close();
-		logger.log("info", "gateway.shutdown.completed");
-	};
+	let shutdownPromise: Promise<void> | undefined;
+	const shutdown = () =>
+		(shutdownPromise ??= (async () => {
+			shuttingDown = true;
+			clearInterval(automationTimer);
+			logger.log("info", "gateway.shutdown.started");
+			await server.close();
+			if (Symbol.asyncDispose in runtime) await (runtime as AgentRuntime & AsyncDisposable)[Symbol.asyncDispose]();
+			await Promise.allSettled([recoveryPromise, automationTickPromise]);
+			if (browserManager) await browserManager[Symbol.asyncDispose]();
+			await Promise.all([...previewManagers.values()].map((manager) => manager[Symbol.asyncDispose]()));
+			await mcpCatalog[Symbol.asyncDispose]();
+			if (terminal) await terminal[Symbol.asyncDispose]();
+			artifacts.close();
+			mediaGeneration?.close();
+			evaluationStore.close();
+			store.close();
+			logger.log("info", "gateway.shutdown.completed");
+		})());
 	process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
 	process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
+	desktop?.onShutdown(() => void shutdown().finally(() => process.exit(0)));
+	desktop?.ready(address.port);
 }
 
 void main().catch((error) => {

@@ -1,0 +1,33 @@
+{
+	"verifiedAt": "2026-09-14",
+	"provider": "Agnes",
+	"host": "apihub.agnes-ai.com",
+	"model": "agnes-video-2.5-flash",
+	"submittedGenerations": 1,
+	"request": {
+		"mode": "reference",
+		"seconds": "4",
+		"size": "720P",
+		"aspect_ratio": "1:1",
+		"imageCount": 1,
+		"imageEncoding": "PNG Base64 Data URL",
+		"referenceSha256": "ab90196a50b68eb007165716ad60dce4b2950011b80a0fdae6233bcbf9864227"
+	},
+	"result": {
+		"submissionHttpStatus": 200,
+		"terminalStatus": "completed",
+		"downloadUrlField": "url",
+		"mimeType": "video/mp4",
+		"bytes": 627870,
+		"sha256": "7e47b176e82ae58f72ae2084921119107c2b193847e9028dcf7055e559876bcc",
+		"decoded": true,
+		"width": 960,
+		"height": 960,
+		"durationSeconds": 4.458333,
+		"meanFrameDifference": 16.977294921875,
+		"visualInspection": "Reference appearance preserved; package rotates between sampled frames."
+	},
+	"scope": "Official Flash model only; does not establish Base64 support for standard 2.5, relays or every reference image.",
+	"rawBase64Tested": false,
+	"rawBase64SkipReason": "The first Data URL generation succeeded; no second submission needed."
+}

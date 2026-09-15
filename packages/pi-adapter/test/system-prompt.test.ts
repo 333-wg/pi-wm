@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildWumingSystemPrompt, type WumingSystemPromptOptions } from "../src/system-prompt.js";
 
 type PromptTool = WumingSystemPromptOptions["tools"][number];
@@ -187,6 +187,22 @@ describe("buildWumingSystemPrompt guidelines", () => {
 });
 
 describe("buildWumingSystemPrompt environment", () => {
+	it("keeps a date change behind the stable instruction prefix", () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(new Date("2026-09-15T04:00:00Z"));
+			const first = build(fullToolset);
+			vi.setSystemTime(new Date("2026-09-16T04:00:00Z"));
+			const second = build(fullToolset);
+			expect(first).toContain("2026-09-15");
+			expect(second).toContain("2026-09-16");
+			expect(second.split("<current_date>")[0]).toBe(first.split("<current_date>")[0]);
+			expect(first.indexOf("<current_date>")).toBeGreaterThan(first.indexOf("</communication>"));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("requires a concrete review and repair loop with honest evidence", () => {
 		const verification = section(build(fullToolset), "verification");
 		expect(verification).toContain("inspect the diff for unintended changes");
@@ -251,10 +267,10 @@ describe("buildWumingSystemPrompt environment", () => {
 		}
 	});
 
-	it("introduces Wuming rather than Pi", () => {
+	it("introduces the Pi-Wm product identity", () => {
 		const prompt = build(fullToolset);
-		expect(prompt.startsWith("You are Wuming (无名), a coding agent.")).toBe(true);
-		expect(prompt).not.toMatch(/\bpi\b/i);
+		expect(prompt.startsWith("You are Pi-Wm, a coding agent.")).toBe(true);
+		expect(prompt).not.toMatch(/\bpi\b(?!-Wm)/i);
 		expect(prompt).not.toContain("pi.dev");
 		expect(prompt).not.toContain(".pi/");
 	});

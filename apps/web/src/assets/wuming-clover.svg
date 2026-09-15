@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <path d="M50 51c4 16 2 29-7 42" stroke="#25805A" stroke-width="3.5" stroke-linecap="round"/>
+  <g transform="translate(50 49)">
+    <path id="leaf" d="M0 0C-15-5-22-19-14-31C-9-39 7-39 13-30C22-16 10-5 0 0Z" fill="#4FBA80"/>
+    <use href="#leaf" transform="rotate(72)"/>
+    <use href="#leaf" transform="rotate(144)"/>
+    <use href="#leaf" transform="rotate(216)"/>
+    <use href="#leaf" transform="rotate(288)"/>
+    <path id="fold" d="M0 0C7-12 8-24 2-36C15-36 23-15 0 0Z" fill="#278A5A" fill-opacity=".44"/>
+    <use href="#fold" transform="rotate(72)"/>
+    <use href="#fold" transform="rotate(144)"/>
+    <use href="#fold" transform="rotate(216)"/>
+    <use href="#fold" transform="rotate(288)"/>
+  </g>
+</svg>

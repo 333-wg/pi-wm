@@ -17,6 +17,8 @@ const checkConfig = Compile(MediaModelConfigSchema);
 const checkDiscovery = Compile(MediaModelDiscoveryConnectionSchema);
 
 function selectedModels(config: MediaModelConfig): string[] {
+	if (config.kind !== "video" && (config.videoProtocol !== undefined || config.videoReferenceFormat !== undefined))
+		throw new Error("Video protocol applies only to video models");
 	const models = (config.models ?? [config.model]).map((model) => model.trim());
 	if (models.some((model) => !model) || new Set(models).size !== models.length || !models.includes(config.model.trim()))
 		throw new Error("默认模型必须包含在已选模型中，模型 ID 不能为空或重复");
@@ -96,17 +98,25 @@ export class MediaModelRegistry {
 				model: config.model,
 				apiKey: config.apiKey,
 				...(config.kind === "image" ? { models } : {}),
+				...(config.kind === "video" && config.videoProtocol && config.videoProtocol !== "auto"
+					? { videoProtocol: config.videoProtocol }
+					: {}),
+				...(config.kind === "video" && config.videoReferenceFormat === "data-url"
+					? { videoReferenceFormat: config.videoReferenceFormat }
+					: {}),
 			});
 		}
 		this.#configs = next;
 	}
 
 	list(): MediaModelSettings[] {
-		return [...this.#configs.values()].map(({ kind, baseUrl, model, models }) => ({
+		return [...this.#configs.values()].map(({ kind, baseUrl, model, models, videoProtocol, videoReferenceFormat }) => ({
 			kind,
 			baseUrl,
 			model,
 			...(models ? { models: [...models] } : {}),
+			...(videoProtocol ? { videoProtocol } : {}),
+			...(videoReferenceFormat ? { videoReferenceFormat } : {}),
 			authenticated: true,
 		}));
 	}
@@ -146,6 +156,12 @@ export class MediaModelRegistry {
 				model,
 				apiKey,
 				...(config.kind === "image" ? { models } : {}),
+				...(config.kind === "video" && config.videoProtocol && config.videoProtocol !== "auto"
+					? { videoProtocol: config.videoProtocol }
+					: {}),
+				...(config.kind === "video" && config.videoReferenceFormat === "data-url"
+					? { videoReferenceFormat: config.videoReferenceFormat }
+					: {}),
 			});
 		});
 	}

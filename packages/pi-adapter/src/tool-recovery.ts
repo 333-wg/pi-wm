@@ -40,9 +40,11 @@ const guidance: Record<FailureKind, string> = {
 export class ToolRecoveryMonitor {
 	constructor(private readonly skillDiscoveryAvailable = false) {}
 	readonly #failures = new Map<string, Failure>();
+	readonly #failedMediaSubmissions = new Set<string>();
 	#lastFailure: Failure | undefined;
 	reset(): void {
 		this.#failures.clear();
+		this.#failedMediaSubmissions.clear();
 		this.#lastFailure = undefined;
 	}
 	private recordFailure(key: string, tool: string, kind: FailureKind): Failure {
@@ -59,6 +61,15 @@ export class ToolRecoveryMonitor {
 			execute: async (...args: Parameters<ToolDefinition["execute"]>) => {
 				const signal = args[2];
 				signal?.throwIfAborted();
+				if (this.#failedMediaSubmissions.has(tool.name))
+					throw Object.assign(
+						new Error(
+							"A " +
+								tool.name +
+								" submission already failed in this turn. No new generation was submitted. Changing parameters or checking settings does not make another potentially billable request safe. Report the provider error and wait for user direction."
+						),
+						{ code: "media_submission_blocked" }
+					);
 				const key = createHash("sha256")
 					.update(tool.name)
 					.update("\0")
@@ -134,7 +145,7 @@ export class ToolRecoveryMonitor {
 					if (previous?.tool === tool.name) this.#lastFailure = undefined;
 					if (!changed) return result;
 					const observation = {
-						status: "changed_attempt_succeeded",
+						status: tool.name === "media_model_status" ? "diagnostic_succeeded" : "changed_attempt_succeeded",
 						previousTool: previous.tool,
 						tool: tool.name,
 						inputDigest: key,
@@ -159,6 +170,11 @@ export class ToolRecoveryMonitor {
 							? String("protocolCode" in error ? error.protocolCode : "code" in error ? error.code : "")
 							: "";
 					const message = error instanceof Error ? error.message : String(error);
+					if (code === "media_submission_failed" && /^(generate_image|generate_video)$/.test(tool.name)) {
+						this.#failedMediaSubmissions.add(tool.name);
+						this.recordFailure(key, tool.name, "deterministic");
+						throw error;
+					}
 					// Preserve approval/abort errors exactly: they carry workflow state and
 					// must never be reframed as an invitation to bypass authorization.
 					if (

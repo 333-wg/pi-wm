@@ -8,12 +8,13 @@ import {
 	type SessionEntry,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, CacheRetention, ToolResultMessage } from "@earendil-works/pi-ai";
 import { asCapabilityJson, type CapabilityManifest } from "@wuming/capability-kernel";
 import type { SessionSnapshot } from "@wuming/protocol";
 import { Value } from "typebox/value";
 import { buildWumingSystemPrompt } from "./system-prompt.js";
 import { ToolRecoveryMonitor } from "./tool-recovery.js";
+import { stableToolDefinitions } from "./prompt-cache.js";
 import type { PiProviderRegistration, PiSessionFactory, WorkspaceResolver } from "./types.js";
 
 export interface DefaultPiSessionFactoryOptions {
@@ -24,6 +25,8 @@ export interface DefaultPiSessionFactoryOptions {
 	autoRetry?: boolean;
 	autoCompaction?: boolean;
 	initialToolChoice?: "required";
+	/** Unset preserves Pi/provider defaults, including PI_CACHE_RETENTION. */
+	cacheRetention?: CacheRetention;
 	registerProviders?: () => PiProviderRegistration[] | Promise<PiProviderRegistration[]>;
 	/**
 	 * Replaces the Wuming coding-agent system prompt. Returning undefined falls
@@ -122,7 +125,7 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		await mkdir(sessionDir, { recursive: true });
 		// The tools come first because the system prompt describes them, and Pi builds
 		// that prompt from the resource loader the services own.
-		const definitions = (await options.createCustomTools?.(snapshot)) ?? [];
+		const definitions = stableToolDefinitions((await options.createCustomTools?.(snapshot)) ?? []);
 		const recovery = new ToolRecoveryMonitor(definitions.some((tool) => tool.name === "skill_load"));
 		const customTools = definitions.map((tool) => recovery.wrap(tool));
 		const systemPrompt = (options.buildSystemPrompt ?? defaultSystemPrompt)({
@@ -182,7 +185,7 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		session.setAutoRetryEnabled(options.autoRetry ?? false);
 		session.setAutoCompactionEnabled(options.autoCompaction ?? true);
 		let initialToolChoicePending = options.initialToolChoice === "required";
-		if (initialToolChoicePending) {
+		if (initialToolChoicePending || options.cacheRetention !== undefined) {
 			const streamFunction = session.agent.streamFunction.bind(session.agent);
 			session.agent.streamFunction = (streamModel, context, streamOptions) => {
 				const requireTool = initialToolChoicePending && (context.tools?.length ?? 0) > 0;
@@ -193,7 +196,10 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 							samplingParams: { ...streamModel.samplingParams, tool_choice: "required" },
 						}
 					: streamModel;
-				return streamFunction(selectedModel, context, streamOptions);
+				return streamFunction(selectedModel, context, {
+					...streamOptions,
+					...(options.cacheRetention === undefined ? {} : { cacheRetention: options.cacheRetention }),
+				});
 			};
 		}
 		const resumeApprovedTool = async (

@@ -497,7 +497,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			configured.maxSystemTokens ?? Math.max(1, Math.min(32_768, Math.floor(contextWindowTokens * 0.25)));
 		const userInputTokens = Math.max(1, this.#contextEngine.estimateTokens(input.query) + input.imageCount * 1024);
 		const basePromptTokens = this.#contextEngine.estimateTokens(
-			input.session.getSystemPrompt?.() ?? "You are Wuming, a coding agent."
+			input.session.getSystemPrompt?.() ?? "You are Pi-Wm, a coding agent."
 		);
 		const observedTokens = initialUsage?.tokens ?? 0;
 		// Give Pi a chance to compact before the context engine rejects the turn.
@@ -556,7 +556,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			operationId: input.operationId,
 			model: input.snapshot.model,
 			query: input.query,
-			baseSystemPrompt: input.session.getSystemPrompt?.() ?? "You are Wuming, a coding agent.",
+			baseSystemPrompt: input.session.getSystemPrompt?.() ?? "You are Pi-Wm, a coding agent.",
 			fragments: [...additional, ...skillFragments],
 			budget: {
 				contextWindowTokens,

@@ -75,6 +75,8 @@ test("updates occupancy after compaction, persists across reload, and invalidate
 	await expect(meter.locator("strong")).toHaveText("24%");
 	await expect(meter).toContainText("压缩后估算");
 	await expect(meter).toContainText("1.2k / 5.0k");
+	await expect(meter).toHaveAttribute("title", /最近一次模型请求：暂无输入用量/);
+	await expect(meter).toHaveAttribute("title", /会话累计（0 次已记录模型请求/);
 	await expect(page.getByRole("button", { name: "停止任务" })).toBeHidden();
 	await page.screenshot({ path: testInfo.outputPath("context-after-desktop.png") });
 	await page.reload();
@@ -85,11 +87,16 @@ test("updates occupancy after compaction, persists across reload, and invalidate
 	await page.reload();
 	await expect(page.locator(".context-pill")).toBeVisible();
 	await expect(page.locator(".context-pill")).toHaveText("上下文 24%");
+	await expect(page.locator(".context-pill")).toHaveAttribute("title", /缓存读取.*缓存写入/);
+	await expect(page.locator(".context-pill")).toHaveAttribute("title", /压缩后需新请求才能确认缓存命中/);
+	await page.locator(".context-pill").focus();
+	await expect(page.locator(".context-pill")).toBeFocused();
 	await page.screenshot({ path: testInfo.outputPath("context-after-mobile.png") });
 	await page.locator(".thinking-trigger").click();
 	await page.getByRole("menuitemradio").filter({ hasText: "Small Demo" }).click();
 	await page.keyboard.press("Escape");
 	await expect(page.locator(".context-pill")).toHaveText("上下文 待更新");
+	await expect(page.locator(".context-pill")).toHaveAttribute("title", /最近一次模型请求：暂无输入用量/);
 	await expect(page.locator(".context-pill")).toBeVisible();
 	const label = await page.locator(".thinking-trigger-label").boundingBox();
 	const send = await page.getByRole("button", { name: "发送", exact: true }).boundingBox();

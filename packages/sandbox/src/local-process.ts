@@ -63,8 +63,10 @@ export class LocalProcessSandbox implements ProcessSandbox {
 		if (command.length > 64 * 1024) throw new SandboxError("process_failed", "Command exceeds 64 KiB limit");
 		const timeoutMs = Math.min(this.#maxTimeoutMs, Math.max(1, options.timeoutMs ?? this.#defaultTimeoutMs));
 		const shell = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
-		const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-lc", command];
+		// Match Node's cmd.exe shell quoting; C-runtime escaping changes embedded quotes.
+		const args = process.platform === "win32" ? ["/d", "/s", "/c", `"${command}"`] : ["-lc", command];
 		const child = spawn(shell, args, {
+			windowsVerbatimArguments: process.platform === "win32",
 			cwd: this.#workspaceRoot,
 			env: process.env,
 			windowsHide: true,

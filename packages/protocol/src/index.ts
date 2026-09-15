@@ -174,6 +174,16 @@ export type CustomModelSettings = Static<typeof CustomModelSettingsSchema>;
 
 export const MediaKindSchema = Type.Union([Type.Literal("image"), Type.Literal("video")]);
 export type MediaKind = Static<typeof MediaKindSchema>;
+export const VideoProtocolPreferenceSchema = Type.Union([
+	Type.Literal("auto"),
+	Type.Literal("openai"),
+	Type.Literal("openai-json"),
+	Type.Literal("agnes"),
+	Type.Literal("agnes-v2.5"),
+]);
+export type VideoProtocolPreference = Static<typeof VideoProtocolPreferenceSchema>;
+export const VideoReferenceFormatSchema = Type.Union([Type.Literal("auto"), Type.Literal("data-url")]);
+export type VideoReferenceFormat = Static<typeof VideoReferenceFormatSchema>;
 export const MediaModelDiscoveryConnectionSchema = StrictObject({
 	kind: MediaKindSchema,
 	baseUrl: Type.String({ minLength: 1, maxLength: 2000 }),
@@ -182,6 +192,8 @@ export const MediaModelDiscoveryConnectionSchema = StrictObject({
 export type MediaModelDiscoveryConnection = Static<typeof MediaModelDiscoveryConnectionSchema>;
 export const MediaModelConfigSchema = StrictObject({
 	kind: MediaKindSchema,
+	videoProtocol: Type.Optional(VideoProtocolPreferenceSchema),
+	videoReferenceFormat: Type.Optional(VideoReferenceFormatSchema),
 	baseUrl: Type.String({ minLength: 1, maxLength: 2000 }),
 	model: Type.String({ minLength: 1, maxLength: 200 }),
 	models: Type.Optional(
@@ -192,6 +204,8 @@ export const MediaModelConfigSchema = StrictObject({
 export type MediaModelConfig = Static<typeof MediaModelConfigSchema>;
 export const MediaModelSettingsSchema = StrictObject({
 	kind: MediaKindSchema,
+	videoProtocol: Type.Optional(VideoProtocolPreferenceSchema),
+	videoReferenceFormat: Type.Optional(VideoReferenceFormatSchema),
 	baseUrl: Type.String({ minLength: 1, maxLength: 2000 }),
 	model: Type.String({ minLength: 1, maxLength: 200 }),
 	models: Type.Optional(

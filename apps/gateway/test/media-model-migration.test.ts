@@ -43,6 +43,37 @@ it("loads legacy single-model settings without changing video-job fingerprints",
 		expect(restarted.resolve("image").model).toBe("new-image");
 		expect(restarted.resolve("image", "old-image").apiKey).toBe(oldImage.apiKey);
 		expect(JSON.stringify(restarted.resolve("video"))).toBe(JSON.stringify(oldVideo));
+		await restarted.set({
+			kind: "video",
+			baseUrl: oldVideo.baseUrl,
+			model: oldVideo.model,
+			videoProtocol: "openai-json",
+			videoReferenceFormat: "data-url",
+		});
+		const withPreferences = new MediaModelRegistry(options);
+		await withPreferences.load();
+		expect(withPreferences.resolve("video")).toMatchObject({
+			...oldVideo,
+			videoProtocol: "openai-json",
+			videoReferenceFormat: "data-url",
+		});
+		expect(JSON.stringify(withPreferences.list())).not.toContain("video-key");
+		await expect(
+			withPreferences.set({
+				kind: "image",
+				baseUrl: oldImage.baseUrl,
+				model: "new-image",
+				videoReferenceFormat: "data-url",
+			})
+		).rejects.toThrow("only to video");
+		await withPreferences.set({
+			kind: "video",
+			baseUrl: oldVideo.baseUrl,
+			model: oldVideo.model,
+			videoProtocol: "auto",
+			videoReferenceFormat: "auto",
+		});
+		expect(JSON.stringify(withPreferences.resolve("video"))).toBe(JSON.stringify(oldVideo));
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
