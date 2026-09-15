@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import type { LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
 	chromium,
@@ -26,6 +27,7 @@ import type {
 	BrowserTarget,
 } from "./types.js";
 import { isAllowedWebResolution, isPublicWebAddress } from "./web.js";
+import { pageEvidence, searchEvidence } from "./web-evidence.js";
 
 const INTERACTIVE_SELECTOR = [
 	"a[href]",
@@ -72,6 +74,7 @@ interface BrowserPageState {
 	page: Page;
 	refs: Map<string, ElementHandle>;
 	diagnostics: BrowserDiagnostics;
+	documentStatus: number;
 }
 
 interface BrowserSessionState {
@@ -196,6 +199,7 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 	readonly #resolver: (hostname: string) => Promise<LookupAddress[]>;
 	#browserPending: Promise<Browser> | undefined;
 	#disposed = false;
+	#nextSnapshotRevision = 1;
 
 	constructor(options: PlaywrightBrowserManagerOptions = {}) {
 		this.#options = {
@@ -291,8 +295,7 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 			lastUsedAt: Date.now(),
 		};
 		context.on("page", (page) => {
-			const attached = this.#attachPage(state, page);
-			state.activePageId = attached.id;
+			this.#attachPage(state, page);
 		});
 		await context.route("**/*", async (route) => {
 			const requestUrl = route.request().url();
@@ -331,9 +334,19 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 			page,
 			refs: new Map(),
 			diagnostics: emptyDiagnostics(),
+			documentStatus: 200,
 		};
 		session.pages.set(state.id, state);
 		this.#wireDiagnostics(state);
+		page.on("popup", (popup) => {
+			const attached = this.#attachPage(session, popup);
+			if (session.activePageId === state.id) session.activePageId = attached.id;
+		});
+		page.on("framenavigated", (frame) => {
+			if (frame !== page.mainFrame()) return;
+			for (const handle of state.refs.values()) void handle.dispose().catch(() => undefined);
+			state.refs.clear();
+		});
 		page.once("close", () => {
 			for (const handle of state.refs.values()) void handle.dispose().catch(() => undefined);
 			session.pages.delete(state.id);
@@ -374,6 +387,9 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 			})
 		);
 		state.page.on("response", (response) => {
+			if (response.request().isNavigationRequest() && response.frame() === state.page.mainFrame()) {
+				state.documentStatus = response.status();
+			}
 			if (response.status() < 400) return;
 			appendBounded(state.diagnostics.httpErrors, {
 				method: response.request().method(),
@@ -409,7 +425,7 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 		}
 		await state.page.goto(url.href, { waitUntil: options?.waitUntil ?? "domcontentloaded" });
 		if (options?.signal?.aborted) throw options.signal.reason ?? new Error("Browser navigation aborted");
-		return this.#snapshot(sessionId);
+		return this.#snapshot(sessionId, options);
 	}
 
 	async #search(
@@ -426,52 +442,67 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 		const url = await validateBrowserNavigationUrl(endpoint.href, this.#resolver);
 		const session = await this.#state(sessionId);
 		const page = await session.context.newPage();
-		const state = this.#attachPage(session, page);
-		session.activePageId = state.id;
-		if (options.signal?.aborted) {
-			await page.close().catch(() => undefined);
-			throw options.signal.reason ?? new Error("Browser search aborted");
-		}
-		await page.goto(url.href, { waitUntil: "domcontentloaded" });
-		if (options.signal?.aborted) throw options.signal.reason ?? new Error("Browser search aborted");
-
-		const items = await page.locator(SEARCH_RESULT_SELECTOR).evaluateAll(
-			(elements, input) => {
-				const normalize = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim();
-				const seen = new Set<string>();
-				const results: Array<{ title: string; url: string; snippet: string }> = [];
-				for (const element of elements) {
-					const anchor = element.querySelector("h2 a[href], h3 a[href], a[href]") as HTMLAnchorElement | null;
-					if (!anchor) continue;
-					let parsed: URL;
-					try {
-						parsed = new URL(anchor.href, document.baseURI);
-					} catch {
-						continue;
-					}
-					if (!["http:", "https:"].includes(parsed.protocol)) continue;
-					if (parsed.hostname.toLowerCase() === input.host) continue;
-					const title = normalize(anchor.textContent) || normalize(element.querySelector("h2, h3")?.textContent);
-					if (!title || seen.has(parsed.href)) continue;
-					const snippetNode = element.querySelector("p, .b_caption, [data-snippet], .snippet, .content");
-					let snippet = normalize(snippetNode?.textContent || element.textContent);
-					if (snippet === title) snippet = "";
-					else if (snippet.startsWith(title)) snippet = snippet.slice(title.length).trim();
-					seen.add(parsed.href);
-					results.push({ title, url: parsed.href, snippet });
-					if (results.length >= input.limit) break;
-				}
-				return results;
-			},
-			{ host: hostname(url), limit: count }
-		);
-		this.#touch(sessionId, session);
-		return {
-			provider: hostname(url),
-			query: normalizedQuery,
-			url: page.url(),
-			items,
+		const searchPage = this.#attachPage(session, page);
+		const abort = () => {
+			void page.close().catch(() => undefined);
 		};
+		options.signal?.addEventListener("abort", abort, { once: true });
+		try {
+			if (options.signal?.aborted) throw options.signal.reason ?? new Error("Browser search aborted");
+			await page.goto(url.href, { waitUntil: "domcontentloaded" });
+			await page
+				.locator(SEARCH_RESULT_SELECTOR)
+				.first()
+				.waitFor({ state: "attached", timeout: Math.min(this.#options.defaultTimeoutMs, 2500) })
+				.catch((error: unknown) => {
+					if (!(error instanceof Error) || error.name !== "TimeoutError") throw error;
+				});
+			if (options.signal?.aborted) throw options.signal.reason ?? new Error("Browser search aborted");
+
+			const items = await page.locator(SEARCH_RESULT_SELECTOR).evaluateAll(
+				(elements, input) => {
+					const normalize = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim();
+					const seen = new Set<string>();
+					const results: Array<{ title: string; url: string; snippet: string }> = [];
+					for (const element of elements) {
+						const anchor = (element.querySelector("h2 a[href], h3 a[href]") ??
+							element.querySelector("a[href]")) as HTMLAnchorElement | null;
+						if (!anchor) continue;
+						let parsed: URL;
+						try {
+							parsed = new URL(anchor.href, document.baseURI);
+						} catch {
+							continue;
+						}
+						if (!["http:", "https:"].includes(parsed.protocol)) continue;
+						if (parsed.hostname.toLowerCase() === input.host) continue;
+						const title = normalize(anchor.textContent) || normalize(element.querySelector("h2, h3")?.textContent);
+						if (!title || seen.has(parsed.href)) continue;
+						const snippetNode = element.querySelector("p, .b_caption, [data-snippet], .snippet, .content");
+						let snippet = normalize(snippetNode?.textContent || element.textContent);
+						if (snippet === title) snippet = "";
+						else if (snippet.startsWith(title)) snippet = snippet.slice(title.length).trim();
+						seen.add(parsed.href);
+						results.push({ title, url: parsed.href, snippet });
+						if (results.length >= input.limit) break;
+					}
+					return results;
+				},
+				{ host: hostname(url), limit: count }
+			);
+			this.#touch(sessionId, session);
+			return {
+				provider: hostname(url),
+				query: normalizedQuery,
+				url: page.url(),
+				items,
+				webEvidence:
+					searchPage.documentStatus >= 400 ? pageEvidence("", searchPage.documentStatus) : searchEvidence(items.length),
+			};
+		} finally {
+			options.signal?.removeEventListener("abort", abort);
+			await page.close().catch(() => undefined);
+		}
 	}
 
 	async #currentHost(sessionId: string): Promise<string | undefined> {
@@ -569,12 +600,63 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 		}
 	}
 
+	async #pageEvidence(state: BrowserPageState) {
+		const text = await state.page
+			.locator("body")
+			.evaluate((body) => {
+				const root = body.querySelector("main, article, [role=main]") ?? body;
+				const copy = root.cloneNode(true) as Element;
+				copy
+					.querySelectorAll("script, style, noscript, nav, header, footer, [hidden], [aria-hidden=true]")
+					.forEach((node) => node.remove());
+				return (copy.textContent ?? "").slice(0, 20000);
+			})
+			.catch(() => "");
+		return pageEvidence(text, state.documentStatus);
+	}
+
 	async #snapshot(
 		sessionId: string,
 		options: Parameters<BrowserAutomation["snapshot"]>[0] = {}
 	): Promise<BrowserSnapshot> {
 		const session = await this.#state(sessionId);
 		const state = await this.#active(session);
+		if (options.signal?.aborted) throw options.signal.reason ?? new Error("Browser snapshot aborted");
+		const startedAt = Date.now();
+		const waitMs = Math.min(
+			this.#options.defaultTimeoutMs,
+			10000,
+			Math.max(0, options.waitTimeoutMs ?? (options.waitFor ? 5000 : 2000))
+		);
+		let webEvidence = await this.#pageEvidence(state);
+		let ready = options.waitFor
+			? await state.page.locator(options.waitFor).first().isVisible()
+			: webEvidence.level !== "insufficient_content";
+		while (
+			!ready &&
+			webEvidence.level !== "access_blocked" &&
+			state.documentStatus < 400 &&
+			Date.now() - startedAt < waitMs
+		) {
+			await delay(
+				Math.min(150, Math.max(1, waitMs - (Date.now() - startedAt))),
+				undefined,
+				options.signal ? { signal: options.signal } : {}
+			);
+			webEvidence = await this.#pageEvidence(state);
+			ready = options.waitFor
+				? await state.page.locator(options.waitFor).first().isVisible()
+				: webEvidence.level !== "insufficient_content";
+		}
+		if (options.signal?.aborted) throw options.signal.reason ?? new Error("Browser snapshot aborted");
+		if (!ready && options.waitFor && webEvidence.level !== "access_blocked") {
+			webEvidence = {
+				level: "insufficient_content",
+				note: "The requested wait_for element was not visible within the bounded wait. Inspect the current snapshot before retrying; absence has not been established.",
+			};
+		}
+		const waitedMs = Date.now() - startedAt;
+		const revision = this.#nextSnapshotRevision++;
 		for (const handle of state.refs.values()) await handle.dispose().catch(() => undefined);
 		state.refs.clear();
 		const root = options?.selector ? state.page.locator(options.selector).first() : state.page.locator("body");
@@ -641,7 +723,7 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 				await handle.dispose().catch(() => undefined);
 				continue;
 			}
-			const ref = `e${references.length + 1}`;
+			const ref = state.id + "-s" + revision + "-e" + (references.length + 1);
 			state.refs.set(ref, handle);
 			references.push(
 				`[${ref}] ${info.role}${info.type ? ` type=${JSON.stringify(info.type)}` : ""}${info.disabled ? " disabled" : ""} ${JSON.stringify(trimText(info.name) || "(unnamed)")}`
@@ -665,6 +747,8 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 			text: truncated ? `${full.slice(0, maxChars)}\n[snapshot truncated]` : full,
 			interactiveCount: references.length,
 			truncated,
+			webEvidence,
+			waitedMs,
 		};
 	}
 
@@ -674,6 +758,19 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 		if (selectors.length !== 1)
 			throw new SandboxError("process_failed", "Provide exactly one target: ref, selector, role, or text");
 		if (target.ref) {
+			const owner = /^(t\d+)-s\d+-e\d+$/.exec(target.ref)?.[1];
+			if (owner && owner !== state.id) {
+				throw new SandboxError(
+					"process_failed",
+					"Browser ref " +
+						target.ref +
+						" belongs to " +
+						owner +
+						", but the active tab is " +
+						state.id +
+						". Use browser_tabs, switch_tab to the intended tab, then use the new snapshot refs. No action was taken."
+				);
+			}
 			const handle = state.refs.get(target.ref);
 			if (!handle)
 				throw new SandboxError(
@@ -716,6 +813,18 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 		const session = await this.#state(sessionId);
 		let state = await this.#active(session);
 		if (signal?.aborted) throw signal.reason ?? new Error("Browser action aborted");
+		if (action.action !== "wait" && "target" in action && action.target?.ref) {
+			const target = this.#target(state, action.target);
+			const handle = "elementHandle" in target ? await target.elementHandle() : target;
+			if (!handle || !(await handle.evaluate((element) => element.isConnected).catch(() => false))) {
+				throw new SandboxError(
+					"process_failed",
+					"Browser ref " +
+						action.target.ref +
+						" is detached. Take a new browser_snapshot and choose a fresh ref. No action was taken."
+				);
+			}
+		}
 		switch (action.action) {
 			case "click":
 				await this.#target(state, action.target).click();
@@ -795,7 +904,7 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 			}
 		}
 		if (signal?.aborted) throw signal.reason ?? new Error("Browser action aborted");
-		return this.#snapshot(sessionId);
+		return this.#snapshot(sessionId, signal ? { signal } : {});
 	}
 
 	async #screenshot(

@@ -8399,6 +8399,16 @@ button {
 	color: var(--muted);
 	font-size: 10.5px;
 }
+.tool-evidence {
+	flex: 0 0 auto;
+	color: var(--text-soft);
+	font-size: 10.5px;
+	white-space: nowrap;
+}
+.tool-evidence.insufficient_content,
+.tool-evidence.access_blocked {
+	color: var(--amber);
+}
 .tool-state.complete {
 	color: var(--green);
 }

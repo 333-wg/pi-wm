@@ -130,14 +130,17 @@ describe("buildWumingSystemPrompt guidelines", () => {
 		expect(withExec).toContain("Use run_python for calculation");
 		expect(withExec).toContain("Search the web when a fact could have changed");
 		expect(withExec).toContain("Use the current date from the environment");
-		expect(withExec).toContain("prefer browser_search and browser_download");
+		expect(withExec).toContain("for a named platform, start with that site's own search");
+		expect(withExec).toContain("change the route instead of endlessly rephrasing");
+		expect(withExec).toContain("do not repeat the same click blindly");
+		expect(withExec).toContain("Candidate links and retrieved page text are not verified facts");
 		expect(withExec).toContain("do not retry the same or alternate CDN with exec/curl");
 		expect(withExec).toContain("do not silently switch to server/Gateway downloads");
 		expect(withExec).toContain("use the browser tools after implementation");
 		expect(withExec).toContain("browser_open requires a non-empty url argument");
-		expect(withExec).toContain("Browser element refs come from the latest snapshot");
+		expect(withExec).toContain("Browser refs are bound to a tab and snapshot version");
 		expect(withExec).toContain("Use preview_start, not exec");
-		expect(withExec).toContain("use browser_tabs before switching");
+		expect(withExec).toContain("inspect browser_tabs, select the intended tab");
 
 		const readOnly = section(build([tool("read_file", "Read file contents")]), "tool_guidelines");
 		expect(readOnly).not.toContain("Use exec");

@@ -5,6 +5,7 @@ import type {
 	WorkspaceListing,
 } from "./workspace-search.js";
 import type { EnvironmentInspector } from "./environment.js";
+import type { WebEvidence } from "@wuming/protocol";
 
 export interface ReadTextOptions {
 	offset?: number;
@@ -74,6 +75,7 @@ export interface WebFetchResult {
 	contentType: string;
 	content: string;
 	truncated: boolean;
+	webEvidence?: WebEvidence;
 }
 
 export interface WebSearchOptions {
@@ -130,6 +132,8 @@ export interface BrowserSnapshot {
 	text: string;
 	interactiveCount: number;
 	truncated: boolean;
+	webEvidence?: WebEvidence;
+	waitedMs?: number;
 }
 
 export interface BrowserTab {
@@ -158,6 +162,7 @@ export interface BrowserSearchResult {
 	query: string;
 	url: string;
 	items: BrowserSearchItem[];
+	webEvidence?: WebEvidence;
 }
 
 export interface BrowserDownloadRequest {
@@ -182,16 +187,24 @@ export interface BrowserAutomation {
 			width?: number;
 			height?: number;
 			waitUntil?: "commit" | "domcontentloaded" | "load" | "networkidle";
+			waitFor?: string;
+			waitTimeoutMs?: number;
 			signal?: AbortSignal;
 		}
 	): Promise<BrowserSnapshot>;
-	snapshot(options?: { selector?: string; maxChars?: number }): Promise<BrowserSnapshot>;
+	snapshot(options?: {
+		selector?: string;
+		maxChars?: number;
+		waitFor?: string;
+		waitTimeoutMs?: number;
+		signal?: AbortSignal;
+	}): Promise<BrowserSnapshot>;
 	act(action: BrowserAction, signal?: AbortSignal): Promise<BrowserSnapshot>;
 	screenshot(options?: {
 		fullPage?: boolean;
 		signal?: AbortSignal;
 	}): Promise<{ image: Buffer; url: string; title: string }>;
-	search?(query: string, options?: { count?: number; signal?: AbortSignal }): Promise<BrowserSearchResult>;
+	search?(query: string, options?: WebSearchOptions): Promise<BrowserSearchResult>;
 	currentHost?(): Promise<string | undefined>;
 	download?(
 		request: BrowserDownloadRequest,

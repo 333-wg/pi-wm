@@ -737,6 +737,7 @@ describe("sandbox tool output artifacts", () => {
 
 	it("exposes a persistent browser workflow and stores screenshots with their real MIME type", async () => {
 		const actions: BrowserAction[] = [];
+		const waits: unknown[] = [];
 		let opened = "";
 		let screenshotMime = "";
 		const page = {
@@ -747,13 +748,16 @@ describe("sandbox tool output artifacts", () => {
 			text: 'URL: http://localhost:5173/\n[e1] button "Save"',
 			interactiveCount: 1,
 			truncated: false,
+			webEvidence: { level: "page_content" as const, note: "Page read, not verified." },
 		};
 		const browser: BrowserAutomation = {
-			async open(url) {
+			async open(url, options) {
 				opened = url;
+				waits.push(options);
 				return page;
 			},
-			async snapshot() {
+			async snapshot(options) {
+				waits.push(options);
 				return page;
 			},
 			async act(action) {
@@ -804,13 +808,24 @@ describe("sandbox tool output artifacts", () => {
 				.find((tool) => tool.name === "browser_open")!
 				.execute(
 					"browser-open",
-					{ url: "http://localhost:5173/", width: 390, height: 844 },
+					{ url: "http://localhost:5173/", width: 390, height: 844, wait_for: "#ready", wait_timeout_ms: 1200 },
 					undefined,
 					undefined,
 					noContext
 				)
 		).resolves.toMatchObject({ content: [{ text: expect.stringContaining("[e1] button") }] });
 		expect(opened).toBe("http://localhost:5173/");
+		expect(waits[0]).toMatchObject({ waitFor: "#ready", waitTimeoutMs: 1200 });
+		const signal = new AbortController().signal;
+		await expect(
+			tools
+				.find((tool) => tool.name === "browser_snapshot")!
+				.execute("snapshot", { wait_for: "#result", wait_timeout_ms: 500 }, signal, undefined, noContext)
+		).resolves.toMatchObject({
+			details: { webEvidence: page.webEvidence },
+			content: [{ text: expect.stringContaining("Evidence: page_content") }],
+		});
+		expect(waits[1]).toMatchObject({ waitFor: "#result", waitTimeoutMs: 500, signal });
 
 		await expect(
 			tools

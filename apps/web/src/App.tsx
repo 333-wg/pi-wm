@@ -1472,7 +1472,12 @@ function TranscriptItemView({
 		const media = item.content.filter((part) => part.type === "artifact" && isPreviewableMediaArtifact(part.artifact));
 		return (
 			<div className={`tool-row ${item.isError ? "tool-error" : ""}`}>
-				<ToolCard toolName={item.toolName} input={item.input} status={item.status as ToolStatusValue}>
+				<ToolCard
+					toolName={item.toolName}
+					input={item.input}
+					status={item.status as ToolStatusValue}
+					webEvidence={item.webEvidence}
+				>
 					<ToolResult
 						parts={item.content.filter((part) => !media.includes(part))}
 						toolName={item.toolName}
@@ -1626,6 +1631,7 @@ function LiveToolView({
 				toolName={tool.toolName}
 				input={tool.input}
 				status={awaitingApproval ? "awaiting_approval" : tool.status}
+				webEvidence={tool.webEvidence}
 			>
 				{tool.preview ? (
 					<pre className="tool-output">

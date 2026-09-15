@@ -1259,6 +1259,17 @@ export const GoalAutomationSummarySchema = StrictObject({
 });
 export type GoalAutomationSummary = Static<typeof GoalAutomationSummarySchema>;
 
+export const WebEvidenceSchema = StrictObject({
+	level: Type.Union([
+		Type.Literal("candidate_links"),
+		Type.Literal("page_content"),
+		Type.Literal("insufficient_content"),
+		Type.Literal("access_blocked"),
+	]),
+	note: Type.String({ maxLength: 1000 }),
+});
+export type WebEvidence = Static<typeof WebEvidenceSchema>;
+
 const TranscriptBase = {
 	id: Id,
 	createdAt: Timestamp,
@@ -1299,6 +1310,7 @@ export const TranscriptItemSchema = Type.Union([
 		input: JsonValueSchema,
 		content: Type.Array(ContentPartSchema),
 		isError: Type.Boolean(),
+		webEvidence: Type.Optional(WebEvidenceSchema),
 	}),
 ]);
 export type TranscriptItem = Static<typeof TranscriptItemSchema>;
@@ -2030,6 +2042,7 @@ export const ProgressEventSchema = Type.Union([
 		truncated: Type.Boolean(),
 		isError: Type.Boolean(),
 		artifact: Type.Optional(ArtifactRefSchema),
+		webEvidence: Type.Optional(WebEvidenceSchema),
 	}),
 ]);
 export type DurableEvent = Static<typeof DurableEventSchema>;

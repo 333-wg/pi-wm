@@ -31,7 +31,7 @@ import {
 	Video,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import type { ArtifactRef, ContentPart } from "@wuming/protocol";
+import type { ArtifactRef, ContentPart, WebEvidence } from "@wuming/protocol";
 import { CodeBlock } from "./CodeBlock";
 import { ImageViewer } from "./ImageViewer.js";
 import { DiffStat, EditDiff, editDiffStat } from "./DiffView";
@@ -335,7 +335,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const url = asText(args.url) ?? "";
 		return { icon: <Globe size={size} />, verb: "抓取网页", target: url, title: url, quiet: true };
 	}
-	if (toolName === "web_search") {
+	if (toolName === "web_search" || toolName === "browser_search") {
 		const query = asText(args.query) ?? asText(args.q) ?? "";
 		return { icon: <Search size={size} />, verb: "搜索", target: query, title: query, quiet: true };
 	}
@@ -680,11 +680,13 @@ export function ToolCard({
 	toolName,
 	input,
 	status,
+	webEvidence,
 	children,
 }: {
 	toolName: string;
 	input: unknown;
 	status: ToolStatusValue;
+	webEvidence?: WebEvidence | undefined;
 	children?: ReactNode;
 }) {
 	const description = describeTool(toolName, input);
@@ -717,6 +719,18 @@ export function ToolCard({
 					</span>
 				) : null}
 				{description.meta ? <span className="tool-meta">{description.meta}</span> : null}
+				{status === "complete" && webEvidence ? (
+					<span className={"tool-evidence " + webEvidence.level} title={webEvidence.note}>
+						{
+							{
+								candidate_links: "候选链接",
+								page_content: "页面已读取",
+								insufficient_content: "内容不足",
+								access_blocked: "访问受阻",
+							}[webEvidence.level]
+						}
+					</span>
+				) : null}
 				<StatusIndicator status={status} />
 			</button>
 			{open ? (

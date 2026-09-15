@@ -6,6 +6,7 @@ import { BlockList, isIP, type LookupFunction } from "node:net";
 import { load } from "cheerio";
 import { convert } from "html-to-text";
 import { SandboxError } from "./errors.js";
+import { htmlEvidence, pageEvidence } from "./web-evidence.js";
 import type { WebFetchOptions, WebFetchResult, WebSandbox, WebSearchOptions, WebSearchResult } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -301,13 +302,18 @@ export class SafeWebClient implements WebSandbox {
 		const contentType = String(response.headers["content-type"] ?? "text/plain").toLowerCase();
 		if (!isSupportedTextContentType(contentType))
 			throw new SandboxError("content_unsupported", `Unsupported response content type: ${contentType}`);
+		const content = readableContent(response.body, contentType);
+		const webEvidence = /^(text\/html|application\/xhtml\+xml)(?:;|$)/i.test(contentType)
+			? htmlEvidence(decodeBody(response.body, contentType), response.status)
+			: pageEvidence(content, response.status, 1);
 		return {
 			requestedUrl: requested.toString(),
 			finalUrl: response.url,
 			status: response.status,
 			contentType,
-			content: readableContent(response.body, contentType),
+			content,
 			truncated: response.truncated,
+			webEvidence,
 		};
 	}
 

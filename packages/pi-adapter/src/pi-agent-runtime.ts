@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { Value } from "typebox/value";
+import { WebEvidenceSchema, type WebEvidence } from "@wuming/protocol";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, Usage as PiUsage } from "@earendil-works/pi-ai";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
@@ -256,8 +258,21 @@ function mapAssistant(message: AssistantMessage, id: string): TranscriptItem {
 	};
 }
 
+function detailWebEvidence(message: ToolResultMessage): WebEvidence | undefined {
+	if (
+		message.isError ||
+		!["web_search", "web_fetch", "browser_search", "browser_open", "browser_snapshot", "browser_action"].includes(
+			message.toolName
+		)
+	)
+		return undefined;
+	const details = message.details as { webEvidence?: unknown } | undefined;
+	return Value.Check(WebEvidenceSchema, details?.webEvidence) ? structuredClone(details.webEvidence) : undefined;
+}
+
 function mapToolResult(message: ToolResultMessage, input: JsonValue): TranscriptItem {
 	const artifact = detailArtifact(message);
+	const webEvidence = detailWebEvidence(message);
 	return {
 		id: `tool:${message.toolCallId}`,
 		type: "tool",
@@ -275,6 +290,7 @@ function mapToolResult(message: ToolResultMessage, input: JsonValue): Transcript
 			...(artifact ? [{ type: "artifact" as const, artifact }] : []),
 		],
 		isError: message.isError,
+		...(webEvidence ? { webEvidence } : {}),
 	};
 }
 
@@ -792,6 +808,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				}
 				const output = preview(toolResult, this.#maxProgressPreviewChars);
 				const artifact = detailArtifact(toolResult);
+				const webEvidence = detailWebEvidence(toolResult);
 				input.onProgress({
 					type: "tool.finished",
 					sessionId: input.operation.sessionId,
@@ -800,6 +817,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 					truncated: output.truncated,
 					isError: toolResult.isError,
 					...(artifact ? { artifact } : {}),
+					...(webEvidence ? { webEvidence } : {}),
 				});
 				items.push(mapToolResult(toolResult, toolInputs.get(toolResult.toolCallId) ?? null));
 			}

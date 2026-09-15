@@ -33,6 +33,7 @@ import type {
 	ThinkingLevel,
 	UsageOverview,
 	UserContentPart,
+	WebEvidence,
 	WorkspaceSummary,
 	Skill,
 	SkillSummary,
@@ -73,6 +74,7 @@ export interface LiveTool {
 	preview: string;
 	truncated: boolean;
 	artifact?: ArtifactRef;
+	webEvidence?: WebEvidence;
 }
 
 export interface LiveGoalActivity {
@@ -1038,6 +1040,7 @@ export function useWumingClient() {
 									preview: event.preview,
 									truncated: event.truncated,
 									...(event.artifact ? { artifact: event.artifact } : {}),
+									...(event.webEvidence ? { webEvidence: event.webEvidence } : {}),
 								},
 							},
 						};

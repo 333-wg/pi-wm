@@ -4,6 +4,38 @@ import { describe, expect, it } from "vitest";
 import { ToolCard, describeTool, isPreviewableImageArtifact, resultEchoesCard } from "../src/components/ToolCard.js";
 
 describe("describeTool", () => {
+	it("separates successful execution from evidence and preserves legacy tool rendering", () => {
+		for (const [level, label] of Object.entries({
+			candidate_links: "候选链接",
+			page_content: "页面已读取",
+			insufficient_content: "内容不足",
+			access_blocked: "访问受阻",
+		})) {
+			const evidence = { level, note: "Not verified" } as NonNullable<Parameters<typeof ToolCard>[0]["webEvidence"]>;
+			const html = renderToStaticMarkup(
+				createElement(ToolCard, {
+					toolName: "browser_search",
+					input: { query: "query" },
+					status: "complete",
+					webEvidence: evidence,
+				})
+			);
+			expect(html).toContain(label);
+			expect(html).toContain("已完成");
+			expect(html).not.toContain("已核验");
+			for (const status of ["running", "error"] as const) {
+				expect(
+					renderToStaticMarkup(
+						createElement(ToolCard, { toolName: "browser_search", input: {}, status, webEvidence: evidence })
+					)
+				).not.toContain("tool-evidence");
+			}
+		}
+		expect(describeTool("browser_search", { query: "query" })).toMatchObject({ verb: "搜索", target: "query" });
+		expect(
+			renderToStaticMarkup(createElement(ToolCard, { toolName: "web_search", input: {}, status: "complete" }))
+		).not.toContain("tool-evidence");
+	});
 	it("renders tools as an unframed activity trace instead of a status card", () => {
 		const html = renderToStaticMarkup(
 			createElement(

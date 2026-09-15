@@ -763,6 +763,50 @@ describe("PiAgentRuntime", () => {
 		});
 	});
 
+	it.each([
+		{ toolName: "browser_snapshot", level: "page_content", isError: false, expected: true },
+		{ toolName: "web_search", level: "candidate_links", isError: false, expected: true },
+		{ toolName: "browser_open", level: "access_blocked", isError: false, expected: true },
+		{ toolName: "browser_open", level: "verified", isError: false, expected: false },
+		{ toolName: "read_file", level: "page_content", isError: false, expected: false },
+		{ toolName: "browser_open", level: "page_content", isError: true, expected: false },
+	])(
+		"propagates only validated web evidence: $toolName / $level / error=$isError",
+		async ({ toolName, level, isError, expected }) => {
+			const session = new FakePiSession();
+			const webEvidence = { level, note: "Retrieved, not verified." };
+			session.emitScript = async (current) => {
+				current.emit({ type: "tool_execution_start", toolCallId: "evidence-call", toolName, args: {} });
+				current.emit({
+					type: "message_end",
+					message: {
+						role: "toolResult",
+						toolCallId: "evidence-call",
+						toolName,
+						content: [{ type: "text", text: "page" }],
+						details: { webEvidence },
+						isError,
+						timestamp: 11,
+					},
+				});
+				current.emit({ type: "message_end", message: assistant([{ type: "text", text: "finished" }], "stop", 5, 1) });
+			};
+			const finished: unknown[] = [];
+			const runtime = new PiAgentRuntime({ createSession: async () => session });
+			const result = await runtime.executeTurn({
+				operation: operation([{ type: "text", text: "inspect" }]),
+				snapshot,
+				signal: new AbortController().signal,
+				onProgress: (event) => {
+					if (event.type === "tool.finished") finished.push(event.webEvidence);
+				},
+			});
+			const item = result.items.find((entry) => entry.type === "tool");
+			expect(item?.type === "tool" ? item.webEvidence : undefined).toEqual(expected ? webEvidence : undefined);
+			expect(finished).toEqual([expected ? webEvidence : undefined]);
+		}
+	);
+
 	it("explains malformed browser calls instead of exposing a generic stream error", async () => {
 		const session = new FakePiSession();
 		session.emitScript = async (current) => {
