@@ -1,0 +1,165 @@
+.desktop-update-settings {
+	max-width: 660px;
+}
+.desktop-update-product {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 24px;
+}
+.desktop-update-product img {
+	flex: 0 0 40px;
+}
+.desktop-update-product strong {
+	font-size: 18px;
+}
+.desktop-update-settings p {
+	margin: 7px 0 12px;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+}
+.desktop-update-product p {
+	margin-bottom: 0;
+}
+.desktop-update-status {
+	border-block: 1px solid var(--line);
+	padding: 20px 0;
+}
+.desktop-update-heading {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	font-size: 14px;
+}
+.desktop-update-heading svg {
+	color: var(--green);
+	flex-shrink: 0;
+}
+.desktop-update-heading strong {
+	overflow-wrap: anywhere;
+}
+.desktop-update-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 16px;
+}
+.desktop-update-actions button {
+	min-height: 36px;
+	gap: 7px;
+	white-space: normal;
+}
+.settings-dialog .desktop-update-preference {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 18px 0;
+	border-bottom: 1px solid var(--line);
+	color: var(--text);
+	font-size: 13px;
+}
+.desktop-update-preference input {
+	accent-color: var(--solid);
+	flex-shrink: 0;
+}
+.desktop-update-download {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 12px;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.desktop-update-download progress {
+	appearance: none;
+	width: 100%;
+	height: 5px;
+	border: 0;
+	border-radius: 3px;
+	overflow: hidden;
+	background: var(--track);
+}
+.desktop-update-download progress::-webkit-progress-bar {
+	background: var(--track);
+}
+.desktop-update-download progress::-webkit-progress-value {
+	background: var(--green);
+}
+.desktop-update-download progress::-moz-progress-bar {
+	background: var(--green);
+}
+.desktop-update-settings .desktop-update-warning {
+	color: var(--amber);
+	margin-top: 14px;
+}
+.desktop-update-settings .desktop-update-error {
+	color: var(--red);
+	margin-top: 14px;
+}
+.desktop-update-settings .desktop-update-last-check {
+	margin-bottom: 0;
+}
+.desktop-update-notes {
+	padding-top: 18px;
+	overflow-wrap: anywhere;
+}
+.desktop-update-notes summary {
+	cursor: pointer;
+	color: var(--text);
+	font-size: 13px;
+}
+.desktop-update-notes .prose {
+	margin-top: 12px;
+	font-size: 13px;
+}
+.desktop-update-release-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	margin-top: 20px;
+	color: var(--green);
+	font-size: 12px;
+}
+.sidebar-footer > .desktop-update-notice {
+	color: var(--green);
+	gap: 10px;
+}
+.desktop-update-notice > svg {
+	flex-shrink: 0;
+}
+.desktop-update-notice > span {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	text-align: left;
+}
+.desktop-update-notice small {
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+.desktop-update-spin {
+	animation: desktop-update-spin 1.2s linear infinite;
+}
+@keyframes desktop-update-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.desktop-update-spin {
+		animation: none;
+	}
+}
+@media (max-width: 480px) {
+	.desktop-update-download {
+		grid-template-columns: 1fr;
+		gap: 6px;
+	}
+}

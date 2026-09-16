@@ -9,6 +9,30 @@ import {
 } from "../src/index.js";
 
 describe("wire protocol", () => {
+	it("validates durable per-request usage updates", () => {
+		const check = Compile(ServerMessageSchema);
+		const request = {
+			requestId: "r",
+			model: { provider: "test", id: "model" },
+			usage: {
+				inputTokens: 100,
+				cacheReadTokens: 900,
+				cacheWriteTokens: 0,
+				outputTokens: 10,
+				totalTokens: 1010,
+				costUsd: 0,
+			},
+		};
+		const event = { type: "session.request.usage.updated", sessionId: "s", revision: 4, request };
+		expect(check.Check({ type: "event", cursor: "cursor", event })).toBe(true);
+		expect(
+			check.Check({
+				type: "event",
+				cursor: "cursor",
+				event: { ...event, request: { ...request, usage: { ...request.usage, cacheReadTokens: -1 } } },
+			})
+		).toBe(false);
+	});
 	it("validates compaction progress states", () => {
 		const check = Compile(ServerMessageSchema);
 		for (const status of ["running", "complete", "failed", "cancelled"]) {

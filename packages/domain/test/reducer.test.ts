@@ -45,6 +45,49 @@ const approval: ApprovalRequest = {
 };
 
 describe("session reducer", () => {
+	it("seeds live request accounting from legacy turns without importing transcript or billing usage", () => {
+		const oldRequest = {
+			requestId: "old",
+			model: created.model,
+			usage: { ...EMPTY_USAGE, inputTokens: 10, totalTokens: 10 },
+		};
+		const legacy = {
+			...reduceSessionEvent(undefined, created),
+			usageByTurn: [
+				{
+					turnId: "old-turn",
+					mode: "prompt" as const,
+					model: created.model,
+					attempts: 1,
+					usage: oldRequest.usage,
+					tools: [],
+					requests: [oldRequest],
+				},
+			],
+		};
+		const request = { ...oldRequest, requestId: "live" };
+		const next = reduceSessionEvent(legacy, {
+			type: "session.request.usage.updated",
+			eventId: "live-event",
+			sessionId: session.id,
+			revision: 2,
+			timestamp: 20,
+			request,
+		});
+		expect(next.usageRequests).toEqual([oldRequest, request]);
+		expect(next.usageByTurn).toEqual(legacy.usageByTurn);
+		expect(next.usage).toEqual(EMPTY_USAGE);
+		const corrected = { ...request, usage: { ...request.usage, cacheReadTokens: 5, inputTokens: 5 } };
+		const updated = reduceSessionEvent(next, {
+			type: "session.request.usage.updated",
+			eventId: "correction",
+			sessionId: session.id,
+			revision: 3,
+			timestamp: 30,
+			request: corrected,
+		});
+		expect(updated.usageRequests).toEqual([oldRequest, corrected]);
+	});
 	it("replays item updates without duplicating item identity", () => {
 		const events: SessionEvent[] = [
 			created,

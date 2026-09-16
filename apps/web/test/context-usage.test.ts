@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionSnapshot, Usage } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
 import { cacheUsage, estimateContext } from "../src/lib/context-usage.js";
-import { ContextMeter, ContextPill } from "../src/components/ContextMeter.js";
+import { ContextDetails, ContextMeter, ContextPill } from "../src/components/ContextMeter.js";
 
 const model = { provider: "test", id: "large" };
 const usage: Usage = {
@@ -88,6 +88,52 @@ describe("context occupancy", () => {
 });
 
 describe("context cache details", () => {
+	it("shows live request observations before turn billing and keeps them after abort", () => {
+		const request = { requestId: "live", model, usage: { ...usage, inputTokens: 100, cacheReadTokens: 900 } };
+		for (const phase of ["turn", "idle"] as const) {
+			const value = estimateContext(
+				{
+					...snapshot,
+					session: { ...snapshot.session, phase },
+					usageByTurn: [],
+					usageRequests: [request],
+					contextUsage: { model, tokens: 7000, basis: "request" },
+				},
+				128000
+			)!;
+			expect(value.cache).toMatchObject({ requestCount: 1, latest: { hitRatio: 0.9 }, session: { hitRatio: 0.9 } });
+			const html = renderToStaticMarkup(createElement(ContextDetails, { usage: value }));
+			expect(html).toContain("最近完成请求");
+			expect(html).toContain("90.0%");
+		}
+	});
+	it("labels the first pending request without presenting a zero request count", () => {
+		const value = estimateContext(
+			{
+				...snapshot,
+				usageByTurn: [],
+				session: { ...snapshot.session, phase: "turn" },
+				contextUsage: { model, tokens: null, basis: "unknown" },
+			},
+			128000
+		)!;
+		const html = renderToStaticMarkup(createElement(ContextDetails, { usage: value }));
+		expect(html).toContain("等待首个请求用量");
+		expect(html).not.toContain("0 次");
+	});
+	it("exposes the waiting state before a new session has any context observation", () => {
+		const value = estimateContext(
+			{ ...snapshot, usageByTurn: [], session: { ...snapshot.session, phase: "turn" } },
+			128000
+		)!;
+		expect(value).toMatchObject({ tokens: null, cache: { awaitingRequest: true, requestCount: 0 } });
+	});
+	it("never counts finalized requests a second time after a live observation", () => {
+		const request = snapshot.usageByTurn![0]!.requests[0]!;
+		const value = estimateContext({ ...snapshot, usageRequests: [request] }, 128000)!;
+		expect(value.cache?.requestCount).toBe(1);
+		expect(value.cache?.session.inputTokens).toBe(90000);
+	});
 	it("uses all input categories but excludes output from the hit ratio", () => {
 		expect(cacheUsage({ inputTokens: 100, cacheReadTokens: 800, cacheWriteTokens: 100 })).toEqual({
 			inputTokens: 1000,
@@ -123,20 +169,29 @@ describe("context cache details", () => {
 			latest: { hitRatio: 1 },
 			session: { inputTokens: 1000, hitRatio: 0.1 },
 		});
-		for (const component of [ContextPill, ContextMeter]) {
-			const html = renderToStaticMarkup(createElement(component, { usage: value }));
-			expect(html).toContain("缓存命中率（输入 token）：100.0%");
-			expect(html).toContain("缓存命中率（输入 token）：10.0%");
-			expect(html).toContain("缓存写入：0 token");
-		}
+		const html = renderToStaticMarkup(createElement(ContextDetails, { usage: value }));
+		expect(html).toContain("100.0%");
+		expect(html).toContain("10.0%");
+		expect(html).toContain("缓存写入</th><td>0</td><td>0</td>");
+		expect(html).toContain("输入总量</th><td>100</td><td>1,000</td>");
+		expect(html).toContain('<details class="context-detail-disclosure">');
 	});
 	it("retains historical session statistics but never labels old-model usage as the current request", () => {
 		const value = estimateContext({ ...snapshot, model: { ...model, id: "small" } }, 8000)!;
 		expect(value.cache?.latest).toBeUndefined();
 		expect(value.cache?.session.inputTokens).toBe(90000);
-		expect(renderToStaticMarkup(createElement(ContextPill, { usage: value }))).toContain(
-			"最近一次模型请求：暂无输入用量"
-		);
+		expect(renderToStaticMarkup(createElement(ContextDetails, { usage: value }))).toContain("暂无数据");
+	});
+	it("keeps native tooltips empty and makes both triggers accessible buttons", () => {
+		const value = estimateContext(snapshot, 128000)!;
+		for (const component of [ContextPill, ContextMeter]) {
+			const html = renderToStaticMarkup(createElement(component, { usage: value }));
+			expect(html).toContain('<button type="button"');
+			expect(html).toContain('aria-haspopup="dialog"');
+			expect(html).toContain('aria-expanded="false"');
+			expect(html).not.toContain("title=");
+			expect(html).not.toContain("缓存命中率");
+		}
 	});
 	it("does not invent request statistics from legacy session totals", () => {
 		const value = estimateContext(

@@ -1,6 +1,6 @@
 import { fork, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { join, dirname, delimiter } from "node:path";
 
 export function gatewayEnvironment(parent, options) {
@@ -111,6 +111,34 @@ export class GatewayHost extends EventEmitter {
 
 	send(message) {
 		if (this.child?.connected) this.child.send(message, () => {});
+	}
+
+	updateStatus(prepare = false) {
+		if (!this.child?.connected || this.stopping) return Promise.reject(new Error("Local service unavailable"));
+		const id = randomUUID();
+		return new Promise((resolve, reject) => {
+			const child = this.child;
+			const finish = (error, value) => {
+				clearTimeout(timer);
+				child.off("message", message);
+				child.off("exit", exit);
+				if (error) reject(error);
+				else resolve(value);
+			};
+			const message = (value) => {
+				if (value?.type !== "desktop.update-status.result" || value.id !== id) return;
+				if (typeof value.busy !== "boolean") return finish(new Error("Invalid service status"));
+				if (prepare && !value.busy) this.stopping = true;
+				finish(undefined, { busy: value.busy });
+			};
+			const exit = () => finish(new Error("Local service stopped"));
+			const timer = setTimeout(() => finish(new Error("Local service status timed out")), 5_000);
+			child.on("message", message);
+			child.once("exit", exit);
+			child.send({ type: "desktop.update-status", id, prepare }, (error) => {
+				if (error) finish(error);
+			});
+		});
 	}
 
 	stop() {

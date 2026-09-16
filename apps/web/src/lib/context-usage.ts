@@ -1,4 +1,5 @@
 import type { ContextUsageState, SessionSnapshot, Usage } from "@wuming/protocol";
+import { sessionUsageRequests } from "@wuming/protocol";
 
 export interface CacheUsage {
 	inputTokens: number;
@@ -24,7 +25,7 @@ export interface ContextUsage {
 	/** Clamped to 1 so an over-budget estimate cannot overflow the bar. */
 	ratio: number | null;
 	basis: ContextUsageState["basis"];
-	cache?: { latest: CacheUsage | undefined; session: CacheUsage; requestCount: number };
+	cache?: { latest: CacheUsage | undefined; session: CacheUsage; requestCount: number; awaitingRequest?: boolean };
 }
 
 export function estimateContext(
@@ -35,7 +36,7 @@ export function estimateContext(
 		return undefined;
 	const sameModel = (model: SessionSnapshot["model"]) =>
 		model.provider === snapshot.model.provider && model.id === snapshot.model.id;
-	const requests = snapshot.usageByTurn?.flatMap((turn) => turn.requests) ?? [];
+	const requests = sessionUsageRequests(snapshot);
 	const latest = requests.at(-1);
 	// Sum model requests only: session billing can also include media/tool usage.
 	const session = cacheUsage(
@@ -57,6 +58,7 @@ export function estimateContext(
 			latest: latest && sameModel(latest.model) ? cacheUsage(latest.usage) : undefined,
 			session,
 			requestCount: requests.length,
+			awaitingRequest: requests.length === 0 && snapshot.session.phase === "turn",
 		},
 	});
 	// Explicit unknown values invalidate historical usage after compaction/model changes.
@@ -66,9 +68,8 @@ export function estimateContext(
 			? occupancy(current.basis === "unknown" ? null : current.tokens, current.basis)
 			: occupancy(null, "unknown");
 	}
-	const turn = snapshot.usageByTurn?.at(-1);
-	if (!turn) return undefined;
-	const request = turn.requests.at(-1);
+	const request = requests.at(-1);
+	if (!request && !snapshot.usageByTurn?.length && snapshot.session.phase !== "turn") return undefined;
 	// Compatibility with older snapshots. Whole-turn totals sum many requests and
 	// cannot represent the occupancy of any single context window.
 	if (!request || !sameModel(request.model)) return occupancy(null, "unknown");

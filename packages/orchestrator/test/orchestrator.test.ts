@@ -2252,6 +2252,7 @@ describe("session orchestrator", () => {
 		const created = await orchestrator.createSubagent({
 			principalId: "user-1",
 			idempotencyKey: "subagent-create-1",
+			sourceToolCallId: "source-call",
 			sessionId: parent.snapshot.session.id,
 			task: "Inspect the authentication flow",
 			costBudgetUsd: 0.25,
@@ -2259,6 +2260,7 @@ describe("session orchestrator", () => {
 		});
 
 		expect(created.subagent).toMatchObject({
+			sourceToolCallId: "source-call",
 			parentSessionId: parent.snapshot.session.id,
 			depth: 1,
 			status: "queued",
@@ -3638,6 +3640,68 @@ describe("session orchestrator", () => {
 			expect(snapshot).toEqual(replaySessionEvents(reopened.loadEvents(sessionId)));
 		} finally {
 			reopened.close();
+		}
+	});
+
+	it("replans after a provider failure changes context and commits usage before replanning", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const runtime = new CapabilityRuntime();
+		runtime.store = store;
+		let observedTokens = 0;
+		const digests: string[] = [];
+		runtime.resolveContext = async (input) => {
+			expect(input.snapshot.usage.totalTokens).toBe(observedTokens);
+			return new ContextEngine().assemble({
+				workspaceId: input.snapshot.session.workspaceId,
+				sessionId: input.snapshot.session.id,
+				operationId: input.operation.id,
+				model: input.snapshot.model,
+				baseSystemPrompt: "Test system prompt",
+				query: "Read code",
+				fragments: [],
+				budget: {
+					contextWindowTokens: 258000,
+					observedContextTokens: observedTokens,
+					userInputTokens: 10,
+					reservedOutputTokens: 100,
+					maxSystemTokens: 250,
+				},
+			}).plan;
+		};
+		const execute = runtime.executeTurn.bind(runtime);
+		runtime.executeTurn = async (input) => {
+			expect(input.contextPlan?.budget.observedContextTokens).toBe(observedTokens);
+			expect(store.getOperation(input.operation.id)?.contextPlan?.digest).toBe(input.contextPlan?.digest);
+			digests.push(input.contextPlan!.digest);
+			const result = await execute(input);
+			if (runtime.calls === 1) {
+				observedTokens = result.usage!.totalTokens;
+				return { ...result, failure: { code: "runtime_error", message: "Connection error.", retryable: true } };
+			}
+			return result;
+		};
+		try {
+			const orchestrator = new SessionOrchestrator(store, runtime, {
+				idFactory: ids("replan"),
+				retryBaseDelayMs: 0,
+				maxRetries: 1,
+			});
+			const created = await orchestrator.createSession(createInput());
+			await orchestrator.acceptTurn({
+				principalId: "user-1",
+				idempotencyKey: "replan-turn",
+				sessionId: created.snapshot.session.id,
+				mode: "prompt",
+				content: [{ type: "text", text: "Read code" }],
+			});
+			await orchestrator.drainSession(created.snapshot.session.id);
+			expect(store.listOperations(created.snapshot.session.id)[0]?.error).toBeUndefined();
+			expect(store.listOperations(created.snapshot.session.id)[0]).toMatchObject({ status: "completed", attempt: 2 });
+			expect(digests).toHaveLength(2);
+			expect(digests[0]).not.toBe(digests[1]);
+			expect(runtime.resolveCalls).toBe(2);
+		} finally {
+			store.close();
 		}
 	});
 

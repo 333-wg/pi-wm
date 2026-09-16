@@ -124,7 +124,7 @@ describe("describeTool", () => {
 		expect(describeTool("subagent", { task: "找出所有调用方", name: "callers", cost_budget_usd: 0.5 })).toMatchObject({
 			verb: "子代理",
 			target: "callers",
-			meta: "$0.5",
+			meta: "预算 $0.5",
 			body: undefined,
 		});
 		const multiline = describeTool("subagent", { task: "第一行\n第二行" });

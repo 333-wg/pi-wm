@@ -12,6 +12,7 @@ import {
 	ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer, McpServerSummary, McpToolSummary, SessionSnapshot } from "@wuming/protocol";
+import type { McpServerConfiguration as PublicMcpConfiguration } from "@wuming/protocol";
 import { Type } from "typebox";
 import type { ApprovalBroker } from "@wuming/sandbox";
 
@@ -510,7 +511,7 @@ async function writeLocalTrust(workspaceRoot: string, trusted: ReadonlyMap<strin
 	}
 }
 
-function serializableServer(server: McpConfigServer): Record<string, unknown> {
+function serializableServer(server: McpConfigServer): PublicMcpConfiguration {
 	const common: Record<string, unknown> = {
 		id: server.id,
 		readOnly: server.readOnly,
@@ -550,7 +551,7 @@ async function writeConfig(workspaceRoot: string, servers: readonly McpConfigSer
 	const content = `${JSON.stringify({ servers: servers.map(serializableServer) }, null, 2)}\n`;
 	if (Buffer.byteLength(content, "utf8") > MAX_CONFIG_BYTES) throw configError(`${CONFIG_LABEL} is too large`);
 	const temporary = join(directory, `.mcp-config-${randomUUID()}.tmp`);
-	await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
+	await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
 	try {
 		await rename(temporary, path);
 	} finally {
@@ -1043,6 +1044,19 @@ export class FileMcpCatalog {
 	readonly #resolveWorkspace: ((workspaceId: string) => string) | undefined;
 	readonly #isTrusted: (workspaceId: string, serverId: string) => boolean;
 	readonly #localTrust = new Map<string, ReadonlyMap<string, string>>();
+	readonly #mutations = new Map<string, Promise<unknown>>();
+
+	async #mutate<T>(workspaceRoot: string, operation: () => Promise<T>): Promise<T> {
+		const root = resolve(workspaceRoot);
+		const previous = this.#mutations.get(root) ?? Promise.resolve();
+		const pending = previous.catch(() => {}).then(operation);
+		this.#mutations.set(root, pending);
+		try {
+			return await pending;
+		} finally {
+			if (this.#mutations.get(root) === pending) this.#mutations.delete(root);
+		}
+	}
 	readonly #connections = new Map<string, { fingerprint: string; connection: McpConnectionLike }>();
 	readonly #connectionStarts = new Map<
 		string,
@@ -1418,23 +1432,87 @@ export class FileMcpCatalog {
 		};
 	}
 
+	async configurationKey(workspaceId: string, workspaceRoot: string): Promise<string> {
+		const servers = await this.#servers(workspaceRoot);
+		const entries = await Promise.all(
+			servers.map(async (server) => ({
+				config: configurationDigest(server),
+				trusted: await this.#trusted(workspaceId, workspaceRoot, server),
+			}))
+		);
+		return createHash("sha256").update(stableJson(entries)).digest("hex");
+	}
+
+	async getConfiguration(workspaceRoot: string, serverId: string): Promise<PublicMcpConfiguration> {
+		const server = (await this.#servers(workspaceRoot)).find((entry) => entry.id === serverId);
+		if (!server) throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
+		const config = serializableServer(server);
+		// Null retains a stored credential during editing; omission deletes it.
+		const field = server.transport === "stdio" ? "env" : "headers";
+		const values = server.transport === "stdio" ? server.env : server.headers;
+		return { ...config, [field]: Object.fromEntries(Object.keys(values).map((key) => [key, null])) };
+	}
+
+	async removeServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<void> {
+		return this.#mutate(workspaceRoot, () => this.#removeServer(workspaceRoot, serverId));
+	}
+
+	async #removeServer(workspaceRoot: string, serverId: string): Promise<void> {
+		const root = resolve(workspaceRoot);
+		const servers = await this.#servers(root);
+		if (!servers.some((server) => server.id === serverId))
+			throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
+		await this.#setLocalTrust(root, serverId, false);
+		const remaining = servers.filter((server) => server.id !== serverId);
+		await writeConfig(root, remaining);
+		this.#reconcileConnections(root, remaining);
+	}
+
 	async configureServer(
 		workspaceId: string,
 		workspaceRoot: string,
 		configuration: McpServerConfiguration
 	): Promise<McpServer> {
+		return this.#mutate(workspaceRoot, () => this.#configureServer(workspaceId, workspaceRoot, configuration));
+	}
+
+	async #configureServer(
+		workspaceId: string,
+		workspaceRoot: string,
+		configuration: McpServerConfiguration
+	): Promise<McpServer> {
 		if (!plainRecord(configuration)) throw configError("MCP server configuration must be an object");
+		const root = resolve(workspaceRoot);
+		const current = await this.#servers(root);
+		const previous = current.find((server) => server.id === configuration.id);
+		const restored = { ...configuration };
+		for (const field of ["env", "headers"] as const) {
+			const values = plainRecord(configuration[field]);
+			if (!values) continue;
+			const saved =
+				previous?.transport === "stdio" && field === "env"
+					? previous.env
+					: previous && previous.transport !== "stdio" && field === "headers"
+						? previous.headers
+						: undefined;
+			restored[field] = Object.fromEntries(
+				Object.entries(values).map(([key, value]) => {
+					if (value !== null) return [key, value];
+					if (!saved || !Object.hasOwn(saved, key)) throw configError("No saved value exists for this MCP credential");
+					return [key, saved[key]];
+				})
+			);
+		}
 		let raw: string;
 		try {
-			raw = JSON.stringify({ servers: [configuration] });
+			raw = JSON.stringify({ servers: [restored] });
 		} catch {
 			throw configError("MCP server configuration is not serializable");
 		}
 		const candidate = parseConfig(raw)[0];
 		if (!candidate) throw configError("MCP server configuration is empty");
-		const root = resolve(workspaceRoot);
-		const current = await this.#servers(root);
 		const next = [...current.filter((server) => server.id !== candidate.id), candidate];
+		if (next.length > MAX_SERVERS) throw configError("MCP cannot contain more than 32 servers");
 		// Configuration changes always require a fresh local trust decision.
 		await this.#setLocalTrust(root, candidate.id, false);
 		await writeConfig(root, next);
@@ -1443,6 +1521,10 @@ export class FileMcpCatalog {
 	}
 
 	async trustServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<McpServer> {
+		return this.#mutate(workspaceRoot, () => this.#trustServer(workspaceId, workspaceRoot, serverId));
+	}
+
+	async #trustServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<McpServer> {
 		const root = resolve(workspaceRoot);
 		const server = (await this.#servers(root)).find((candidate) => candidate.id === serverId);
 		if (!server) throw Object.assign(new Error(`MCP server ${serverId} was not found`), { protocolCode: "not_found" });
@@ -1451,8 +1533,14 @@ export class FileMcpCatalog {
 	}
 
 	async untrustServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<McpServer> {
+		return this.#mutate(workspaceRoot, () => this.#untrustServer(workspaceId, workspaceRoot, serverId));
+	}
+
+	async #untrustServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<McpServer> {
 		const root = resolve(workspaceRoot);
 		const server = (await this.#servers(root)).find((candidate) => candidate.id === serverId);
+		if (server && this.#isTrusted(workspaceId, serverId))
+			return this.#configureServer(workspaceId, root, { ...serializableServer(server), enabled: false });
 		if (!server) throw Object.assign(new Error(`MCP server ${serverId} was not found`), { protocolCode: "not_found" });
 		await this.#setLocalTrust(root, serverId, false);
 		this.#connections.get(`${root}\0${serverId}`)?.connection.close();
@@ -1596,7 +1684,7 @@ export function createMcpManagementTools(
 			name: "mcp_configure",
 			label: "Configure local MCP",
 			description:
-				"Create or replace one MCP server in the user's local .wuming/mcp.json, then trust it locally and verify its tool catalog. The config must be a JSON object for one server with id, transport, and either stdio command or HTTP url. Do not put secrets in the config; use the user's local environment or keychain instead.",
+				"Create or replace one MCP server in the user's local .wuming/mcp.json, then trust it locally and verify its tool catalog. The config must be a JSON object for one server with id, transport, and either stdio command or HTTP url. Do not ask users to send secrets in chat; credentials can be entered in the MCP settings form (stored in the local configuration file, not a keychain). Newly configured tools become available on the next user message in this conversation.",
 			promptSnippet: "Configure and verify one MCP server in the user's local workspace",
 			parameters: Type.Object({
 				config: Type.String({ minLength: 2, maxLength: MAX_CONFIG_BYTES }),

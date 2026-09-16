@@ -179,14 +179,57 @@ describe("buildWumingSystemPrompt guidelines", () => {
 		expect(section(build([]), "tool_guidelines")).toContain("Make independent tool calls in the same batch");
 	});
 
-	it("uses the plan tool for substantial work without forcing it on simple tasks", () => {
+	it("bases plan creation on substantive dependencies and outcomes after inspection", () => {
 		const guidelines = section(build([tool("update_plan", "Track a multi-step plan")]), "tool_guidelines");
-		expect(guidelines).toContain("create a short plan after the initial inspection");
-		expect(guidelines).toContain("Skip a plan for a simple question or one-step edit");
+		expect(guidelines).toContain("Default to direct execution");
+		expect(guidelines).toContain("multiple substantive outcomes or dependent changes");
+		expect(guidelines).toContain("after a brief initial inspection");
+		expect(guidelines).toContain("Reassess if inspection reveals hidden complexity");
+	});
+
+	it.each(["simple questions", "translations", "lookups", "text or style tweaks", "localized bug fixes"])(
+		"explicitly skips visible planning for %s",
+		(task) => {
+			const guidelines = section(build([tool("update_plan")]), "tool_guidelines");
+			expect(guidelines).toContain("Skip update_plan for");
+			expect(guidelines).toContain(task);
+		}
+	);
+
+	it("does not confuse routine verification or call counts with task complexity", () => {
+		const guidelines = section(build([tool("update_plan")]), "tool_guidelines");
+		expect(guidelines).toContain('Do not turn "inspect, edit, test" into a plan');
+		expect(guidelines).toContain("file count, tool-call count, or repeated mechanical edits");
+		expect(guidelines).toContain("Skipping a visible plan never means skipping investigation or verification");
+	});
+
+	it("keeps execution tracking separate from approval and limits plan overhead", () => {
+		const guidelines = section(build([tool("update_plan")]), "tool_guidelines");
+		expect(guidelines).toContain("usually 2-5 outcome-based steps");
+		expect(guidelines).toContain("Do not manufacture steps");
+		expect(guidelines).toContain("continue the authorized work without waiting for plan approval");
+		expect(guidelines).toContain("never treat a recorded plan as permission");
+	});
+
+	it("omits plan-tool routing when the tool is unavailable", () => {
+		const guidelines = section(build([]), "tool_guidelines");
+		expect(guidelines).not.toContain("update_plan");
+		expect(guidelines).not.toContain("outcome-based steps");
 	});
 });
 
 describe("buildWumingSystemPrompt environment", () => {
+	it.each([{ tools: [] }, { tools: [tool("update_plan")] }])(
+		"respects analysis-only intent regardless of plan-tool availability: $tools",
+		({ tools }) => {
+			const workflow = section(build(tools), "how_to_work");
+			expect(workflow).toContain("analysis, research, review, or a proposal only");
+			expect(workflow).toContain("do not implement changes until the user asks");
+			expect(workflow).toContain("ask a focused question only when a consequential choice remains unresolved");
+			expect(workflow).toContain("a clear implementation request, carry it through verification");
+		}
+	);
+
 	it("keeps a date change behind the stable instruction prefix", () => {
 		vi.useFakeTimers();
 		try {

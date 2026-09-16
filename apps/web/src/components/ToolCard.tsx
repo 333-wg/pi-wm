@@ -454,7 +454,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 	if (toolName === "subagent") {
 		const task = asText(args.task) ?? "";
 		const first = task.split("\n")[0] ?? "";
-		const budget = typeof args.cost_budget_usd === "number" ? `$${args.cost_budget_usd}` : undefined;
+		const budget = typeof args.cost_budget_usd === "number" ? `预算 $${args.cost_budget_usd}` : undefined;
 		return {
 			icon: <Bot size={size} />,
 			verb: "子代理",
@@ -477,7 +477,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 	return { icon: <Wrench size={size} />, verb: toolName, fallbackArgs: true };
 }
 
-function StatusIndicator({ status }: { status: ToolStatusValue }) {
+export function StatusIndicator({ status }: { status: ToolStatusValue }) {
 	const icon =
 		status === "complete" ? (
 			<CircleCheck size={12} />
@@ -682,12 +682,14 @@ export function ToolCard({
 	status,
 	webEvidence,
 	children,
+	onOpenSession,
 }: {
 	toolName: string;
 	input: unknown;
 	status: ToolStatusValue;
 	webEvidence?: WebEvidence | undefined;
 	children?: ReactNode;
+	onOpenSession?: (() => void) | undefined;
 }) {
 	const description = describeTool(toolName, input);
 	const failed = status === "error" || status === "aborted";
@@ -702,13 +704,14 @@ export function ToolCard({
 		if (status === "awaiting_approval") setOpen(true);
 	}, [status]);
 	return (
-		<div className={`tool-trace ${status}${open ? " open" : ""}`}>
+		<div className={`tool-trace ${status}${open ? " open" : ""}${onOpenSession ? " has-session-link" : ""}`}>
 			<button
 				type="button"
 				className="tool-trace-summary"
-				onClick={() => expandable && setOpen(!open)}
-				aria-expanded={expandable ? open : undefined}
-				disabled={!expandable}
+				onClick={() => (onOpenSession ? onOpenSession() : expandable && setOpen(!open))}
+				aria-expanded={!onOpenSession && expandable ? open : undefined}
+				title={onOpenSession ? "打开子代理对话" : undefined}
+				disabled={!expandable && !onOpenSession}
 			>
 				<ChevronRight size={14} className="tool-caret" />
 				<span className="tool-icon">{description.icon}</span>
@@ -733,6 +736,18 @@ export function ToolCard({
 				) : null}
 				<StatusIndicator status={status} />
 			</button>
+			{onOpenSession && expandable && (
+				<button
+					type="button"
+					className="tool-detail-toggle"
+					title={open ? "收起工具详情" : "展开工具详情"}
+					aria-label={open ? "收起工具详情" : "展开工具详情"}
+					aria-expanded={open}
+					onClick={() => setOpen(!open)}
+				>
+					<Braces size={14} />
+				</button>
+			)}
 			{open ? (
 				<div className="tool-trace-detail">
 					{argEntries.length > 0 ? (

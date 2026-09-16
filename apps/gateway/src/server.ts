@@ -144,6 +144,7 @@ export interface GatewayWorkspaceService {
 }
 
 export interface GatewayProjectService {
+  openFolder?(ownerId: string, projectId: string): Promise<void>;
   pick(ownerId: string, kind?: 'file' | 'directory'): Promise<WorkspaceSummary>;
   create(ownerId: string, name: string): Promise<WorkspaceSummary>;
   writeFile(ownerId: string, projectId: string, path: string, content: Buffer): Promise<void>;
@@ -326,6 +327,12 @@ export class GatewayServer implements AsyncDisposable {
   readonly #onError: (error: unknown) => void;
   readonly #logger: StructuredLogger;
   readonly #http: HttpServer;
+  #shuttingDown = false;
+  #activeRequests = 0;
+
+  get activeRequestCount(): number {
+    return this.#activeRequests;
+  }
   readonly #wss: WebSocketServer;
   readonly #connections = new Set<ConnectionState>();
   readonly #unsubscribeStore: () => void;
@@ -382,7 +389,10 @@ export class GatewayServer implements AsyncDisposable {
     this.#idFactory = options.idFactory ?? randomUUID;
     this.#onError = options.onError ?? (() => {});
     this.#logger = options.logger ?? { log: () => {} };
-    this.#http = createServer((request, response) => void this.#httpRequest(request, response));
+    this.#http = createServer((request, response) => {
+      this.#activeRequests++;
+      void this.#httpRequest(request, response).finally(() => { this.#activeRequests--; });
+    });
     this.#wss = new WebSocketServer({
       noServer: true,
       maxPayload: options.maxPayloadBytes ?? 1024 * 1024,
@@ -408,6 +418,7 @@ export class GatewayServer implements AsyncDisposable {
   }
 
   async #httpRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (this.#shuttingDown) return this.#json(response, 503, { error: 'Server shutting down' });
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
       if (request.method === 'GET' && url.pathname === '/health') {
@@ -422,6 +433,7 @@ export class GatewayServer implements AsyncDisposable {
       const download = /^\/api\/artifacts\/([^/]+)$/.exec(url.pathname);
       const projectCreate = url.pathname === '/api/projects';
       const projectPick = url.pathname === '/api/projects/pick';
+      const projectOpenFolder = /^\/api\/projects\/([^/]+)\/open-folder$/.exec(url.pathname);
       const projectFile = /^\/api\/projects\/([^/]+)\/files$/.exec(url.pathname);
       const projectComplete = /^\/api\/projects\/([^/]+)\/complete$/.exec(url.pathname);
       const projectDetail = /^\/api\/projects\/([^/]+)$/.exec(url.pathname);
@@ -437,6 +449,7 @@ export class GatewayServer implements AsyncDisposable {
         !download &&
         !projectCreate &&
         !projectPick &&
+        !projectOpenFolder &&
         !projectFile &&
         !projectComplete &&
         !projectDetail &&
@@ -455,6 +468,19 @@ export class GatewayServer implements AsyncDisposable {
       if (!principal) {
         response.setHeader('WWW-Authenticate', 'Bearer');
         this.#json(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (projectOpenFolder && request.method === 'POST') {
+        const projectId = this.#decodePathSegment(projectOpenFolder[1] ?? '');
+        this.#requirePrincipalWorkspace(principal, projectId);
+        this.#requirePrincipalPermission(principal, 'workspace.write');
+        if (this.#executionEnvironment.placement !== 'local_device' || !this.#projects?.openFolder)
+          throw Object.assign(new Error('仅支持在本地设备上打开项目目录。'), { httpStatus: 403 });
+        if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? ''))
+          throw Object.assign(new Error('请在项目所在的电脑上打开资源管理器。'), { httpStatus: 403 });
+        await this.#projects.openFolder(principal.id, projectId);
+        response.writeHead(204, { 'cache-control': 'no-store' });
+        response.end();
         return;
       }
       if (projectPick && request.method === 'POST') {
@@ -719,7 +745,7 @@ export class GatewayServer implements AsyncDisposable {
       }
       response.setHeader(
         'Allow',
-        upload || projectCreate || projectPick || projectComplete || gitAction
+        upload || projectCreate || projectPick || projectOpenFolder || projectComplete || gitAction
           ? 'POST'
           : projectFile
             ? 'PUT'
@@ -898,7 +924,8 @@ export class GatewayServer implements AsyncDisposable {
     });
     ws.on('message', (data, isBinary) => {
       if (isBinary) return ws.close(1003, 'JSON text messages required');
-      void this.#message(connection, data);
+      this.#activeRequests++;
+      void this.#message(connection, data).finally(() => { this.#activeRequests--; });
     });
     ws.on('close', () => {
       this.#logger.log('info', 'gateway.connection.closed', {
@@ -914,6 +941,7 @@ export class GatewayServer implements AsyncDisposable {
   }
 
   async #message(connection: ConnectionState, raw: RawData): Promise<void> {
+    if (this.#shuttingDown) return connection.ws.close(1001, 'Server shutting down');
     let value: unknown;
     try {
       value = JSON.parse(raw.toString());
@@ -1364,6 +1392,20 @@ export class GatewayServer implements AsyncDisposable {
             command.serverId
           ),
         };
+      }
+      case 'mcp.configuration.get': {
+        this.#requireWorkspace(connection, command.workspaceId);
+        if (!this.#mcp || !this.#workspacePath)
+          throw Object.assign(new Error('MCP management is unavailable'), { protocolCode: 'not_implemented' });
+        const config = await this.#mcp.getConfiguration(this.#workspacePath(command.workspaceId), command.serverId);
+        return { type: 'mcp.configuration', workspaceId: command.workspaceId, serverId: command.serverId, config };
+      }
+      case 'mcp.remove': {
+        this.#requireWorkspace(connection, command.workspaceId);
+        if (!this.#mcp || !this.#workspacePath)
+          throw Object.assign(new Error('MCP management is unavailable'), { protocolCode: 'not_implemented' });
+        await this.#mcp.removeServer(command.workspaceId, this.#workspacePath(command.workspaceId), command.serverId);
+        return { type: 'mcp.removed', workspaceId: command.workspaceId, serverId: command.serverId };
       }
       case 'mcp.configure':
       case 'mcp.trust':
@@ -2147,6 +2189,13 @@ export class GatewayServer implements AsyncDisposable {
   #publicEvent(stored: StoredSessionEvent): DurableEvent | undefined {
     const event = stored.event;
     switch (event.type) {
+      case 'session.request.usage.updated':
+        return {
+          type: 'session.request.usage.updated',
+          sessionId: event.sessionId,
+          revision: event.revision,
+          request: event.request,
+        };
       case 'session.context.updated':
         return {
           type: 'session.context.updated',
@@ -2232,7 +2281,13 @@ export class GatewayServer implements AsyncDisposable {
     return this.#http.address() as AddressInfo;
   }
 
+  beginShutdown(): void {
+    this.#shuttingDown = true;
+    for (const connection of this.#connections) connection.ws.close(1001, 'Server shutting down');
+  }
+
   async close(): Promise<void> {
+    this.beginShutdown();
     this.#unsubscribeStore();
     this.#unsubscribeProgress();
     for (const connection of this.#connections) connection.ws.close(1001, 'Server shutting down');

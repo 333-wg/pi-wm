@@ -1,8 +1,12 @@
 import { GoalPlanEditor, GoalPlanView, newGoalPlan } from "./components/GoalPlan";
+import { findToolSubagent } from "./lib/subagent-navigation.js";
+import { ChildConversationMenu } from "./components/ChildConversations.js";
 import { CompactionActivity } from "./components/CompactionActivity.js";
 import { GoalActivityCard } from "./components/GoalActivityCard";
 import { SkillManagerDialog } from "./components/SkillManagerDialog.js";
+import { McpView } from "./components/McpView.js";
 import { MediaModelSettings } from "./components/MediaModelSettings.js";
+import { DesktopUpdateNotice, DesktopUpdateSettings, useDesktopUpdates } from "./components/DesktopUpdates.js";
 import { WelcomeScreen } from "./components/WelcomeScreen.js";
 import { ApprovalPanel } from "./components/ApprovalPanel.js";
 import { DESKTOP_WELCOME_KEY, isDesktopWelcomePassword, readDesktopWelcome } from "./lib/welcome.js";
@@ -107,9 +111,6 @@ import type {
 	WorkspaceSummary,
 	Skill,
 	SkillSummary,
-	McpServer,
-	McpServerSummary,
-	SubagentSummary,
 	ThinkingLevel,
 	Usage,
 	UsageToolSummary,
@@ -154,6 +155,8 @@ import {
 } from "./lib/thinking-preference.js";
 import { estimateContext, formatTokens, type ContextUsage } from "./lib/context-usage.js";
 import { anchorBefore, formatItemTime, formatItemTimestamp, hasVisibleContent, messageText } from "./lib/transcript.js";
+import { groupConsecutiveTools } from "./lib/tool-groups.js";
+import { ToolGroup } from "./components/ToolGroup.js";
 import { isNearBottom } from "./lib/scroll.js";
 import { themeLabel, type ThemeChoice } from "./lib/theme.js";
 import { localeLabel, useLocale, useT } from "./lib/locale.js";
@@ -179,6 +182,7 @@ const STATUS_LABELS: Record<string, string> = {
 	paused: "已暂停",
 	cancelled: "已取消",
 	aborted: "已中止",
+	streaming: "正在输出",
 	complete: "已完成",
 	completed: "已完成",
 	failed: "失败",
@@ -197,7 +201,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 const ONBOARDING_STORAGE_KEY = "wuming.onboarding.complete";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "wuming.sidebar.collapsed";
-type SettingsSection = "general" | "models" | "usage" | "connection";
+type SettingsSection = "general" | "models" | "usage" | "connection" | "updates";
 type UsageRange = 7 | 14 | 30;
 const SIDEBAR_WIDTH_STORAGE_KEY = "wuming.sidebar.width";
 const DEFAULT_SIDEBAR_WIDTH = 252;
@@ -506,7 +510,7 @@ function CustomModelSettings({
 	const [modelQuery, setModelQuery] = useState("");
 	const [name, setName] = useState("");
 	const [api, setApi] = useState<CustomModelApi>("openai-completions");
-	const [contextWindow, setContextWindow] = useState("128000");
+	const [contextWindow, setContextWindow] = useState("258000");
 	const [maxOutputTokens, setMaxOutputTokens] = useState("16384");
 	const [busy, setBusy] = useState(false);
 	const [loadingService, setLoadingService] = useState<string>();
@@ -1450,6 +1454,7 @@ function TranscriptItemView({
 	failureActions,
 	now,
 	transcript,
+	onOpenSubagent,
 }: {
 	item: TranscriptItem;
 	onDownload: (artifact: ArtifactRef) => Promise<void>;
@@ -1459,6 +1464,7 @@ function TranscriptItemView({
 	failureActions?: FailureActionState | undefined;
 	now: number;
 	transcript: TranscriptItem[];
+	onOpenSubagent?: (() => void) | undefined;
 }) {
 	if (item.type === "tool") {
 		const media = item.content.filter((part) => part.type === "artifact" && isPreviewableMediaArtifact(part.artifact));
@@ -1468,6 +1474,7 @@ function TranscriptItemView({
 					toolName={item.toolName}
 					input={item.input}
 					status={item.status as ToolStatusValue}
+					onOpenSession={onOpenSubagent}
 					webEvidence={item.webEvidence}
 				>
 					<ToolResult
@@ -1611,8 +1618,10 @@ function LiveToolView({
 	awaitingApproval = false,
 	onDownload,
 	onLoadArtifact,
+	onOpenSubagent,
 }: {
 	tool: LiveTool;
+	onOpenSubagent?: (() => void) | undefined;
 	awaitingApproval?: boolean;
 	onDownload: (artifact: ArtifactRef) => Promise<void>;
 	onLoadArtifact: (artifact: ArtifactRef) => Promise<Blob>;
@@ -1623,6 +1632,7 @@ function LiveToolView({
 				toolName={tool.toolName}
 				input={tool.input}
 				status={awaitingApproval ? "awaiting_approval" : tool.status}
+				onOpenSession={onOpenSubagent}
 				webEvidence={tool.webEvidence}
 			>
 				{tool.preview ? (
@@ -2484,119 +2494,6 @@ function SkillsView({
 	);
 }
 
-function McpView({
-	servers,
-	selectedServer,
-	onRefresh,
-	onSelect,
-}: {
-	servers: McpServerSummary[];
-	selectedServer: McpServer | undefined;
-	onRefresh: () => Promise<McpServerSummary[]>;
-	onSelect: (serverId: string) => Promise<McpServer | undefined>;
-}) {
-	const [loading, setLoading] = useState(false);
-	const [error, setError] = useState<string>();
-	const select = async (serverId: string) => {
-		setError(undefined);
-		try {
-			await onSelect(serverId);
-		} catch {
-			setError("MCP 工具发现失败。请检查服务启动、协议响应及目录上限，然后刷新或点击服务重试。");
-		}
-	};
-	const refresh = async () => {
-		setLoading(true);
-		setError(undefined);
-		try {
-			await onRefresh();
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
-		} finally {
-			setLoading(false);
-		}
-	};
-	return (
-		<section className="skills-workbench" aria-label="MCP 服务">
-			<aside className="skills-sidebar">
-				<div className="workbench-heading">
-					<div>
-						<strong>MCP</strong>
-						<span>已配置 {servers.length} 个</span>
-					</div>
-					<button className="icon-button" title="刷新 MCP 服务" disabled={loading} onClick={() => void refresh()}>
-						<RefreshCw size={15} />
-					</button>
-				</div>
-				{error && (
-					<div className="workbench-error">
-						<CircleAlert size={14} />
-						{error}
-					</div>
-				)}
-				{servers.map((server) => (
-					<button
-						className={`skill-entry ${selectedServer?.id === server.id ? "selected" : ""}`}
-						key={server.id}
-						onClick={() => void select(server.id)}
-					>
-						<Plug size={14} />
-						<span>
-							<strong>{server.name}</strong>
-							<small>
-								{server.discoveryStatus === "disabled"
-									? "已禁用 · 不会启动"
-									: server.discoveryStatus === "failed"
-										? "工具发现失败 · 点击重试"
-										: server.trusted
-											? `${server.toolCount} 个工具 · ${server.readOnly ? "只读" : "需要批准"}`
-											: "未由服务端授信"}
-							</small>
-						</span>
-					</button>
-				))}
-				{!loading && servers.length === 0 && <div className="workbench-empty">尚未配置 MCP 服务</div>}
-			</aside>
-			<div className="skills-content">
-				{selectedServer ? (
-					<>
-						<div className="editor-heading">
-							<Plug size={15} />
-							<strong>{selectedServer.name}</strong>
-							<span>{selectedServer.transport}</span>
-						</div>
-						<div className="mcp-tool-list">
-							{selectedServer.tools.map((tool) => (
-								<article className="mcp-tool" key={tool.name}>
-									<div>
-										<strong>{tool.name}</strong>
-										<span>{tool.description || "暂无说明"}</span>
-									</div>
-									{tool.inputSchema && <pre>{JSON.stringify(tool.inputSchema, null, 2)}</pre>}
-								</article>
-							))}
-							{selectedServer.tools.length === 0 && (
-								<div className="workbench-empty">
-									{selectedServer.discoveryStatus === "disabled"
-										? "服务已禁用，不会启动"
-										: selectedServer.trusted
-											? "该服务未提供工具"
-											: "服务未授信，不会启动"}
-								</div>
-							)}
-						</div>
-					</>
-				) : (
-					<div className="workbench-empty">
-						<Plug size={24} />
-						<span>选择一个 MCP 服务</span>
-					</div>
-				)}
-			</div>
-		</section>
-	);
-}
-
 const TOOL_CATEGORY_LABELS: Record<ToolStatus["category"], string> = {
 	filesystem: "文件",
 	process: "进程",
@@ -2733,424 +2630,6 @@ function ToolsView({
 					<div className="workbench-empty">
 						<Wrench size={24} />
 						<span>没有可显示的工具</span>
-					</div>
-				)}
-			</div>
-		</section>
-	);
-}
-
-type SubagentFilter = "all" | "active" | "completed" | "attention";
-
-const SUBAGENT_ACTIVE_STATUSES: readonly SubagentSummary["status"][] = [
-	"queued",
-	"running",
-	"awaiting_approval",
-	"cancelling",
-];
-
-function SubagentsView({
-	subagents,
-	depth,
-	canCreate,
-	disabled,
-	onCreate,
-	onCancel,
-	onOpenSession,
-	onRespondApproval,
-	onRefresh,
-}: {
-	subagents: SubagentSummary[];
-	depth: number;
-	canCreate: boolean;
-	disabled: boolean;
-	onCreate: (input: {
-		task: string;
-		name?: string;
-		costBudgetUsd?: number;
-		tokenBudget?: number;
-	}) => Promise<SubagentSummary>;
-	onCancel: (subagentId: string) => Promise<SubagentSummary>;
-	onOpenSession: (sessionId: string) => Promise<void>;
-	onRespondApproval: (sessionId: string, approvalId: string, decision: "approve" | "deny") => Promise<void>;
-	onRefresh: () => Promise<SubagentSummary[]>;
-}) {
-	const [selectedId, setSelectedId] = useState<string>();
-	const [query, setQuery] = useState("");
-	const [filter, setFilter] = useState<SubagentFilter>("all");
-	const [task, setTask] = useState("");
-	const [name, setName] = useState("");
-	const [costBudget, setCostBudget] = useState("");
-	const [tokenBudget, setTokenBudget] = useState("");
-	const [creating, setCreating] = useState(false);
-	const [refreshing, setRefreshing] = useState(false);
-	const [cancelling, setCancelling] = useState(false);
-	const [opening, setOpening] = useState(false);
-	const [error, setError] = useState<string>();
-	const taskInput = useRef<HTMLTextAreaElement>(null);
-	const counts = useMemo(
-		() => ({
-			all: subagents.length,
-			active: subagents.filter((subagent) => SUBAGENT_ACTIVE_STATUSES.includes(subagent.status)).length,
-			completed: subagents.filter((subagent) => subagent.status === "completed").length,
-			attention: subagents.filter((subagent) => subagent.status === "failed" || subagent.status === "cancelled").length,
-		}),
-		[subagents]
-	);
-	const visibleSubagents = useMemo(() => {
-		const normalizedQuery = query.trim().toLocaleLowerCase();
-		return subagents.filter((subagent) => {
-			const matchesQuery =
-				!normalizedQuery || `${subagent.name}\n${subagent.task}`.toLocaleLowerCase().includes(normalizedQuery);
-			const matchesStatus =
-				filter === "all" ||
-				(filter === "active" && SUBAGENT_ACTIVE_STATUSES.includes(subagent.status)) ||
-				(filter === "completed" && subagent.status === "completed") ||
-				(filter === "attention" && (subagent.status === "failed" || subagent.status === "cancelled"));
-			return matchesQuery && matchesStatus;
-		});
-	}, [filter, query, subagents]);
-	const selected = visibleSubagents.find((subagent) => subagent.id === selectedId) ?? visibleSubagents[0];
-
-	useEffect(() => {
-		if (!selectedId || !visibleSubagents.some((subagent) => subagent.id === selectedId))
-			setSelectedId(visibleSubagents[0]?.id);
-	}, [selectedId, visibleSubagents]);
-
-	const submit = async (event: FormEvent) => {
-		event.preventDefault();
-		const normalizedTask = task.trim();
-		const cost = costBudget.trim() ? Number(costBudget) : undefined;
-		const tokens = tokenBudget.trim() ? Number(tokenBudget) : undefined;
-		if (!normalizedTask) return setError("请填写任务内容");
-		if (cost !== undefined && (!Number.isFinite(cost) || cost <= 0)) return setError("费用限额必须大于 0");
-		if (tokens !== undefined && (!Number.isSafeInteger(tokens) || tokens <= 0))
-			return setError("Token 限额必须是正整数");
-		setCreating(true);
-		setError(undefined);
-		try {
-			const created = await onCreate({
-				task: normalizedTask,
-				...(name.trim() ? { name: name.trim() } : {}),
-				...(cost === undefined ? {} : { costBudgetUsd: cost }),
-				...(tokens === undefined ? {} : { tokenBudget: tokens }),
-			});
-			setSelectedId(created.id);
-			setTask("");
-			setName("");
-			setCostBudget("");
-			setTokenBudget("");
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
-		} finally {
-			setCreating(false);
-		}
-	};
-
-	const refresh = async () => {
-		setRefreshing(true);
-		setError(undefined);
-		try {
-			await onRefresh();
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
-		} finally {
-			setRefreshing(false);
-		}
-	};
-
-	const cancel = async () => {
-		if (!selected) return;
-		setCancelling(true);
-		setError(undefined);
-		try {
-			await onCancel(selected.id);
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
-		} finally {
-			setCancelling(false);
-		}
-	};
-
-	const openSession = async () => {
-		if (!selected || opening) return;
-		setOpening(true);
-		setError(undefined);
-		try {
-			await onOpenSession(selected.sessionId);
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
-		} finally {
-			setOpening(false);
-		}
-	};
-
-	const reuse = () => {
-		if (!selected) return;
-		setTask(selected.task);
-		setName(selected.name);
-		setCostBudget(selected.costBudgetUsd?.toString() ?? "");
-		setTokenBudget(selected.tokenBudget?.toString() ?? "");
-		setError(undefined);
-		requestAnimationFrame(() => taskInput.current?.focus());
-	};
-
-	const active = selected && SUBAGENT_ACTIVE_STATUSES.includes(selected.status);
-	return (
-		<section className="subagents-workbench" aria-label="子智能体">
-			<aside className="subagents-sidebar">
-				<div className="workbench-heading">
-					<div>
-						<strong>智能体</strong>
-						<span>
-							{depth > 0 ? `第 ${depth} 层 · ` : ""}
-							{subagents.length} 个任务
-						</span>
-					</div>
-					<button className="icon-button" title="刷新智能体" disabled={refreshing} onClick={() => void refresh()}>
-						<RefreshCw size={15} />
-					</button>
-				</div>
-				{canCreate ? (
-					<form className="subagent-create" onSubmit={(event) => void submit(event)}>
-						<label>
-							<span>任务</span>
-							<textarea
-								ref={taskInput}
-								rows={4}
-								maxLength={20_000}
-								placeholder="调查问题并汇报结果"
-								value={task}
-								onChange={(event) => setTask(event.target.value)}
-							/>
-						</label>
-						<label>
-							<span>名称</span>
-							<input
-								maxLength={500}
-								placeholder="可选"
-								value={name}
-								onChange={(event) => setName(event.target.value)}
-							/>
-						</label>
-						<div className="subagent-budget-fields">
-							<label>
-								<span>费用限额（USD）</span>
-								<input
-									inputMode="decimal"
-									placeholder="继承主会话"
-									value={costBudget}
-									onChange={(event) => setCostBudget(event.target.value)}
-								/>
-							</label>
-							<label>
-								<span>Token 限额</span>
-								<input
-									inputMode="numeric"
-									placeholder="继承主会话"
-									value={tokenBudget}
-									onChange={(event) => setTokenBudget(event.target.value)}
-								/>
-							</label>
-						</div>
-						<button className="subagent-create-button" type="submit" disabled={disabled || creating || !task.trim()}>
-							<Plus size={15} />
-							{creating ? "正在创建..." : "创建智能体"}
-						</button>
-					</form>
-				) : (
-					<div className="subagent-depth-limit">
-						<ShieldAlert size={15} />
-						<span>
-							<strong>已到达 3 层上限</strong>
-							<small>当前智能体不能继续委派，可返回上层管理协作树。</small>
-						</span>
-					</div>
-				)}
-				{error && (
-					<div className="workbench-error">
-						<CircleAlert size={14} />
-						{error}
-					</div>
-				)}
-				<div className="subagent-list-controls">
-					<label className="subagent-search">
-						<Search size={13} />
-						<input
-							aria-label="搜索智能体"
-							placeholder="搜索名称或任务"
-							value={query}
-							onChange={(event) => setQuery(event.target.value)}
-						/>
-					</label>
-					<div className="subagent-filters" role="tablist" aria-label="智能体状态筛选">
-						{(
-							[
-								["all", "全部"],
-								["active", "进行中"],
-								["completed", "已完成"],
-								["attention", "需关注"],
-							] as const
-						).map(([value, label]) => (
-							<button
-								role="tab"
-								aria-selected={filter === value}
-								className={filter === value ? "active" : ""}
-								type="button"
-								key={value}
-								onClick={() => setFilter(value)}
-							>
-								<span>{label}</span>
-								<small>{counts[value]}</small>
-							</button>
-						))}
-					</div>
-				</div>
-				<nav className="subagent-list" aria-label="智能体任务">
-					{visibleSubagents.map((subagent) => (
-						<button
-							className={`subagent-entry ${selected?.id === subagent.id ? "selected" : ""}`}
-							type="button"
-							key={subagent.id}
-							onClick={() => setSelectedId(subagent.id)}
-						>
-							<i className={`subagent-status status-${subagent.status}`} />
-							<span>
-								<strong>{subagent.name}</strong>
-								<small>
-									{statusLabel(subagent.status)} · {formatRunTime(subagent.updatedAt)}
-								</small>
-							</span>
-						</button>
-					))}
-					{subagents.length === 0 && <div className="subagent-list-empty">暂无智能体任务</div>}
-					{subagents.length > 0 && visibleSubagents.length === 0 && (
-						<div className="subagent-list-empty">没有符合条件的任务</div>
-					)}
-				</nav>
-			</aside>
-			<div className="subagent-detail">
-				{selected ? (
-					<>
-						<header className="subagent-detail-heading">
-							<div>
-								<Bot size={16} />
-								<span>
-									<strong>{selected.name}</strong>
-									<small>
-										{selected.model.provider}/{selected.model.id}
-									</small>
-								</span>
-							</div>
-							<div className="subagent-actions">
-								<button
-									className="subagent-secondary-action"
-									type="button"
-									title={canCreate ? "复制任务配置" : "当前已到达智能体层级上限"}
-									disabled={opening || !canCreate}
-									onClick={reuse}
-								>
-									<Copy size={13} />
-									复制任务
-								</button>
-								<button
-									className="subagent-primary-action"
-									type="button"
-									title="打开智能体完整对话"
-									disabled={opening}
-									onClick={() => void openSession()}
-								>
-									{opening ? <RefreshCw className="spin" size={13} /> : <MessageSquareCode size={13} />}
-									{opening ? "正在打开" : "打开对话"}
-								</button>
-								{active && (
-									<button
-										className="subagent-cancel"
-										type="button"
-										title="取消智能体任务"
-										disabled={cancelling || selected.status === "cancelling"}
-										onClick={() => void cancel()}
-									>
-										<Square size={13} />
-										{selected.status === "cancelling" ? "正在取消" : "取消"}
-									</button>
-								)}
-							</div>
-						</header>
-						<div className="subagent-detail-scroll">
-							<div className="subagent-meta">
-								<span className={`subagent-status-label status-${selected.status}`}>
-									<i />
-									{statusLabel(selected.status)}
-								</span>
-								<span>第 {selected.depth} 层</span>
-								<span>{formatTokens(selected.usage.totalTokens)} Token</span>
-								<span>{formatMoney(selected.usage.costUsd)}</span>
-								{selected.startedAt && (
-									<span>
-										{formatDuration(
-											selected.startedAt,
-											selected.finishedAt ??
-												(["running", "awaiting_approval", "cancelling"].includes(selected.status)
-													? Date.now()
-													: selected.updatedAt)
-										)}
-									</span>
-								)}
-								{selected.costBudgetUsd && <span>限额 {formatMoney(selected.costBudgetUsd)}</span>}
-								{selected.tokenBudget && <span>限额 {formatTokens(selected.tokenBudget)} Token</span>}
-							</div>
-							<section className="subagent-section">
-								<h2>任务</h2>
-								<p>{selected.task}</p>
-							</section>
-							{selected.pendingApprovals.map((approval) => (
-								<ApprovalPanel
-									key={approval.id}
-									approval={approval}
-									onRespond={(decision) => onRespondApproval(selected.sessionId, approval.id, decision)}
-								/>
-							))}
-							{selected.result !== undefined && (
-								<section className="subagent-section">
-									<h2>结果</h2>
-									{selected.result ? (
-										<Markdown text={selected.result} className="prose subagent-result" />
-									) : (
-										<p>任务已完成，但没有文本结果。</p>
-									)}
-								</section>
-							)}
-							{selected.error && (
-								<section className="subagent-error">
-									<CircleAlert size={15} />
-									<span>{selected.error}</span>
-								</section>
-							)}
-							{active && selected.pendingApprovals.length === 0 && (
-								<div className="subagent-running">
-									<Activity size={17} />
-									<span>
-										{selected.status === "queued"
-											? "等待开始"
-											: selected.status === "cancelling"
-												? "正在停止任务"
-												: "正在工作"}
-									</span>
-								</div>
-							)}
-						</div>
-					</>
-				) : (
-					<div className="workbench-empty">
-						<Bot size={24} />
-						<span>
-							{subagents.length === 0
-								? canCreate
-									? "创建一个智能体任务"
-									: "当前层级不可继续委派"
-								: "没有符合条件的任务"}
-						</span>
 					</div>
 				)}
 			</div>
@@ -4748,10 +4227,12 @@ function ProjectNavigationItem({
 	expanded,
 	disabled,
 	removeDisabled,
+	openFolderDisabled,
 	onToggle,
 	onNewSession,
 	onRename,
 	onRemove,
+	onOpenFolder,
 	children,
 }: {
 	workspace: WorkspaceSummary;
@@ -4759,10 +4240,12 @@ function ProjectNavigationItem({
 	expanded: boolean;
 	disabled: boolean;
 	removeDisabled: boolean;
+	openFolderDisabled: boolean;
 	onToggle: () => void;
 	onNewSession: () => Promise<void>;
 	onRename: (name: string) => Promise<unknown>;
 	onRemove: () => Promise<void>;
+	onOpenFolder: () => Promise<void>;
 	children?: ReactNode;
 }) {
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -4817,6 +4300,19 @@ function ProjectNavigationItem({
 		}
 	};
 
+	const openFolder = async () => {
+		setMenuOpen(false);
+		setBusy(true);
+		setError(undefined);
+		try {
+			await onOpenFolder();
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : String(cause));
+		} finally {
+			setBusy(false);
+		}
+	};
+
 	const remove = async () => {
 		setBusy(true);
 		setError(undefined);
@@ -4835,7 +4331,7 @@ function ProjectNavigationItem({
 				className="project-row-wrap"
 				onContextMenu={(event) => {
 					event.preventDefault();
-					if (!disabled && !renaming) setMenuOpen(true);
+					if (!disabled && !busy && !renaming) setMenuOpen(true);
 				}}
 			>
 				{renaming ? (
@@ -4896,6 +4392,16 @@ function ProjectNavigationItem({
 						<button type="button" role="menuitem" onClick={() => void runNewSession()}>
 							<Plus size={14} />
 							<span>在此项目中新建对话</span>
+						</button>
+						<button
+							type="button"
+							role="menuitem"
+							disabled={busy || openFolderDisabled}
+							title={openFolderDisabled ? "仅支持在本地设备上打开项目目录" : undefined}
+							onClick={() => void openFolder()}
+						>
+							<FolderOpen size={14} />
+							<span>在资源管理器中打开</span>
 						</button>
 						<button
 							type="button"
@@ -4973,8 +4479,9 @@ function ProjectNavigationItem({
 export function App() {
 	const client = useWumingClient();
 	const [workbenchView, setWorkbenchView] = useState<
-		"chat" | "agents" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp"
+		"chat" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp"
 	>("chat");
+	const [childMenuOpen, setChildMenuOpen] = useState(false);
 	const [skillManagerOpen, setSkillManagerOpen] = useState(false);
 	const [mobileNav, setMobileNav] = useState(false);
 	const [newChatBusy, setNewChatBusy] = useState(false);
@@ -5056,6 +4563,11 @@ export function App() {
 		setSettingsSection(section);
 		setSettingsOpen(true);
 	}, []);
+	const openUpdates = useCallback(() => {
+		setMobileNav(false);
+		openSettings("updates");
+	}, [openSettings]);
+	const desktopUpdates = useDesktopUpdates(openUpdates);
 	const toggleSidebar = useCallback(() => {
 		setSidebarCollapsed((collapsed) => {
 			const next = !collapsed;
@@ -5198,6 +4710,28 @@ export function App() {
 		(model) => model.model.provider === client.snapshot?.model.provider && model.model.id === client.snapshot.model.id
 	);
 	const contextUsage = estimateContext(client.snapshot, sessionModel?.contextWindow);
+	const openConversation = async (sessionId: string) => {
+		try {
+			await client.attachSession(sessionId);
+			setShowRight(false);
+			setWorkbenchView("chat");
+			setMobileNav(false);
+			setNewChatError(undefined);
+			setChildMenuOpen(false);
+			return true;
+		} catch (error) {
+			setNewChatError(error instanceof Error ? error.message : String(error));
+			return false;
+		}
+	};
+	const openToolSubagent = (toolCallId: string, input: unknown): (() => void) | undefined => {
+		const child = findToolSubagent(client.subagents, toolCallId, input);
+		return child
+			? () => {
+					void openConversation(child.sessionId);
+				}
+			: undefined;
+	};
 	// The picker drives the session's level, so it follows the session's model and
 	// only falls back to the composer's queued model before the first session.
 	const thinkingModel = client.snapshot ? (sessionModel ?? selectedModel) : selectedModel;
@@ -5217,7 +4751,8 @@ export function App() {
 	const reasoningPhase =
 		client.snapshot !== undefined && ["turn", "retry", "compaction"].includes(client.snapshot.session.phase);
 	const liveAssistantItems = Object.values(client.liveAssistants).filter(
-		(item) => item.thinking.trim() !== "" || item.text.trim() !== ""
+		(item) =>
+			!transcript?.some((saved) => saved.id === item.id) && (item.thinking.trim() !== "" || item.text.trim() !== "")
 	);
 	const liveAssistantLength = liveAssistantItems.reduce(
 		(length, item) => length + item.thinking.length + item.text.length,
@@ -5225,11 +4760,13 @@ export function App() {
 	);
 	const liveTrace = [
 		...liveAssistantItems.map((item) => ({ kind: "assistant" as const, order: item.order, item })),
-		...Object.values(client.liveTools).map((item) => ({
-			kind: "tool" as const,
-			order: item.order,
-			item,
-		})),
+		...Object.values(client.liveTools)
+			.filter((item) => !transcript?.some((saved) => saved.type === "tool" && saved.toolCallId === item.toolCallId))
+			.map((item) => ({
+				kind: "tool" as const,
+				order: item.order,
+				item,
+			})),
 	].sort((left, right) => left.order - right.order);
 	const compactionStatus =
 		client.liveCompaction?.sessionId === client.snapshot?.session.id
@@ -5246,8 +4783,40 @@ export function App() {
 		for (const item of transcript ?? []) {
 			if (item.type === "tool") rendered.add(item.toolCallId);
 		}
+		for (const tool of Object.values(client.liveTools)) rendered.add(tool.toolCallId);
 		return rendered;
-	}, [transcript]);
+	}, [transcript, client.liveTools]);
+
+	const traceEntries = [
+		...(transcript ?? [])
+			.filter((item) => item.type !== "assistant" || item.error || hasVisibleContent(item.content, renderedToolCalls))
+			.map((item) => ({ kind: "saved" as const, item })),
+		...liveTrace,
+	];
+	const traceGroups = groupConsecutiveTools(traceEntries, (entry) => {
+		const item = entry.item;
+		const tool =
+			entry.kind === "tool"
+				? entry.item
+				: entry.kind === "saved" && entry.item.type === "tool"
+					? entry.item
+					: undefined;
+		return {
+			key: entry.kind === "tool" ? `tool:${entry.item.toolCallId}` : `message:${"id" in item ? item.id : ""}`,
+			...(tool
+				? {
+						tool: {
+							...tool,
+							status: client.snapshot?.pendingApprovals.some((approval) => approval.toolCallId === tool.toolCallId)
+								? ("awaiting_approval" as const)
+								: tool.status,
+							hasArtifact:
+								"content" in tool ? tool.content.some((part) => part.type === "artifact") : Boolean(tool.artifact),
+						},
+					}
+				: {}),
+		};
+	});
 
 	// Message-level actions. Both branching actions need an idle, writable,
 	// connected session, so they share one gate and one explanation of it.
@@ -5420,7 +4989,7 @@ export function App() {
 			name: string,
 			title: string,
 			hint: string,
-			view: "chat" | "agents" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp",
+			view: "chat" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp",
 			icon: ReactNode
 		): ComposerCommand => ({
 			name,
@@ -5511,7 +5080,18 @@ export function App() {
 			panel("tools", "查看工具清单", "工具", "tools", <Wrench size={14} />),
 			panel("skills", "查看技能", "技能", "skills", <BookOpen size={14} />),
 			panel("mcp", "查看 MCP 服务", "mcp 服务", "mcp", <Plug size={14} />),
-			panel("agents", "查看子智能体", "智能体 子代理", "agents", <Bot size={14} />),
+			...(client.snapshot && client.capabilities.includes("subagents")
+				? [
+						{
+							name: "agents",
+							title: "查看子对话",
+							hint: "子代理 对话 切换",
+							kind: "action" as const,
+							icon: <GitBranch size={14} />,
+							run: () => setChildMenuOpen(true),
+						},
+					]
+				: []),
 			panel("automations", "查看自动化", "自动化 定时 计划", "automations", <CalendarClock size={14} />),
 			panel("chat", "回到对话", "对话 聊天", "chat", <MessageSquareCode size={14} />),
 		];
@@ -5883,6 +5463,16 @@ export function App() {
 			hint: t("connectionSettingsHint"),
 			icon: <Plug size={17} />,
 		},
+		...(desktopUpdates.enabled
+			? [
+					{
+						id: "updates" as const,
+						label: t("desktopUpdates"),
+						hint: t("desktopUpdatesHint"),
+						icon: <Download size={17} />,
+					},
+				]
+			: []),
 	];
 
 	return (
@@ -5945,6 +5535,7 @@ export function App() {
 									expanded={expanded}
 									disabled={client.connection !== "connected"}
 									removeDisabled={selected && active}
+									openFolderDisabled={client.executionEnvironment?.placement !== "local_device"}
 									onToggle={() => {
 										setCollapsedProjectIds((current) => {
 											const next = new Set(current);
@@ -5957,19 +5548,18 @@ export function App() {
 									onNewSession={() => startNewChat(workspace.id)}
 									onRename={(name) => client.renameProject(workspace.id, name)}
 									onRemove={() => client.removeProject(workspace.id)}
+									onOpenFolder={() => workspaceApi.openProjectFolder(client.token, workspace.id)}
 								>
 									{expanded && (
 										<div className="project-conversations">
 											<SessionNavigation
 												sessions={client.sessions}
+
 												{...(client.snapshot ? { selectedSessionId: client.snapshot.session.id } : {})}
 												workspaceId={workspace.id}
 												disabled={client.connection !== "connected"}
 												onBrowse={client.browseSessions}
-												onSelect={(sessionId) => {
-													void client.attachSession(sessionId);
-													setMobileNav(false);
-												}}
+												onSelect={(sessionId) => void openConversation(sessionId)}
 												onRename={client.renameSession}
 												onArchive={client.archiveSession}
 											/>
@@ -5989,14 +5579,12 @@ export function App() {
 								<div className="projectless-conversations">
 									<SessionNavigation
 										sessions={client.sessions}
+
 										{...(client.snapshot ? { selectedSessionId: client.snapshot.session.id } : {})}
 										workspaceId={implicitWorkspace.id}
 										disabled={client.connection !== "connected"}
 										onBrowse={client.browseSessions}
-										onSelect={(sessionId) => {
-											void client.attachSession(sessionId);
-											setMobileNav(false);
-										}}
+										onSelect={(sessionId) => void openConversation(sessionId)}
 										onRename={client.renameSession}
 										onArchive={client.archiveSession}
 									/>
@@ -6006,6 +5594,7 @@ export function App() {
 					</nav>
 				</section>
 				<div className="sidebar-footer">
+					<DesktopUpdateNotice model={desktopUpdates} onOpen={openUpdates} />
 					<button
 						onClick={() => {
 							setMobileNav(false);
@@ -6069,9 +5658,9 @@ export function App() {
 							<button
 								className="icon-button subagent-back"
 								type="button"
-								title="返回主会话"
-								aria-label="返回主会话"
-								onClick={() => void client.attachSession(client.snapshot!.session.parentSessionId!)}
+								title="返回上级对话"
+								aria-label="返回上级对话"
+								onClick={() => void openConversation(client.snapshot!.session.parentSessionId!)}
 							>
 								<ArrowLeft size={18} />
 							</button>
@@ -6177,6 +5766,19 @@ export function App() {
 						</button>
 					</div>
 					<div className="topbar-actions">
+						{client.snapshot && client.capabilities.includes("subagents") && (
+							<ChildConversationMenu
+								key={client.snapshot.session.id}
+								session={client.snapshot.session}
+								children={client.subagents}
+								open={childMenuOpen}
+								onOpenChange={setChildMenuOpen}
+								disabled={client.connection !== "connected"}
+								load={client.refreshSubagents}
+								onSelect={openConversation}
+								onCancel={client.cancelSubagent}
+							/>
+						)}
 						<button
 							className="icon-button"
 							type="button"
@@ -6304,58 +5906,74 @@ export function App() {
 										</ul>
 									</div>
 								)}
-							{client.snapshot?.transcript.map((item) => {
-								const failureRun =
-									item.type === "assistant" && item.error
-										? client.runs.find((run) => item.id === `${run.id}:error`)
-										: undefined;
-								return (
-									<TranscriptItemView
-										item={item}
-										key={item.id}
-										transcript={client.snapshot?.transcript ?? []}
-										now={Date.now()}
-										onDownload={client.downloadArtifact}
-										onLoadArtifact={client.loadArtifact}
-										renderedToolCalls={renderedToolCalls}
-										actions={item.type === "tool" ? undefined : messageActions(item)}
-										failureActions={
-											item.type === "assistant" && item.error
-												? {
-														run: failureRun,
-														busy: messageBusyId === item.id,
-														disabled: branchDisabled,
-														disabledTitle: branchTitle,
-														onRetry: () => retryFailedTurn(item),
-														onOpenSettings: () => openSettings("models"),
-														onOpenUsage: () => openSettings("usage"),
+							{traceGroups.map((group) => (
+								<ToolGroup tools={group.tools} key={`${client.snapshot?.session.id}:${group.key}`}>
+									{group.entries.map((entry) => {
+										if (entry.kind === "assistant")
+											return (
+												<LiveAssistantView
+													item={entry.item}
+													compacting={compactionStatus === "running"}
+													key={`assistant:${entry.item.id}`}
+												/>
+											);
+										if (entry.kind === "tool")
+											return (
+												<LiveToolView
+													tool={entry.item}
+													onOpenSubagent={
+														entry.item.toolName === "subagent"
+															? openToolSubagent(entry.item.toolCallId, entry.item.input)
+															: undefined
 													}
-												: undefined
-										}
-									/>
-								);
-							})}
-							{liveTrace.map((entry) =>
-								entry.kind === "assistant" ? (
-									<LiveAssistantView
-										item={entry.item}
-										compacting={compactionStatus === "running"}
-										key={`assistant:${entry.item.id}`}
-									/>
-								) : (
-									<LiveToolView
-										tool={entry.item}
-										onDownload={client.downloadArtifact}
-										onLoadArtifact={client.loadArtifact}
-										awaitingApproval={
-											client.snapshot?.pendingApprovals.some(
-												(approval) => approval.toolCallId === entry.item.toolCallId
-											) ?? false
-										}
-										key={`tool:${entry.item.toolCallId}`}
-									/>
-								)
-							)}
+													onDownload={client.downloadArtifact}
+													onLoadArtifact={client.loadArtifact}
+													awaitingApproval={
+														client.snapshot?.pendingApprovals.some(
+															(approval) => approval.toolCallId === entry.item.toolCallId
+														) ?? false
+													}
+													key={`tool:${entry.item.toolCallId}`}
+												/>
+											);
+										const item = entry.item;
+										const failureRun =
+											item.type === "assistant" && item.error
+												? client.runs.find((run) => item.id === `${run.id}:error`)
+												: undefined;
+										return (
+											<TranscriptItemView
+												item={item}
+												onOpenSubagent={
+													item.type === "tool" && item.toolName === "subagent"
+														? openToolSubagent(item.toolCallId, item.input)
+														: undefined
+												}
+												key={item.id}
+												transcript={client.snapshot?.transcript ?? []}
+												now={Date.now()}
+												onDownload={client.downloadArtifact}
+												onLoadArtifact={client.loadArtifact}
+												renderedToolCalls={renderedToolCalls}
+												actions={item.type === "tool" ? undefined : messageActions(item)}
+												failureActions={
+													item.type === "assistant" && item.error
+														? {
+																run: failureRun,
+																busy: messageBusyId === item.id,
+																disabled: branchDisabled,
+																disabledTitle: branchTitle,
+																onRetry: () => retryFailedTurn(item),
+																onOpenSettings: () => openSettings("models"),
+																onOpenUsage: () => openSettings("usage"),
+															}
+														: undefined
+												}
+											/>
+										);
+									})}
+								</ToolGroup>
+							))}
 							{compactionStatus && <CompactionActivity status={compactionStatus} />}
 							{client.liveRetry && compactionStatus !== "running" && <RetryActivity retry={client.liveRetry} />}
 							{client.snapshot?.pendingApprovals.map((approval) => (
@@ -6541,27 +6159,6 @@ export function App() {
 						</div>
 					</section>
 				)}
-				{workbenchView === "agents" && (
-					<SubagentsView
-						subagents={client.subagents}
-						depth={client.subagentDepth}
-						canCreate={client.canCreateSubagent}
-						disabled={
-							!client.snapshot || client.snapshot.session.archivedAt !== undefined || client.connection !== "connected"
-						}
-						onCreate={client.createSubagent}
-						onCancel={client.cancelSubagent}
-						onOpenSession={async (sessionId) => {
-							await client.attachSession(sessionId);
-							setShowRight(false);
-							setWorkbenchView("chat");
-						}}
-						onRespondApproval={client.respondApproval}
-						onRefresh={() =>
-							client.snapshot ? client.refreshSubagents(client.snapshot.session.id) : Promise.resolve([])
-						}
-					/>
-				)}
 				{workbenchView === "automations" && (
 					<AutomationsView
 						automations={client.automations}
@@ -6623,6 +6220,10 @@ export function App() {
 				)}
 				{workbenchView === "mcp" && selectedWorkspace && (
 					<McpView
+						key={selectedWorkspace.id}
+						workspaceId={selectedWorkspace.id}
+						available={client.capabilities.includes("mcp")}
+						onCommand={client.manageMcp}
 						servers={client.mcpServers}
 						selectedServer={client.selectedMcpServer}
 						onRefresh={() => client.refreshMcp(selectedWorkspace.id)}
@@ -6842,6 +6443,15 @@ export function App() {
 												onRefresh={(days) => client.refreshUsageOverview(selectedWorkspace!.id, days)}
 											/>
 										</section>
+										{desktopUpdates.enabled && (
+											<section
+												id="settings-panel-updates"
+												className="settings-pane"
+												hidden={settingsSection !== "updates"}
+											>
+												<DesktopUpdateSettings model={desktopUpdates} />
+											</section>
+										)}
 										<section
 											id="settings-panel-connection"
 											className="settings-pane"

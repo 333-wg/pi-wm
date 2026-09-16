@@ -5,6 +5,10 @@ import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { LanguageProvider } from "./lib/locale.js";
 import "./styles.css";
 import { initializeDesktopConnection } from "./lib/desktop.js";
+import { DesktopTitlebar } from "./components/DesktopTitlebar.js";
+
+const windowChrome = Boolean(window.wumingDesktop?.windowChrome);
+if (windowChrome) document.documentElement.dataset.desktopChrome = "true";
 
 void initializeDesktopConnection()
 	.then(() =>
@@ -12,7 +16,16 @@ void initializeDesktopConnection()
 			<StrictMode>
 				<ErrorBoundary>
 					<LanguageProvider>
-						<App />
+						{windowChrome ? (
+							<>
+								<DesktopTitlebar />
+								<div className="desktop-content">
+									<App />
+								</div>
+							</>
+						) : (
+							<App />
+						)}
 					</LanguageProvider>
 				</ErrorBoundary>
 			</StrictMode>

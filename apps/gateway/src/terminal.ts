@@ -145,6 +145,10 @@ export class TerminalManager implements AsyncDisposable {
 		return true;
 	}
 
+	get activeCount(): number {
+		return this.#terminals.size;
+	}
+
 	workspaceFor(terminalId: string, principalId: string): string {
 		const record = this.#terminals.get(terminalId);
 		if (!record) throw Object.assign(new Error("Terminal does not exist"), { code: "not_found" });

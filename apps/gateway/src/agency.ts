@@ -20,6 +20,7 @@ export interface SubagentRunner {
 		sessionId: string;
 		task: string;
 		name?: string;
+		sourceToolCallId?: string;
 		costBudgetUsd?: number;
 		tokenBudget?: number;
 		deliverInline?: boolean;
@@ -68,14 +69,15 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 			name: "update_plan",
 			label: "update_plan",
 			description: [
-				"Record the plan for a multi-step task and keep it current as you work.",
+				"Track execution when multiple substantive outcomes or dependent changes benefit from a visible plan.",
+				'Skip simple questions and localized changes with a clear approach; routine "inspect, edit, test" does not justify a plan.',
+				"This is progress bookkeeping, not a request for approval or permission to implement an analysis-only request.",
 				"Send the whole plan every time — it replaces the previous one. Each step needs a status: pending, in_progress or completed.",
-				"Keep exactly one step in_progress, and update the plan as soon as a step is finished or the approach changes.",
-				"Skip it for single-step work; a plan that is never updated is worse than none.",
+				"Keep exactly one step in_progress while work is active; once all outcomes are done, mark all steps completed. Update as soon as a step finishes or the approach changes.",
 			].join(" "),
-			promptSnippet: "Record and update a step-by-step plan for the current task",
+			promptSnippet: "Track substantive multi-step work when a visible execution plan adds value",
 			promptGuidelines: [
-				"Use update_plan for work with several distinct steps, and update it as each step completes — the user follows your progress through it.",
+				"Only call update_plan when tracking substantive dependencies or outcomes adds value; do not use it just because a task needs several tools or files. Keep an existing plan current as each outcome completes.",
 				'A plan step is an outcome, not a tool call: "make the reducer handle the new event", not "call edit".',
 			],
 			parameters: Type.Object({
@@ -182,7 +184,8 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 				`Delegation is bounded to ${MAX_SUBAGENT_DEPTH} agent levels; a child can delegate again while it remains below that limit.`,
 				"Use it to keep a large search out of your own context — for example locating every caller of an API across an unfamiliar tree.",
 				"It cannot ask you questions, so state the goal, the paths worth looking at, and exactly what to report back.",
-				"Its cost counts against this session's budget.",
+				"It has its own model context and automatic context compaction, just like a new conversation. The user can open its conversation and continue it.",
+				"It inherits user-configured remaining session budgets. Do not invent a token or cost cap: cumulative usage is not the context window, and compaction does not reset usage.",
 			].join(" "),
 			promptSnippet: "Delegate a self-contained investigation to a subagent and wait for its report",
 			promptGuidelines: [
@@ -196,20 +199,6 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 					description: "The complete instruction, including what to report back",
 				}),
 				name: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Short label shown in the UI" })),
-				cost_budget_usd: Type.Optional(
-					Type.Number({
-						exclusiveMinimum: 0,
-						maximum: 1000,
-						description: "Cap on this subagent's spend; defaults to the session's remaining budget",
-					})
-				),
-				token_budget: Type.Optional(
-					Type.Integer({
-						minimum: 1000,
-						maximum: 100_000_000,
-						description: "Cap on this subagent's tokens; defaults to the session's remaining budget",
-					})
-				),
 			}),
 			async execute(toolCallId, params, signal) {
 				const principalId = `agent:${sessionId}`;
@@ -218,9 +207,8 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 					idempotencyKey: `subagent-tool:${toolCallId}`,
 					sessionId,
 					task: params.task,
+					sourceToolCallId: toolCallId,
 					...(params.name === undefined ? {} : { name: params.name }),
-					...(params.cost_budget_usd === undefined ? {} : { costBudgetUsd: params.cost_budget_usd }),
-					...(params.token_budget === undefined ? {} : { tokenBudget: params.token_budget }),
 					deliverInline: true,
 				});
 				const subagentId = created.subagent.id;

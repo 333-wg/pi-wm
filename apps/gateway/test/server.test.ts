@@ -464,16 +464,30 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 				command: process.execPath,
 				args: [script],
 				readOnly: true,
+				env: { RPC_TEST_KEY: "rpc-private-canary" },
 			},
 		};
 
 		expect(await call(viewer, { type: "mcp.list", workspaceId: workspace.id })).toMatchObject({ ok: true });
 		expect(await call(viewer, configureCommand)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+		expect(
+			await call(viewer, { type: "mcp.configuration.get", workspaceId: workspace.id, serverId: "docs" })
+		).toMatchObject({ ok: false, error: { code: "forbidden" } });
+		expect(await call(viewer, { type: "mcp.remove", workspaceId: workspace.id, serverId: "docs" })).toMatchObject({
+			ok: false,
+			error: { code: "forbidden" },
+		});
 		expect(await call(owner, configureCommand)).toMatchObject({
 			ok: true,
 			result: { type: "mcp.updated", server: { id: "docs", trusted: false, discoveryStatus: "untrusted" } },
 		});
 		expect(await readFile(join(root, ".wuming", "mcp.json"), "utf8")).toContain('"id": "docs"');
+		const settings = await call(owner, { type: "mcp.configuration.get", workspaceId: workspace.id, serverId: "docs" });
+		expect(settings).toMatchObject({
+			ok: true,
+			result: { type: "mcp.configuration", config: { env: { RPC_TEST_KEY: null } } },
+		});
+		expect(JSON.stringify(settings)).not.toContain("rpc-private-canary");
 		expect(
 			await access(marker).then(
 				() => true,
@@ -493,6 +507,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		expect(await call(owner, { type: "mcp.untrust", workspaceId: workspace.id, serverId: "docs" })).toMatchObject({
 			ok: true,
 			result: { type: "mcp.updated", server: { id: "docs", trusted: false, discoveryStatus: "untrusted" } },
+		});
+		expect(await call(owner, { type: "mcp.remove", workspaceId: workspace.id, serverId: "docs" })).toMatchObject({
+			ok: true,
+			result: { type: "mcp.removed", serverId: "docs" },
+		});
+		expect(await call(owner, { type: "mcp.list", workspaceId: workspace.id })).toMatchObject({
+			ok: true,
+			result: { servers: [] },
 		});
 	});
 

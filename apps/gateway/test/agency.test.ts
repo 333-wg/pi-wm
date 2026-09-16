@@ -1,4 +1,5 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { buildWumingSystemPrompt } from "@wuming/pi-adapter";
 import type { SessionSnapshot, SubagentSummary } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
 import { createAgencyTools, type SubagentRunner } from "../src/agency.js";
@@ -135,6 +136,27 @@ function tool(tools: ReturnType<typeof createAgencyTools>, name: string) {
 const signal = () => new AbortController().signal;
 
 describe("update_plan", () => {
+	it("exposes selective planning guidance in both the tool schema and the assembled system prompt", () => {
+		const state = snapshot();
+		const tools = createAgencyTools({ snapshot: state });
+		const plan = tool(tools, "update_plan");
+		expect(plan.description).toContain("multiple substantive outcomes or dependent changes");
+		expect(plan.description).toContain("Skip simple questions and localized changes");
+		expect(plan.description).toContain('"inspect, edit, test"');
+		expect(plan.description).toContain("not a request for approval or permission to implement");
+		expect(plan.description).toContain("while work is active");
+
+		const prompt = buildWumingSystemPrompt({
+			tools,
+			sandboxMode: state.sandboxMode,
+			approvalPolicy: state.approvalPolicy,
+		});
+		for (const guideline of plan.promptGuidelines ?? []) expect(prompt).toContain(guideline);
+		expect(prompt).toContain("Default to direct execution");
+		expect(prompt).toContain("Only call update_plan when tracking substantive dependencies or outcomes adds value");
+		expect(prompt).not.toContain("Use update_plan for work with several distinct steps");
+	});
+
 	it("renders progress, marks the active step, and echoes the explanation", async () => {
 		const plan = tool(createAgencyTools({ snapshot: snapshot() }), "update_plan");
 
@@ -259,12 +281,7 @@ describe("subagent", () => {
 		const runner = fakeRunner();
 		const subagent = tool(createAgencyTools({ snapshot: snapshot(), runner }), "subagent");
 
-		const result = await invoke(
-			subagent,
-			"call-1",
-			{ task: "Find every caller", name: "callers", cost_budget_usd: 0.5 },
-			signal()
-		);
+		const result = await invoke(subagent, "call-1", { task: "Find every caller", name: "callers" }, signal());
 
 		expect(runner.created).toMatchObject([
 			{
@@ -273,11 +290,15 @@ describe("subagent", () => {
 				sessionId: "session-1",
 				task: "Find every caller",
 				name: "callers",
-				costBudgetUsd: 0.5,
+				sourceToolCallId: "call-1",
 				deliverInline: true,
 			},
 		]);
 		expect(runner.created[0]).not.toHaveProperty("tokenBudget");
+		expect(runner.created[0]).not.toHaveProperty("costBudgetUsd");
+		expect(subagent.parameters).toHaveProperty("properties.task");
+		expect(subagent.parameters).not.toHaveProperty("properties.token_budget");
+		expect(subagent.parameters).not.toHaveProperty("properties.cost_budget_usd");
 		expect(runner.drained).toEqual(["sub-1"]);
 		expect(text(result)).toBe(
 			"Subagent callers completed using 12 token(s), $0.0125.\n\nThree callers, all in packages/orchestrator."

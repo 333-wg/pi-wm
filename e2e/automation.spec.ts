@@ -173,5 +173,5 @@ test("creates, controls, runs, and inspects a durable automation", async ({ page
 	await page.screenshot({ path: testInfo.outputPath("automation-mobile.png") });
 
 	await history.getByRole("button", { name: "打开运行会话" }).click();
-	await expect(page.getByRole("button", { name: "返回主会话" })).toBeVisible();
+	await expect(page.getByRole("button", { name: "返回上级对话" })).toBeVisible();
 });

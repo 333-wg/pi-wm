@@ -14,6 +14,8 @@ export type Locale = "zh" | "en";
 export const LOCALE_STORAGE_KEY = "wuming.locale";
 
 const zh = {
+	desktopUpdates: "关于与更新",
+	desktopUpdatesHint: "版本与更新日志",
 	settings: "设置",
 	settingsNavigation: "设置分类",
 	generalSettings: "常规",
@@ -159,7 +161,7 @@ const zh = {
 	mcp: "MCP",
 	connected: "已连接",
 	noProject: "无项目",
-	agentConversation: "智能体对话",
+	agentConversation: "子对话",
 	archived: "已归档",
 	startTask: "开始一个新任务",
 	projectTaskPrompt: "你想在 {project} 中完成什么？",
@@ -183,6 +185,8 @@ const zh = {
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
+	desktopUpdates: "About & updates",
+	desktopUpdatesHint: "Version and release notes",
 	settings: "Settings",
 	settingsNavigation: "Settings categories",
 	generalSettings: "General",
@@ -332,7 +336,7 @@ const en: Record<keyof typeof zh, string> = {
 	mcp: "MCP",
 	connected: "Connected",
 	noProject: "No project",
-	agentConversation: "Agent conversation",
+	agentConversation: "Child conversation",
 	archived: "Archived",
 	startTask: "Start a new task",
 	projectTaskPrompt: "What do you want to accomplish in {project}?",

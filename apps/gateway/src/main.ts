@@ -46,6 +46,7 @@ import { MediaGenerationService } from "./media-generation.js";
 import { adaptMediaSkillContent, mediaSkillRoutingFragment } from "./media-skill-policy.js";
 import { ImportedProjectCatalog } from "./projects.js";
 import { showLocalProjectPicker } from "./local-picker.js";
+import { openLocalFolder } from "./local-folder.js";
 import { GatewayEvaluationManager } from "./evaluation.js";
 import { resolveExecutionPlacement } from "./execution-placement.js";
 import { createDesktopBridge } from "./desktop-bridge.js";
@@ -530,6 +531,44 @@ class DemoRuntime implements AgentRuntime {
 					},
 				};
 			}
+			// Deterministic multi-request fixture for live cache statistics and reconnect tests.
+			if (text.trim() === "/demo-cache-live") {
+				input.onContextUsage?.({ model: input.snapshot.model, tokens: null, basis: "unknown" });
+				await delay(800, input.signal);
+				const first = {
+					requestId: `${input.operation.id}-request-1`,
+					model: input.snapshot.model,
+					usage: {
+						inputTokens: 100,
+						cacheReadTokens: 900,
+						cacheWriteTokens: 0,
+						outputTokens: 10,
+						totalTokens: 1010,
+						costUsd: 0,
+					},
+				};
+				input.onRequestUsage?.(first);
+				input.onContextUsage?.({ model: input.snapshot.model, tokens: 1010, basis: "request" });
+				await delay(8000, input.signal);
+				const second = {
+					requestId: `${input.operation.id}-request-2`,
+					model: input.snapshot.model,
+					usage: { ...first.usage, cacheReadTokens: 1900, outputTokens: 20, totalTokens: 2020 },
+				};
+				input.onRequestUsage?.(second);
+				input.onContextUsage?.({ model: input.snapshot.model, tokens: 2020, basis: "request" });
+				return {
+					items: [],
+					requests: [first, second],
+					usage: {
+						...input.snapshot.usage,
+						inputTokens: input.snapshot.usage.inputTokens + 200,
+						cacheReadTokens: input.snapshot.usage.cacheReadTokens + 2800,
+						outputTokens: input.snapshot.usage.outputTokens + 30,
+						totalTokens: input.snapshot.usage.totalTokens + 3030,
+					},
+				};
+			}
 			const answer = text.trim().startsWith("Review the candidate result against the goal")
 				? JSON.stringify({
 						verdict: "pass",
@@ -994,6 +1033,12 @@ async function main(): Promise<void> {
 		}
 		const cacheRetention = parsePiCacheRetention(process.env.WUMING_PI_CACHE_RETENTION);
 		runtime = new PiAgentRuntime({
+			...(localUserCapabilities
+				? {
+						resolveSessionConfigurationKey: (snapshot) =>
+							mcpCatalog.configurationKey(snapshot.session.workspaceId, workspacePathFor(snapshot.session.workspaceId)),
+					}
+				: {}),
 			resolveArtifact: (artifact, snapshot) => artifacts.resolve(artifact, snapshot),
 			resolveCapabilityManifests: () => [operationAuditHook],
 			resolveContextFragments: async (snapshot) => {
@@ -1293,6 +1338,9 @@ async function main(): Promise<void> {
 				: {}),
 		},
 		projects: {
+			...(localUserCapabilities
+				? { openFolder: (_ownerId: string, projectId: string) => openLocalFolder(workspacePathFor(projectId)) }
+				: {}),
 			pick: async (_ownerId, kind) => {
 				const selection = desktop ? await desktop.pickProject(kind) : await showLocalProjectPicker(kind);
 				return registerProjectWorkspace(await importedProjects.addLocal(selection.path, selection.kind));
@@ -1362,13 +1410,17 @@ async function main(): Promise<void> {
 	};
 	const automationTimer = setInterval(() => void runAutomationTick(), automationPollMs);
 	automationTimer.unref();
+	let recovering = true;
 	const recoveryPromise = orchestrator
 		.resumeQueuedSessions()
 		.then(() => orchestrator.resumeGoalReviews())
 		.then(() => orchestrator.resumeGoalPlans())
 		.then(() => orchestrator.resumeAutomationRuns())
 		.then(() => runAutomationTick())
-		.catch((error) => logger.log("error", "gateway.queue.recovery_failed", { error }));
+		.catch((error) => logger.log("error", "gateway.queue.recovery_failed", { error }))
+		.finally(() => {
+			recovering = false;
+		});
 	if (runtimeMode === "pi") {
 		console.log(
 			`Process backend: ${processMode === "docker" ? "Docker" : processMode === "local" ? "local user environment" : "disabled"}`
@@ -1397,6 +1449,26 @@ async function main(): Promise<void> {
 	process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
 	process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
 	desktop?.onShutdown(() => void shutdown().finally(() => process.exit(0)));
+	desktop?.onUpdateStatus((prepare) => {
+		const busy =
+			shuttingDown ||
+			recovering ||
+			server.activeRequestCount > 0 ||
+			Boolean(automationTickPromise) ||
+			(terminal?.activeCount ?? 0) > 0 ||
+			store.listOperationsByStatus("running").length > 0 ||
+			store.listOperationsByStatus("queued").length > 0 ||
+			store.listPlanGoals().some((goal) => !goal.pausedAt && goal.plan?.phase === "running") ||
+			store
+				.listReviewGoals()
+				.some((goal) => !goal.pausedAt && ["executing", "reviewing"].includes(goal.review?.phase ?? ""));
+		if (prepare && !busy) {
+			shuttingDown = true;
+			clearInterval(automationTimer);
+			server.beginShutdown();
+		}
+		return busy;
+	});
 	desktop?.ready(address.port);
 }
 

@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { HookPipeline, type CapabilityJson, type HookPoint } from "@wuming/capability-kernel";
 import { EMPTY_USAGE, reduceSessionEvent, type SessionEvent } from "@wuming/domain";
-import { clampModelThinkingLevel } from "@wuming/protocol";
+import { clampModelThinkingLevel, mergeUsageRequests, sessionUsageRequests } from "@wuming/protocol";
 import type {
 	ApprovalPolicy,
 	AutomationRunSummary,
@@ -29,6 +30,7 @@ import type {
 	UserContentPart,
 } from "@wuming/protocol";
 import { OrchestratorError } from "./errors.js";
+import { isUnfinishedItem, TranscriptCheckpoint } from "./transcript-checkpoint.js";
 import { createDurableMemory } from "./memory.js";
 import { verificationEvidence } from "./verification.js";
 import {
@@ -162,6 +164,7 @@ export interface CreateSubagentInput {
 	sessionId: string;
 	task: string;
 	name?: string;
+	sourceToolCallId?: string;
 	costBudgetUsd?: number;
 	tokenBudget?: number;
 	/**
@@ -475,6 +478,7 @@ function summarizeSubagent(snapshot: SessionSnapshot, operation: DurableOperatio
 	return {
 		id: snapshot.session.id,
 		parentSessionId: snapshot.session.parentSessionId!,
+		...(snapshot.session.sourceToolCallId === undefined ? {} : { sourceToolCallId: snapshot.session.sourceToolCallId }),
 		sessionId: snapshot.session.id,
 		operationId: operation.id,
 		name: snapshot.session.name ?? "Subagent",
@@ -1148,6 +1152,7 @@ export class SessionOrchestrator {
 			if (!task) throw new OrchestratorError("conflict", "Subagent task cannot be empty");
 			const hash = commandHash({
 				type: "subagent.create",
+				sourceToolCallId: input.sourceToolCallId,
 				sessionId: input.sessionId,
 				task,
 				name: input.name,
@@ -1172,6 +1177,7 @@ export class SessionOrchestrator {
 					...(input.costBudgetUsd === undefined ? {} : { costBudgetUsd: input.costBudgetUsd }),
 					...(input.tokenBudget === undefined ? {} : { tokenBudget: input.tokenBudget }),
 					...(input.deliverInline === undefined ? {} : { deliverInline: input.deliverInline }),
+					...(input.sourceToolCallId === undefined ? {} : { sourceToolCallId: input.sourceToolCallId }),
 				},
 				now
 			);
@@ -1199,6 +1205,7 @@ export class SessionOrchestrator {
 		input: {
 			task: string;
 			name?: string;
+			sourceToolCallId?: string;
 			costBudgetUsd?: number;
 			tokenBudget?: number;
 			deliverInline?: boolean;
@@ -1248,6 +1255,7 @@ export class SessionOrchestrator {
 				createdAt: now,
 				updatedAt: now,
 				parentSessionId: parent.session.id,
+				...(input.sourceToolCallId === undefined ? {} : { sourceToolCallId: input.sourceToolCallId }),
 			},
 			model: parent.model,
 			thinkingLevel: parent.thinkingLevel,
@@ -3198,7 +3206,7 @@ export class SessionOrchestrator {
 						toolCallId: subagentId,
 						toolName: "subagent",
 						status: summary.status === "completed" ? "complete" : summary.status === "cancelled" ? "aborted" : "error",
-						input: { subagentId, task: summary.task },
+						input: { subagentId, name: summary.name, task: summary.task },
 						content: [{ type: "text", text: text.slice(0, 200_000) }],
 						isError: summary.status !== "completed",
 					},
@@ -4265,29 +4273,55 @@ export class SessionOrchestrator {
 		const injectionPump = this.runtime.injectTurn
 			? this.#pumpInjectedOperations(operation.sessionId, abortController.signal, injectionStop.signal)
 			: Promise.resolve();
+		const checkpoint = new TranscriptCheckpoint(
+			(items) => {
+				const current = this.store.loadSnapshot(operation.sessionId);
+				if (!current) throw new OrchestratorError("not_found", "Session disappeared during execution");
+				const events: SessionEvent[] = [];
+				const snapshot = this.#appendRuntimeItems(current, items, events, this.#clock());
+				this.store.commitMutation({
+					sessionId: operation.sessionId,
+					expectedRevision: current.revision,
+					events,
+					snapshot,
+					lease,
+				});
+			},
+			(error) => {
+				leaseFailure = error;
+				abortController.abort(error);
+			}
+		);
 
 		try {
-			const planSnapshot = this.store.loadSnapshot(operation.sessionId);
-			if (!planSnapshot) throw new OrchestratorError("not_found", `Session ${operation.sessionId} does not exist`);
-			operation = await this.#ensureCapabilityPlan(operation, planSnapshot, abortController.signal, durableTraceId);
-			operation = await this.#ensureContextPlan(operation, planSnapshot, abortController.signal, durableTraceId);
-			await this.#dispatchOperationHooks(
-				"operation.before_execute",
-				operation,
-				{
-					mode: operation.payload.mode,
-					attempt: operation.attempt,
-					model: planSnapshot.model,
-					sandboxMode: planSnapshot.sandboxMode,
-					approvalPolicy: planSnapshot.approvalPolicy,
-					capabilityPlanDigest: operation.capabilityPlan?.digest ?? "",
-					contextPlanDigest: operation.contextPlan?.digest ?? "",
-				},
-				abortController.signal,
-				durableTraceId
-			);
 			for (;;) {
 				if (abortController.signal.aborted) throw abortController.signal.reason;
+				// In-process and recovered retries share this preflight. Approval resumes
+				// retain their pinned plans so the approved tool contract cannot change.
+				if (operation.attempt > 1 && operation.approvalId === undefined) {
+					this.store.clearExecutionPlans(operation.id, this.#clock());
+					const { capabilityPlan: _capabilityPlan, contextPlan: _contextPlan, ...withoutPlans } = operation;
+					operation = withoutPlans;
+				}
+				const planSnapshot = this.store.loadSnapshot(operation.sessionId);
+				if (!planSnapshot) throw new OrchestratorError("not_found", `Session ${operation.sessionId} does not exist`);
+				operation = await this.#ensureCapabilityPlan(operation, planSnapshot, abortController.signal, durableTraceId);
+				operation = await this.#ensureContextPlan(operation, planSnapshot, abortController.signal, durableTraceId);
+				await this.#dispatchOperationHooks(
+					"operation.before_execute",
+					operation,
+					{
+						mode: operation.payload.mode,
+						attempt: operation.attempt,
+						model: planSnapshot.model,
+						sandboxMode: planSnapshot.sandboxMode,
+						approvalPolicy: planSnapshot.approvalPolicy,
+						capabilityPlanDigest: operation.capabilityPlan?.digest ?? "",
+						contextPlanDigest: operation.contextPlan?.digest ?? "",
+					},
+					abortController.signal,
+					durableTraceId
+				);
 				const before = this.store.loadSnapshot(operation.sessionId);
 				if (!before) throw new OrchestratorError("not_found", `Session ${operation.sessionId} does not exist`);
 				if (before.tokenBudget !== undefined && before.usage.totalTokens >= before.tokenBudget) {
@@ -4311,6 +4345,9 @@ export class SessionOrchestrator {
 						operation: operation as DurableOperation & { payload: typeof operation.payload },
 						snapshot: before,
 						signal: abortController.signal,
+						onTranscriptItem: (item) => {
+							if (!abortController.signal.aborted) checkpoint.put(item);
+						},
 						onProgress: (event) => {
 							if (!abortController.signal.aborted) {
 								const progress = operation.payload.goalId
@@ -4322,6 +4359,21 @@ export class SessionOrchestrator {
 									: event;
 								for (const listener of this.#progressListeners) listener(progress);
 							}
+						},
+						onRequestUsage: (request) => {
+							if (abortController.signal.aborted) return;
+							const current = this.store.loadSnapshot(operation.sessionId);
+							if (!current) return;
+							const events: SessionEvent[] = [];
+							const snapshot = this.#appendRequestUsage(current, [request], events, this.#clock());
+							if (events.length === 0) return;
+							this.store.commitMutation({
+								sessionId: operation.sessionId,
+								expectedRevision: current.revision,
+								events,
+								snapshot,
+								lease,
+							});
 						},
 						onContextUsage: (contextUsage) => {
 							if (abortController.signal.aborted) return;
@@ -4358,6 +4410,7 @@ export class SessionOrchestrator {
 				await injectionPump;
 				if (leaseFailure) throw leaseFailure;
 				if (abortController.signal.aborted) throw abortController.signal.reason;
+				checkpoint.flush();
 				const tokenBudgetExceeded =
 					before.tokenBudget !== undefined &&
 					result.usage !== undefined &&
@@ -4396,31 +4449,6 @@ export class SessionOrchestrator {
 						false
 					);
 					if (willRetry) {
-						const planDrifted = /(?:Context|Capability) plan drifted before operation/.test(failure.message);
-						if (planDrifted) {
-							this.store.clearExecutionPlans(operation.id, this.#clock());
-							const {
-								capabilityPlan: _capabilityPlan,
-								contextPlan: _contextPlan,
-								...operationWithoutPlans
-							} = operation;
-							operation = operationWithoutPlans;
-							const refreshedSnapshot = this.store.loadSnapshot(operation.sessionId);
-							if (!refreshedSnapshot)
-								throw new OrchestratorError("not_found", `Session ${operation.sessionId} does not exist`);
-							operation = await this.#ensureCapabilityPlan(
-								operation,
-								refreshedSnapshot,
-								abortController.signal,
-								durableTraceId
-							);
-							operation = await this.#ensureContextPlan(
-								operation,
-								refreshedSnapshot,
-								abortController.signal,
-								durableTraceId
-							);
-						}
 						const nextAttempt = operation.attempt + 1;
 						const delayMs = this.#retryBaseDelayMs * 2 ** Math.max(0, operation.attempt - 1);
 						operation = {
@@ -4539,6 +4567,8 @@ export class SessionOrchestrator {
 			injectionStop.abort();
 			await injectionPump;
 			if (leaseFailure) throw leaseFailure;
+			checkpoint.flush();
+			checkpoint.close();
 			const aborted = this.store.getOperation(operation.id)?.abortRequested ?? false;
 			const failureKind = aborted
 				? "user_abort"
@@ -4595,6 +4625,7 @@ export class SessionOrchestrator {
 			);
 			return lease;
 		} finally {
+			checkpoint.close();
 			clearInterval(heartbeat);
 			clearTimeout(timeout);
 			clearInterval(abortPoll);
@@ -4758,6 +4789,30 @@ export class SessionOrchestrator {
 		});
 	}
 
+	#appendRequestUsage(
+		snapshot: SessionSnapshot,
+		requests: UsageRequestSummary[],
+		events: SessionEvent[],
+		now: number
+	): SessionSnapshot {
+		const recorded = new Map(sessionUsageRequests(snapshot).map((request) => [request.requestId, request]));
+		for (const request of requests) {
+			if (isDeepStrictEqual(recorded.get(request.requestId), request)) continue;
+			const event: SessionEvent = {
+				type: "session.request.usage.updated",
+				eventId: this.#idFactory(),
+				sessionId: snapshot.session.id,
+				revision: snapshot.revision + 1,
+				timestamp: now,
+				request,
+			};
+			events.push(event);
+			snapshot = reduceSessionEvent(snapshot, event);
+			recorded.set(request.requestId, request);
+		}
+		return snapshot;
+	}
+
 	#appendUsageAttribution(
 		operation: DurableOperation,
 		before: SessionSnapshot,
@@ -4769,6 +4824,8 @@ export class SessionOrchestrator {
 		now: number,
 		skills: string[] = operation.payload.skills ?? []
 	): SessionSnapshot {
+		// Reconcile request observations independently of the existing billing delta.
+		snapshot = this.#appendRequestUsage(snapshot, requests ?? [], events, now);
 		if (!usage) return snapshot;
 		const delta = deltaUsage(usage, before.usage);
 		if (!hasUsage(delta) && (!tools || tools.length === 0)) return snapshot;
@@ -4785,7 +4842,7 @@ export class SessionOrchestrator {
 			attempt: operation.attempt,
 			usage: delta,
 			tools: tools ?? [],
-			requests: requests ?? [],
+			requests: mergeUsageRequests([], requests ?? []),
 			skills: [...new Set(skills)].slice(0, 128),
 		};
 		events.push(usageEvent);
@@ -4925,6 +4982,19 @@ export class SessionOrchestrator {
 		return snapshot;
 	}
 
+	#settleUnfinishedItems(
+		current: SessionSnapshot,
+		events: SessionEvent[],
+		now: number,
+		status: "error" | "aborted"
+	): SessionSnapshot {
+		const items = current.transcript.filter(isUnfinishedItem).map((item): TranscriptItem => {
+			if (item.type === "user") return item;
+			return { ...item, status, ...(item.type === "tool" ? { isError: status === "error" } : {}) };
+		});
+		return this.#appendRuntimeItems(current, items, events, now);
+	}
+
 	#commitRuntimeCompletion(
 		operation: DurableOperation,
 		lease: WriterLease,
@@ -4940,6 +5010,7 @@ export class SessionOrchestrator {
 		const now = this.#clock();
 		const events: SessionEvent[] = [];
 		let snapshot = this.#appendRuntimeItems(current, items, events, now);
+		snapshot = this.#settleUnfinishedItems(snapshot, events, now, "aborted");
 		if (usage && (usage.costUsd > snapshot.usage.costUsd || usage.totalTokens > snapshot.usage.totalTokens)) {
 			const event: SessionEvent = {
 				type: "session.usage.replaced",
@@ -5018,6 +5089,7 @@ export class SessionOrchestrator {
 		const now = this.#clock();
 		const events: SessionEvent[] = [];
 		let snapshot = this.#appendRuntimeItems(current, items, events, now);
+		snapshot = this.#settleUnfinishedItems(snapshot, events, now, "error");
 		if (usage && (usage.costUsd > snapshot.usage.costUsd || usage.totalTokens > snapshot.usage.totalTokens)) {
 			const event: SessionEvent = {
 				type: "session.usage.replaced",
@@ -5083,6 +5155,7 @@ export class SessionOrchestrator {
 		const now = this.#clock();
 		const events: SessionEvent[] = [];
 		let snapshot = this.#appendRuntimeItems(current, items, events, now);
+		snapshot = this.#settleUnfinishedItems(snapshot, events, now, aborted ? "aborted" : "error");
 		if (cancelPendingApprovals) {
 			for (const pending of snapshot.pendingApprovals) {
 				const approval = {

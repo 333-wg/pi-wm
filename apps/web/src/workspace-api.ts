@@ -32,6 +32,13 @@ function workspacePath(workspaceId: string, suffix: string): string {
 }
 
 export const workspaceApi = {
+	async openProjectFolder(token: string, projectId: string) {
+		const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/open-folder`, {
+			method: "POST",
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		if (!response.ok) throw await responseError(response, "打开项目目录失败");
+	},
 	gitDetails(token: string, workspaceId: string) {
 		return get<GitDetails>(token, workspacePath(workspaceId, "git/details"));
 	},

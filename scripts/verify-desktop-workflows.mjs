@@ -42,6 +42,8 @@ async function launch() {
 	await expect(page).toHaveTitle("Pi-Wm");
 	await desktop.evaluate(({ BrowserWindow }) => {
 		for (const window of BrowserWindow.getAllWindows()) {
+			// Hidden verification windows still need animation frames for UI actionability.
+			window.webContents.setBackgroundThrottling(false);
 			window.hide();
 			window.on("show", () => window.hide());
 		}
@@ -151,6 +153,15 @@ try {
 	await prompt("copy");
 	await expect.poll(async () => (await snapshot(copied)).pendingApprovals.length, { timeout: 20_000 }).toBe(1);
 	await assert.rejects(access(join(workspace, "result.txt")));
+	assert.ok(
+		(await snapshot(copied)).transcript.some(
+			(item) => item.type === "tool" && item.toolName === "read_file" && item.status === "complete"
+		)
+	);
+	await page.reload();
+	await expect(page.locator(".connection")).toHaveClass(/connected/);
+	await expect(page.locator(".transcript")).toContainText("input.txt");
+	await passed("in-flight tool history survives renderer reload before approval");
 	await approve(copied);
 	await approve(copied);
 	await expect.poll(async () => (await run(copied))?.status, { timeout: 30_000 }).toBe("completed");

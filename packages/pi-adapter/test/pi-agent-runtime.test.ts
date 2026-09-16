@@ -3,7 +3,7 @@ import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai"
 import { verifyCapabilityPlan, type CapabilityManifest } from "@wuming/capability-kernel";
 import { verifyContextPlan } from "@wuming/context-engine";
 import type { DurableOperation } from "@wuming/orchestrator";
-import type { ContextUsageState, SessionSnapshot } from "@wuming/protocol";
+import type { ContextUsageState, SessionSnapshot, TranscriptItem, UsageRequestSummary } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
 import { PiAgentRuntime, type PiSessionLike } from "../src/index.js";
 
@@ -150,6 +150,31 @@ class FakePiSession implements PiSessionLike {
 		this.disposed = true;
 	}
 }
+
+it("reports each completed model request while the tool loop is still running", async () => {
+	const session = new FakePiSession();
+	const observed: UsageRequestSummary[] = [];
+	session.emitScript = async (current) => {
+		const message = assistant([{ type: "text", text: "inspecting" }], "toolUse", 100, 10);
+		message.usage.cacheRead = 900;
+		message.usage.totalTokens = 1010;
+		current.emit({ type: "message_end", message });
+		expect(observed).toHaveLength(1);
+		expect(observed[0]?.usage).toMatchObject({ inputTokens: 100, cacheReadTokens: 900, totalTokens: 1010 });
+		current.emit({ type: "message_end", message: assistant([{ type: "text", text: "done" }], "stop", 50, 5) });
+		expect(observed).toHaveLength(2);
+	};
+	const runtime = new PiAgentRuntime({ createSession: async () => session });
+	const result = await runtime.executeTurn({
+		operation: operation([{ type: "text", text: "inspect" }]),
+		snapshot,
+		signal: new AbortController().signal,
+		onProgress: () => {},
+		onRequestUsage: (request) => observed.push(request),
+	});
+	expect(result.requests).toEqual(observed);
+	expect(new Set(observed.map((request) => request.requestId)).size).toBe(2);
+});
 
 it("records verified mid-turn skill loads without mutating operation selections", async () => {
 	const session = new FakePiSession();
@@ -409,6 +434,39 @@ function operation(content: DurableOperation["payload"]["content"], skills?: str
 }
 
 describe("PiAgentRuntime", () => {
+	it("rebuilds changed MCP tools in the same conversation at the next idle boundary", async () => {
+		let key = "before";
+		const sessions: FakePiSession[] = [];
+		const runtime = new PiAgentRuntime({
+			resolveSessionConfigurationKey: async () => key,
+			createSession: async (value) => {
+				expect(value.session.id).toBe(snapshot.session.id);
+				const session = new FakePiSession();
+				sessions.push(session);
+				return session;
+			},
+		});
+		const input = {
+			operation: operation([{ type: "text" as const, text: "test" }]),
+			snapshot,
+			signal: new AbortController().signal,
+		};
+		await runtime.resolveCapabilities!(input);
+		await runtime.resolveCapabilities!(input);
+		expect(sessions).toHaveLength(1);
+		key = "configured";
+		sessions[0]!.isStreaming = true;
+		await runtime.resolveCapabilities!(input);
+		expect(sessions).toHaveLength(1);
+		expect(sessions[0]!.disposed).toBe(false);
+		sessions[0]!.isStreaming = false;
+		await runtime.resolveCapabilities!(input);
+		expect(sessions).toHaveLength(2);
+		expect(sessions[0]!.disposed).toBe(true);
+		await runtime.resolveContext!(input);
+		expect(sessions).toHaveLength(2);
+		await runtime[Symbol.asyncDispose]();
+	});
 	for (const phase of ["capabilities", "context", "execute", "inject"] as const) {
 		for (const fault of ["truncated", "missing", "duplicate", "unexpected", "unconfigured"] as const) {
 			it("rejects " + fault + " selected skills during " + phase + " before prompting", async () => {
@@ -605,44 +663,52 @@ describe("PiAgentRuntime", () => {
 		expect(session.prompts).toEqual([]);
 	});
 
-	it("compacts before assembling when the observed context exhausts the window", async () => {
-		const session = new FakePiSession();
-		const statuses: string[] = [];
-		session.contextUsage = { tokens: 995, contextWindow: 1000, percent: 99.5 };
-		const runtime = new PiAgentRuntime({
-			createSession: async () => session,
-			resolveContextBudget: () => ({
-				contextWindowTokens: 1000,
-				reservedOutputTokens: 50,
-				maxSystemTokens: 250,
-			}),
-		});
-		const plan = await runtime.resolveContext!({
-			operation: operation([{ type: "text", text: "continue" }]),
-			snapshot,
-			signal: new AbortController().signal,
-			onProgress: (event) => {
-				if (event.type === "context.compaction") statuses.push(event.status);
-			},
-		});
-		expect(statuses).toEqual(["running", "complete"]);
-		expect(session.compactCalls).toBe(1);
-		expect(plan.budget.observedContextTokens).toBe(200);
-		const observations: ContextUsageState[] = [];
-		const result = await runtime.executeTurn({
-			operation: operation([{ type: "text", text: "continue" }]),
-			snapshot,
-			signal: new AbortController().signal,
-			contextPlan: plan,
-			onProgress: () => {},
-			onContextUsage: (value) => observations.push(value),
-		});
-		expect(observations).toEqual([{ model: snapshot.model, tokens: 200, basis: "compaction" }]);
-		expect(result.compactions).toEqual([expect.objectContaining({ reason: "threshold", summary: "compacted" })]);
-	});
+	it.each([undefined, "parent-session"])(
+		"compacts before assembling when context fills (parent=%s)",
+		async (parentSessionId) => {
+			const compactSnapshot = {
+				...snapshot,
+				session: { ...snapshot.session, ...(parentSessionId ? { parentSessionId } : {}) },
+			};
+			const session = new FakePiSession();
+			const statuses: string[] = [];
+			session.contextUsage = { tokens: 995, contextWindow: 1000, percent: 99.5 };
+			const runtime = new PiAgentRuntime({
+				createSession: async () => session,
+				resolveContextBudget: () => ({
+					contextWindowTokens: 1000,
+					reservedOutputTokens: 50,
+					maxSystemTokens: 250,
+				}),
+			});
+			const plan = await runtime.resolveContext!({
+				operation: operation([{ type: "text", text: "continue" }]),
+				snapshot: compactSnapshot,
+				signal: new AbortController().signal,
+				onProgress: (event) => {
+					if (event.type === "context.compaction") statuses.push(event.status);
+				},
+			});
+			expect(statuses).toEqual(["running", "complete"]);
+			expect(session.compactCalls).toBe(1);
+			expect(plan.budget.observedContextTokens).toBe(200);
+			const observations: ContextUsageState[] = [];
+			const result = await runtime.executeTurn({
+				operation: operation([{ type: "text", text: "continue" }]),
+				snapshot: compactSnapshot,
+				signal: new AbortController().signal,
+				contextPlan: plan,
+				onProgress: () => {},
+				onContextUsage: (value) => observations.push(value),
+			});
+			expect(observations).toEqual([{ model: snapshot.model, tokens: 200, basis: "compaction" }]);
+			expect(result.compactions).toEqual([expect.objectContaining({ reason: "threshold", summary: "compacted" })]);
+		}
+	);
 
 	it("maps Pi streaming, assistant, and tool events into Wuming contracts", async () => {
 		const session = new FakePiSession();
+		const checkpoints: TranscriptItem[] = [];
 		const outputArtifact = {
 			id: "artifact-1",
 			name: "read-output.txt",
@@ -652,16 +718,28 @@ describe("PiAgentRuntime", () => {
 		session.emitScript = async (current) => {
 			const partial = assistant([], "pending", 0, 0);
 			current.emit({ type: "message_start", message: partial });
+			partial.content = [{ type: "thinking", thinking: "plan" }];
 			current.emit({
 				type: "message_update",
 				message: partial,
 				assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "plan", partial },
 			});
+			partial.content.push({ type: "text", text: "run" });
 			current.emit({
 				type: "message_update",
 				message: partial,
 				assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "run", partial },
 			});
+			partial.content.push({ type: "toolCall", id: "", name: "", arguments: {} });
+			current.emit({
+				type: "message_update",
+				message: partial,
+				assistantMessageEvent: { type: "toolcall_delta", contentIndex: 2, delta: "{", partial },
+			});
+			expect(checkpoints.at(-1)!.content).toEqual([
+				{ type: "thinking", text: "plan" },
+				{ type: "text", text: "run" },
+			]);
 			current.emit({
 				type: "tool_execution_start",
 				toolCallId: "call-1",
@@ -701,6 +779,24 @@ describe("PiAgentRuntime", () => {
 				timestamp: 11,
 			};
 			current.emit({ type: "message_end", message: toolResult });
+			expect(checkpoints).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						type: "assistant",
+						status: "streaming",
+						content: [
+							{ type: "thinking", text: "plan" },
+							{ type: "text", text: "run" },
+						],
+					}),
+					expect.objectContaining({ type: "tool", status: "running", toolName: "read", input: { path: "a.ts" } }),
+					expect.objectContaining({
+						type: "tool",
+						status: "complete",
+						content: expect.arrayContaining([{ type: "artifact", artifact: outputArtifact }]),
+					}),
+				])
+			);
 			const final = assistant([{ type: "text", text: "finished" }], "stop", 5, 1);
 			current.emit({ type: "message_start", message: final });
 			current.emit({ type: "message_end", message: final });
@@ -718,6 +814,7 @@ describe("PiAgentRuntime", () => {
 			operation: operation([{ type: "text", text: "inspect" }]),
 			snapshot,
 			signal: new AbortController().signal,
+			onTranscriptItem: (item) => checkpoints.push(structuredClone(item)),
 			onProgress: (event) => {
 				progress.push(`${event.type}:${"streamSeq" in event ? event.streamSeq : "-"}`);
 				if (event.type === "tool.progress") progressArtifacts.push(event.artifact);
@@ -728,6 +825,7 @@ describe("PiAgentRuntime", () => {
 		expect(progress).toEqual([
 			"assistant.delta:0",
 			"assistant.delta:1",
+			"assistant.delta:2",
 			"tool.started:-",
 			"tool.progress:0",
 			"tool.finished:-",
@@ -960,12 +1058,31 @@ describe("PiAgentRuntime", () => {
 		const progress: string[] = [];
 		const result = await runtime.executeTurn({
 			operation: resumedOperation,
-			snapshot,
+			snapshot: {
+				...snapshot,
+				transcript: [
+					{
+						id: "tool:call-write-1",
+						type: "tool",
+						toolCallId: "call-write-1",
+						toolName: "write",
+						createdAt: 1,
+						status: "awaiting_approval",
+						input: { path: "value.txt", content: "value" },
+						content: [],
+						isError: false,
+					},
+				],
+			},
 			signal: new AbortController().signal,
+			onTranscriptItem: (item) =>
+				progress.push("checkpoint:" + item.type + ":" + (item.type === "user" ? "user" : item.status)),
 			onProgress: (event) => progress.push(event.type),
 		});
 		expect(session.prompts).toEqual([]);
 		expect(progress).toContain("tool.progress");
+		expect(progress).toContain("checkpoint:tool:running");
+		expect(progress).toContain("checkpoint:tool:complete");
 		expect(result.items).toEqual([
 			expect.objectContaining({
 				type: "tool",

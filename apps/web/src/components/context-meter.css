@@ -1,0 +1,216 @@
+.context-meter {
+	display: block;
+	width: 100%;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	text-align: left;
+	cursor: pointer;
+}
+.context-meter .context-bar {
+	display: block;
+}
+.context-pill {
+	cursor: pointer;
+	font-family: inherit;
+}
+.context-pill:hover,
+.context-pill[aria-expanded="true"] {
+	filter: brightness(0.97);
+}
+.context-meter:focus-visible,
+.context-pill:focus-visible,
+.context-popover button:focus-visible,
+.context-popover summary:focus-visible {
+	outline: 2px solid var(--green);
+	outline-offset: 3px;
+}
+.context-popover {
+	--context-accent: var(--green);
+	position: fixed;
+	z-index: 1200;
+	box-sizing: border-box;
+	width: 304px;
+	max-width: calc(100vw - 24px);
+	padding: 12px 14px 0;
+	overflow-y: auto;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface);
+	box-shadow: var(--shadow-lg);
+	color: var(--text);
+	font-size: 12px;
+	line-height: 1.5;
+	letter-spacing: 0;
+	font-variant-numeric: tabular-nums;
+}
+.context-popover.level-warn {
+	--context-accent: var(--amber);
+}
+.context-popover.level-high {
+	--context-accent: var(--red);
+}
+.context-popover header,
+.context-popover header > span {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.context-popover header {
+	justify-content: space-between;
+	font-weight: 600;
+}
+.context-popover header > span > svg {
+	color: var(--muted);
+}
+.context-popover header button {
+	display: grid;
+	place-items: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--muted);
+	cursor: pointer;
+}
+.context-popover header button:hover {
+	background: var(--surface-hover);
+	color: var(--text);
+}
+.context-detail-occupancy {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin: 5px 0 8px;
+}
+.context-detail-occupancy > strong {
+	color: var(--context-accent);
+	font-size: 26px;
+	font-weight: 650;
+	line-height: 1.2;
+}
+.context-detail-occupancy small {
+	margin-left: 2px;
+	font-size: 14px;
+}
+.context-detail-occupancy > span {
+	color: var(--muted);
+	font-size: 11px;
+}
+.context-detail-track {
+	height: 4px;
+	overflow: hidden;
+	border-radius: 2px;
+	background: var(--track);
+}
+.context-detail-track i {
+	display: block;
+	height: 100%;
+	max-width: 100%;
+	background: var(--context-accent);
+}
+.context-detail-tokens {
+	margin-top: 6px;
+	color: var(--text-soft);
+	font-size: 11px;
+}
+.context-detail-tokens > span {
+	color: var(--muted);
+}
+.context-cache-heading {
+	display: flex;
+	justify-content: space-between;
+	margin-top: 12px;
+	padding-top: 10px;
+	border-top: 1px solid var(--line-soft);
+	font-weight: 550;
+}
+.context-cache-heading > span {
+	color: var(--muted);
+	font-size: 10px;
+	font-weight: 400;
+}
+.context-cache-summary {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+	margin: 7px 0 11px;
+}
+.context-cache-summary > div {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.context-cache-summary > div + div {
+	padding-left: 12px;
+	border-left: 1px solid var(--line-soft);
+}
+.context-cache-summary span {
+	color: var(--muted);
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
+.context-cache-summary small {
+	margin-left: 3px;
+	font-size: 10px;
+}
+.context-cache-summary strong {
+	color: var(--text);
+	font-size: 17px;
+	font-weight: 600;
+}
+.context-cache-summary .context-cache-waiting {
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+.context-detail-disclosure {
+	border-top: 1px solid var(--line-soft);
+}
+.context-detail-disclosure summary {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-height: 33px;
+	color: var(--muted);
+	font-size: 11px;
+	cursor: pointer;
+	list-style: none;
+}
+.context-detail-disclosure summary::-webkit-details-marker {
+	display: none;
+}
+.context-detail-disclosure[open] summary > svg {
+	transform: rotate(90deg);
+}
+.context-detail-disclosure table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 11px;
+}
+.context-detail-disclosure caption {
+	text-align: left;
+	font-size: 10px;
+	color: var(--muted);
+	padding-bottom: 5px;
+}
+.context-detail-disclosure th,
+.context-detail-disclosure td {
+	padding: 4px 0;
+	text-align: right;
+	white-space: nowrap;
+}
+.context-detail-disclosure th {
+	color: var(--muted);
+	font-weight: 400;
+}
+.context-detail-disclosure th:first-child {
+	text-align: left;
+}
+.context-detail-disclosure p {
+	margin: 8px 0 10px;
+	color: var(--muted);
+	font-size: 10px;
+	line-height: 1.6;
+}

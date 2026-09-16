@@ -2824,7 +2824,7 @@ export class SqliteOrchestratorStore implements Disposable {
 			}
 			this.#db
 				.prepare(
-					"UPDATE operations SET status = 'running', attempt = attempt + 1, updated_at = ?, started_at = ?, finished_at = NULL, trace_id = COALESCE(trace_id, ?) WHERE operation_id = ?"
+					"UPDATE operations SET status = 'running', attempt = attempt + 1, updated_at = ?, started_at = ?, finished_at = NULL, retry_after = NULL, trace_id = COALESCE(trace_id, ?) WHERE operation_id = ?"
 				)
 				.run(now, now, traceId ?? null, row.operation_id);
 			this.#appendTrajectoryEvent(row.operation_id, now, {
@@ -2840,6 +2840,7 @@ export class SqliteOrchestratorStore implements Disposable {
 				updated_at: now,
 				started_at: now,
 				finished_at: null,
+				retry_after: null,
 				trace_id: row.trace_id ?? traceId ?? null,
 			});
 		} catch (error) {

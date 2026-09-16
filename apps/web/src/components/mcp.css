@@ -1,0 +1,207 @@
+.mcp-workbench .mcp-actions,
+.mcp-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.mcp-workbench .mcp-actions { flex-direction: row; }
+.mcp-workbench .editor-heading { min-height: 40px; }
+.mcp-toolbar {
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--line);
+	flex-wrap: wrap;
+}
+.mcp-toolbar > :last-child {
+	margin-left: auto;
+}
+.mcp-workbench .skill-entry strong,
+.mcp-workbench .mcp-tool strong {
+	overflow-wrap: anywhere;
+}
+.mcp-config-dialog,
+.mcp-confirm-dialog {
+	width: min(620px, calc(100vw - 24px));
+	max-height: calc(100dvh - 32px);
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	background: var(--surface);
+	color: var(--text);
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	box-shadow: 0 16px 48px #0003;
+	overflow: hidden;
+}
+.mcp-confirm-dialog {
+	width: min(430px, calc(100vw - 24px));
+}
+.mcp-config-dialog header,
+.mcp-confirm-dialog header,
+.mcp-config-dialog footer,
+.mcp-confirm-dialog footer {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 14px 18px;
+	flex-shrink: 0;
+}
+.mcp-config-dialog header,
+.mcp-confirm-dialog header {
+	justify-content: space-between;
+	border-bottom: 1px solid var(--line);
+}
+.mcp-config-dialog h2,
+.mcp-confirm-dialog h2 {
+	margin: 0;
+	font-size: 16px;
+	letter-spacing: 0;
+}
+.mcp-config-dialog footer,
+.mcp-confirm-dialog footer {
+	justify-content: flex-end;
+	border-top: 1px solid var(--line);
+}
+.mcp-confirm-name {
+	margin: 18px 18px 0;
+	overflow-wrap: anywhere;
+}
+.mcp-confirm-dialog p {
+	margin: 12px 18px 20px;
+	font-size: 13px;
+	line-height: 1.6;
+	color: var(--text-soft);
+}
+.mcp-config-body {
+	padding: 18px;
+	overflow-y: auto;
+	min-height: 0;
+}
+.mcp-mode {
+	display: flex;
+	gap: 4px;
+	padding: 10px 18px 0;
+}
+.mcp-mode button {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	padding: 7px 12px;
+	background: transparent;
+	color: var(--text-soft);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	cursor: pointer;
+}
+.mcp-mode button[aria-selected="true"] {
+	background: var(--green-soft);
+	color: var(--green-strong);
+	border-color: var(--green-border);
+}
+.mcp-fields {
+	display: grid;
+	gap: 14px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	min-width: 0;
+}
+.mcp-fields label {
+	display: grid;
+	gap: 6px;
+	min-width: 0;
+	font-size: 12px;
+	color: var(--text-soft);
+}
+.mcp-fields input:not([type="checkbox"]),
+.mcp-fields select,
+.mcp-fields textarea {
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	padding: 8px 10px;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+	line-height: 1.5;
+	letter-spacing: 0;
+}
+.mcp-fields textarea {
+	resize: vertical;
+	font-family: monospace;
+}
+.mcp-fields input:focus,
+.mcp-fields select:focus,
+.mcp-fields textarea:focus {
+	outline: 2px solid var(--green);
+	outline-offset: 1px;
+}
+.mcp-field-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 12px;
+}
+.mcp-inline-heading {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	font-size: 12px;
+	margin-bottom: 6px;
+}
+.mcp-secret-warning {
+	margin: 0 0 8px;
+	color: var(--text-soft);
+	font-size: 12px;
+	line-height: 1.5;
+}
+.mcp-secret-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 30px;
+	gap: 6px;
+	margin-top: 6px;
+	align-items: center;
+}
+.mcp-checks {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 16px;
+}
+.mcp-checks label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.mcp-fields summary {
+	cursor: pointer;
+	color: var(--text-soft);
+	font-size: 12px;
+}
+.mcp-fields details > .mcp-fields {
+	margin-top: 12px;
+}
+.mcp-config-dialog .workbench-error {
+	margin: 0 0 14px;
+	overflow-wrap: anywhere;
+}
+.mcp-config-dialog .primary-button,
+.mcp-config-dialog .secondary-button,
+.mcp-workbench .secondary-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+}
+@media (max-width: 520px) {
+	.mcp-field-row {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.mcp-config-body {
+		padding: 14px;
+	}
+	.mcp-config-dialog header,
+	.mcp-confirm-dialog header {
+		padding: 12px 14px;
+	}
+}

@@ -7,6 +7,7 @@ import type {
 	UsageTurnSummary,
 } from "@wuming/protocol";
 import type { SessionEvent } from "./events.js";
+import { mergeUsageRequests, sessionUsageRequests } from "@wuming/protocol";
 
 export class SessionInvariantError extends Error {
 	constructor(
@@ -185,13 +186,15 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 			return { ...next, usage: event.usage };
 		case "session.context.updated":
 			return { ...next, contextUsage: event.contextUsage };
+		case "session.request.usage.updated":
+			return { ...next, usageRequests: mergeUsageRequests(sessionUsageRequests(current), [event.request]) };
 		case "session.usage.recorded": {
 			const previousTurns = current.usageByTurn ?? [];
 			const previousModels = current.usageByModel ?? [];
 			const previousTools = current.usageByTool ?? [];
 			const turnIndex = previousTurns.findIndex((candidate) => candidate.turnId === event.turnId);
 			const existingTurn = turnIndex === -1 ? undefined : previousTurns[turnIndex]!;
-			const requests = turnIndex === -1 ? event.requests : [...(existingTurn?.requests ?? []), ...event.requests];
+			const requests = mergeUsageRequests(existingTurn?.requests ?? [], event.requests);
 			const eventSkills = event.skills ?? [];
 			const skills =
 				turnIndex === -1 ? eventSkills : [...new Set([...(existingTurn?.skills ?? []), ...eventSkills])].slice(0, 128);
@@ -237,6 +240,7 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 			return {
 				...next,
 				usageByTurn: turns.slice(-500),
+				usageRequests: mergeUsageRequests(sessionUsageRequests(current), event.requests),
 				usageByModel: models.slice(-100),
 				usageByTool: tools.slice(-500),
 			};

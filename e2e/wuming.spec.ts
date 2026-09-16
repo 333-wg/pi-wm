@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { createTestSubagent } from "./subagent-fixture.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -604,65 +605,37 @@ test("shows a recoverable final error with details and a rerun action", async ({
 	await waitForIdle(page);
 });
 
-test("completes and cancels durable subagents", async ({ page }) => {
-	await createSession(page);
-	await page.getByRole("tab", { name: "智能体" }).click();
-	await page.getByRole("textbox", { name: "任务" }).fill("Return an E2E child result");
-	await page.getByRole("textbox", { name: "名称" }).fill("E2E completion");
-	await page.getByRole("button", { name: "创建智能体" }).click();
-	await expect(page.getByText("已完成", { exact: true }).last()).toBeVisible();
-	await expect(page.getByText(/Demo runtime received: Return an E2E child result/)).toBeVisible();
-
-	await page.getByRole("tab", { name: /已完成/ }).click();
-	await page.getByRole("textbox", { name: "搜索智能体" }).fill("E2E completion");
-	await expect(page.getByRole("navigation", { name: "智能体任务" }).getByText("E2E completion")).toBeVisible();
-	await page.getByRole("button", { name: "复制任务" }).click();
-	await expect(page.getByRole("textbox", { name: "任务" })).toHaveValue("Return an E2E child result");
-	await expect(page.getByRole("textbox", { name: "名称" })).toHaveValue("E2E completion");
-
-	await page.getByRole("button", { name: "打开对话" }).click();
-	await expect(page.getByRole("button", { name: "返回主会话" })).toBeVisible();
-	await expect(page.locator(".right-rail")).toHaveCount(0);
-	await expect(page.getByRole("heading", { name: "E2E completion" })).toBeVisible();
-	await expect(page.getByText("智能体对话", { exact: true })).toBeVisible();
-	await expect(page.getByText(/Demo runtime received: Return an E2E child result/)).toBeVisible();
-
-	await page.getByRole("tab", { name: "智能体" }).click();
-	await expect(page.getByText("第 1 层 · 0 个任务", { exact: true })).toBeVisible();
-	await page.getByRole("textbox", { name: "任务", exact: true }).fill("Inspect the nested agent protocol");
-	await page.getByRole("textbox", { name: "名称", exact: true }).fill("E2E nested level 2");
-	await page.getByRole("button", { name: "创建智能体" }).click();
-	await page.locator(".subagent-status-label.status-completed").waitFor();
-	await expect(page.getByText("第 2 层", { exact: true })).toBeVisible();
-	await page.getByRole("button", { name: "打开对话" }).click();
-	await expect(page.getByRole("heading", { name: "E2E nested level 2" })).toBeVisible();
-
-	await page.getByRole("tab", { name: "智能体" }).click();
-	await expect(page.getByText("第 2 层 · 0 个任务", { exact: true })).toBeVisible();
-	await page.getByRole("textbox", { name: "任务", exact: true }).fill("Verify the maximum nesting boundary");
-	await page.getByRole("textbox", { name: "名称", exact: true }).fill("E2E nested level 3");
-	await page.getByRole("button", { name: "创建智能体" }).click();
-	await page.locator(".subagent-status-label.status-completed").waitFor();
-	await expect(page.getByText("第 3 层", { exact: true })).toBeVisible();
-	await page.getByRole("button", { name: "打开对话" }).click();
-	await page.getByRole("tab", { name: "智能体" }).click();
-	await expect(page.getByText("已到达 3 层上限", { exact: true })).toBeVisible();
-	await expect(page.getByRole("button", { name: "创建智能体" })).toHaveCount(0);
-
-	await page.getByRole("button", { name: "返回主会话" }).click();
-	await expect(page.getByRole("heading", { name: "E2E nested level 2" })).toBeVisible();
-	await page.getByRole("button", { name: "返回主会话" }).click();
-	await expect(page.getByRole("heading", { name: "E2E completion" })).toBeVisible();
-	await page.getByRole("button", { name: "返回主会话" }).click();
-	await page.getByRole("tab", { name: "智能体" }).click();
-
-	await page.getByRole("textbox", { name: "任务" }).fill("/approval");
-	await page.getByRole("textbox", { name: "名称" }).fill("E2E cancellation");
-	await page.getByRole("button", { name: "创建智能体" }).click();
-	await expect(page.getByText("等待批准", { exact: true }).last()).toBeVisible();
-	await page.getByRole("button", { name: "取消", exact: true }).click();
-	await expect(page.getByText("已取消", { exact: true }).last()).toBeVisible();
-	await expect(page.getByText("Turn aborted by user", { exact: true })).toBeVisible();
+test("navigates nested child conversations and cancels background work", async ({ page }) => {
+	await page.locator(".sidebar-new-chat").click();
+	await sendMessage(page, "E2E child conversation parent");
+	await expect(page.getByText(/Demo runtime received: E2E child conversation parent/)).toBeVisible();
+	await expect(page.getByRole("tab", { name: "智能体" })).toHaveCount(0);
+	for (const name of ["E2E completion", "E2E nested level 2", "E2E nested level 3"]) {
+		await createTestSubagent(page, "Return a result for " + name, name);
+		await page.getByRole("button", { name: "子对话", exact: true }).click();
+		await page.locator(".child-conversation-open").filter({ hasText: name }).click();
+		await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+		await expect(page.getByText("Demo runtime received: Return a result for " + name, { exact: true })).toBeVisible();
+		await expect(page.locator(".right-rail")).toHaveCount(0);
+	}
+	await page.reload();
+	await expect(page.getByRole("heading", { name: "E2E nested level 3" })).toBeVisible();
+	await page.getByRole("button", { name: "子对话", exact: true }).click();
+	await expect(page.locator('.child-conversation-open[aria-current="page"]')).toContainText("E2E nested level 3");
+	await page.keyboard.press("Escape");
+	await expect(page.getByRole("dialog", { name: "子对话", exact: true })).toHaveCount(0);
+	for (const name of ["E2E nested level 2", "E2E completion"]) {
+		await page.getByRole("button", { name: "返回上级对话", exact: true }).click();
+		await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+	}
+	await page.getByRole("button", { name: "返回上级对话", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "E2E child conversation parent", exact: true })).toBeVisible();
+	await createTestSubagent(page, "/approval", "E2E cancellation");
+	await page.getByRole("button", { name: "子对话", exact: true }).click();
+	const task = page.locator(".child-conversation-row").filter({ hasText: "E2E cancellation" });
+	await expect(task).toContainText("等待批准");
+	await task.getByRole("button", { name: "停止子对话：E2E cancellation", exact: true }).click();
+	await expect(task).toContainText("已取消");
 });
 
 test("creates, runs, and restores a durable background goal", async ({ page }) => {
@@ -760,15 +733,17 @@ test("keeps the Goals workbench within a mobile viewport", async ({ page }) => {
 	expect(await workbench.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
-test("keeps the Agents workbench within a mobile viewport", async ({ page }) => {
+test("keeps the child conversation menu within a mobile viewport", async ({ page }) => {
 	await page.setViewportSize({ width: 390, height: 844 });
 	await page.reload();
-	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
-	await page.getByRole("button", { name: "打开导航" }).click();
-	await createSession(page);
-	await page.getByRole("button", { name: "关闭导航" }).first().click();
-	await page.getByRole("tab", { name: "智能体" }).click();
-	await expect(page.getByRole("region", { name: "子智能体" })).toBeVisible();
+	await expect(page.locator(".connection")).toHaveClass(/connected/);
+	await page.locator(".topbar-new-chat").click();
+	await sendMessage(page, "Mobile child conversation parent");
+	await expect(page.getByText(/Demo runtime received: Mobile child conversation parent/)).toBeVisible();
+	await page.getByRole("button", { name: "子对话", exact: true }).click();
+	await expect(page.getByRole("dialog", { name: "子对话", exact: true })).toBeVisible();
+	await expect(page.getByText("暂无子对话", { exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "关闭子对话", exact: true }).click();
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 	expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(844);
 });

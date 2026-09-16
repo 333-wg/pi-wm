@@ -308,6 +308,16 @@ export const UsageRequestSummarySchema = StrictObject({
 });
 export type UsageRequestSummary = Static<typeof UsageRequestSummarySchema>;
 
+/** Preserve completion order while replacing repeated observations of the same request. */
+export function mergeUsageRequests(
+	current: readonly UsageRequestSummary[],
+	incoming: readonly UsageRequestSummary[]
+): UsageRequestSummary[] {
+	const requests = new Map(current.map((request) => [request.requestId, request]));
+	for (const request of incoming) requests.set(request.requestId, request);
+	return [...requests.values()];
+}
+
 // Occupancy is independent of billable usage, especially after compaction.
 export const ContextUsageStateSchema = StrictObject({
 	model: ModelRefSchema,
@@ -1049,6 +1059,7 @@ export type SubagentStatus = Static<typeof SubagentStatusSchema>;
 
 export const SubagentSummarySchema = StrictObject({
 	id: Id,
+	sourceToolCallId: Type.Optional(Id),
 	parentSessionId: Id,
 	sessionId: Id,
 	operationId: Id,
@@ -1348,6 +1359,7 @@ export const SessionSummarySchema = StrictObject({
 	updatedAt: Timestamp,
 	archivedAt: Type.Optional(Timestamp),
 	parentSessionId: Type.Optional(Id),
+	sourceToolCallId: Type.Optional(Id),
 });
 export const SessionSnapshotSchema = StrictObject({
 	session: SessionSummarySchema,
@@ -1367,6 +1379,7 @@ export const SessionSnapshotSchema = StrictObject({
 	usageByModel: Type.Optional(Type.Array(UsageModelSummarySchema, { maxItems: 100 })),
 	usageByTool: Type.Optional(Type.Array(UsageToolSummarySchema, { maxItems: 500 })),
 	usageByTurn: Type.Optional(Type.Array(UsageTurnSummarySchema, { maxItems: 500 })),
+	usageRequests: Type.Optional(Type.Array(UsageRequestSummarySchema)),
 	contextUsage: Type.Optional(ContextUsageStateSchema),
 	budgetWarnings: Type.Optional(Type.Array(BudgetWarningSchema, { maxItems: 32 })),
 	verificationWarnings: Type.Optional(
@@ -1383,6 +1396,11 @@ export const SessionSnapshotSchema = StrictObject({
 });
 export type SessionSummary = Static<typeof SessionSummarySchema>;
 export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
+
+/** Older snapshots only recorded request details at the end of a turn. */
+export function sessionUsageRequests(snapshot: SessionSnapshot): UsageRequestSummary[] {
+	return snapshot.usageRequests ?? mergeUsageRequests([], snapshot.usageByTurn?.flatMap((turn) => turn.requests) ?? []);
+}
 
 const PromptContent = Type.Array(UserContentPartSchema, { minItems: 1, maxItems: 32 });
 export const InstalledSkillSchema = StrictObject({
@@ -1424,6 +1442,8 @@ export const CommandSchema = Type.Union([
 	StrictObject({ type: Type.Literal("skill.uninstall"), workspaceId: Id, skillId: Id }),
 	StrictObject({ type: Type.Literal("mcp.list"), workspaceId: Id }),
 	StrictObject({ type: Type.Literal("mcp.get"), workspaceId: Id, serverId: Id }),
+	StrictObject({ type: Type.Literal("mcp.configuration.get"), workspaceId: Id, serverId: Id }),
+	StrictObject({ type: Type.Literal("mcp.remove"), workspaceId: Id, serverId: Id }),
 	StrictObject({
 		type: Type.Literal("mcp.configure"),
 		workspaceId: Id,
@@ -1703,6 +1723,13 @@ export const CommandResultSchema = Type.Union([
 	}),
 	StrictObject({ type: Type.Literal("mcp.get"), server: McpServerSchema }),
 	StrictObject({ type: Type.Literal("mcp.updated"), workspaceId: Id, server: McpServerSchema }),
+	StrictObject({
+		type: Type.Literal("mcp.configuration"),
+		workspaceId: Id,
+		serverId: Id,
+		config: McpServerConfigurationSchema,
+	}),
+	StrictObject({ type: Type.Literal("mcp.removed"), workspaceId: Id, serverId: Id }),
 	StrictObject({ type: Type.Literal("model.list"), models: Type.Array(ModelMetadataSchema) }),
 	StrictObject({
 		type: Type.Literal("model.custom.discovered"),
@@ -1955,6 +1982,12 @@ export type RequestEnvelope = Static<typeof RequestEnvelopeSchema>;
 export type ClientMessage = Static<typeof ClientMessageSchema>;
 
 export const DurableEventSchema = Type.Union([
+	StrictObject({
+		type: Type.Literal("session.request.usage.updated"),
+		sessionId: Id,
+		revision: Revision,
+		request: UsageRequestSummarySchema,
+	}),
 	StrictObject({
 		type: Type.Literal("session.context.updated"),
 		sessionId: Id,

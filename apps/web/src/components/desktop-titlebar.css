@@ -1,0 +1,73 @@
+:root[data-desktop-chrome="true"] #root {
+	display: grid;
+	grid-template-rows: 36px minmax(0, 1fr);
+}
+
+.desktop-titlebar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	height: 36px;
+	padding: 0 152px 0 14px;
+	background: var(--bg);
+	color: var(--text);
+	border-bottom: 1px solid var(--line-soft);
+	user-select: none;
+	app-region: drag;
+}
+
+.desktop-titlebar-brand {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0;
+}
+
+.desktop-titlebar-brand img {
+	display: block;
+}
+
+.desktop-titlebar-menu {
+	display: grid;
+	place-items: center;
+	width: 28px;
+	height: 26px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--muted);
+	app-region: no-drag;
+}
+
+.desktop-titlebar-menu:hover {
+	background: var(--surface-hover);
+	color: var(--text);
+}
+
+.desktop-titlebar-menu:focus-visible {
+	outline: 2px solid var(--green);
+	outline-offset: -2px;
+}
+
+.desktop-content {
+	min-width: 0;
+	min-height: 0;
+	contain: layout paint;
+}
+
+:root[data-desktop-chrome="true"] .welcome-screen {
+	min-height: 100%;
+	height: 100%;
+}
+
+:root[data-desktop-chrome="true"] .image-viewer {
+	top: 36px;
+	height: calc(100dvh - 36px);
+}
+
+:root[data-desktop-chrome="true"] .image-viewer::backdrop {
+	top: 36px;
+}

@@ -18,6 +18,7 @@ import {
 	type Usage,
 	UsageSchema,
 	UsageToolSummarySchema,
+	UsageRequestSummarySchema,
 	BudgetWarningSchema,
 	ContextUsageStateSchema,
 } from "@wuming/protocol";
@@ -92,6 +93,11 @@ export const SessionEventSchema = Type.Union([
 		approval: ApprovalRequestSchema,
 	}),
 	StrictObject({ ...EventBase, type: Type.Literal("session.usage.replaced"), usage: UsageSchema }),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.request.usage.updated"),
+		request: UsageRequestSummarySchema,
+	}),
 	StrictObject({
 		...EventBase,
 		type: Type.Literal("session.context.updated"),

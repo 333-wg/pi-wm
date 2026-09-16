@@ -31,6 +31,7 @@ import type {
 
 export interface PiAgentRuntimeOptions {
 	createSession: PiSessionFactory;
+	resolveSessionConfigurationKey?: (snapshot: SessionSnapshot) => Promise<string>;
 	resolveArtifact?: ArtifactResolver;
 	resolveSkills?: SkillResolver;
 	resolveCapabilityManifests?: (
@@ -236,7 +237,7 @@ function assistantContent(message: AssistantMessage): ContentPart[] {
 	});
 }
 
-function mapAssistant(message: AssistantMessage, id: string): TranscriptItem {
+function mapAssistant(message: AssistantMessage, id: string): Extract<TranscriptItem, { type: "assistant" }> {
 	const status =
 		message.stopReason === "error"
 			? "error"
@@ -255,6 +256,15 @@ function mapAssistant(message: AssistantMessage, id: string): TranscriptItem {
 		model: { provider: message.provider, id: message.model },
 		usage: mapUsage(message.usage),
 		...(error === undefined ? {} : { error }),
+	};
+}
+
+function mapStreamingAssistant(message: AssistantMessage, id: string): Extract<TranscriptItem, { type: "assistant" }> {
+	// Providers may stream tool calls before their IDs, names or arguments are valid.
+	// Save the complete call on message_end; tool execution has its own durable row.
+	return {
+		...mapAssistant({ ...message, content: message.content.filter((part) => part.type !== "toolCall") }, id),
+		status: "streaming",
 	};
 }
 
@@ -368,6 +378,7 @@ async function preparePrompt(
 
 export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 	readonly #createSession: PiSessionFactory;
+	readonly #resolveSessionConfigurationKey: PiAgentRuntimeOptions["resolveSessionConfigurationKey"];
 	readonly #resolveArtifact: ArtifactResolver | undefined;
 	readonly #resolveSkills: SkillResolver | undefined;
 	readonly #resolveCapabilityManifests: PiAgentRuntimeOptions["resolveCapabilityManifests"];
@@ -382,6 +393,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 
 	constructor(options: PiAgentRuntimeOptions) {
 		this.#createSession = options.createSession;
+		this.#resolveSessionConfigurationKey = options.resolveSessionConfigurationKey;
 		this.#resolveArtifact = options.resolveArtifact;
 		this.#resolveSkills = options.resolveSkills;
 		this.#resolveCapabilityManifests = options.resolveCapabilityManifests;
@@ -414,18 +426,24 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 	}
 
 	async #session(snapshot: SessionSnapshot): Promise<PiSessionLike> {
+		const active = this.#sessions.get(snapshot.session.id);
+		if (active) {
+			const session = await active.pending;
+			if (session.isStreaming) return session;
+		}
 		const configurationKey = [
 			snapshot.model.provider,
 			snapshot.model.id,
 			snapshot.thinkingLevel,
 			snapshot.sandboxMode,
 			snapshot.approvalPolicy,
+			(await this.#resolveSessionConfigurationKey?.(snapshot)) ?? "",
 		].join("\0");
 		const existing = this.#sessions.get(snapshot.session.id);
 		if (existing?.configurationKey === configurationKey) return existing.pending;
 		if (existing) {
 			this.#sessions.delete(snapshot.session.id);
-			void existing.pending.then((session) => session.dispose()).catch(() => {});
+			await existing.pending.then((session) => session.dispose()).catch(() => {});
 		}
 		const pending = this.#createSession(snapshot);
 		this.#sessions.set(snapshot.session.id, { configurationKey, pending });
@@ -620,6 +638,10 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		const toolUsage = new Map<string, UsageToolSummary>();
 		const toolStartedAt = new Map<string, number>();
 		const requests: UsageRequestSummary[] = [];
+		const recordRequest = (request: UsageRequestSummary) => {
+			requests.push(request);
+			input.onRequestUsage?.(request);
+		};
 		const compactions: NonNullable<RuntimeTurnResult["compactions"]> = [];
 		let cumulativeUsage = input.snapshot.usage;
 		const preflightCompaction = this.#pendingCompactions.get(input.snapshot.session.id);
@@ -632,7 +654,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			});
 			if (preflightCompaction.usage) {
 				cumulativeUsage = addUsage(cumulativeUsage, preflightCompaction.usage);
-				requests.push({
+				recordRequest({
 					requestId: this.#idFactory(),
 					model: input.snapshot.model,
 					usage: preflightCompaction.usage,
@@ -699,12 +721,14 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			if (event.type === "message_start" && event.message.role === "assistant") {
 				activeAssistantId = this.#idFactory();
 				assistantStreamSeq = 0;
+				input.onTranscriptItem?.(mapStreamingAssistant(event.message, activeAssistantId));
 				return;
 			}
 			if (event.type === "message_update") {
 				const update = event.assistantMessageEvent;
 				if (!activeAssistantId) activeAssistantId = this.#idFactory();
 				if (update.type === "text_delta" || update.type === "thinking_delta" || update.type === "toolcall_delta") {
+					input.onTranscriptItem?.(mapStreamingAssistant(update.partial, activeAssistantId));
 					input.onProgress({
 						type: "assistant.delta",
 						sessionId: input.operation.sessionId,
@@ -722,6 +746,17 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				toolInputs.set(event.toolCallId, toolInput);
 				recordToolStart(event.toolCallId, event.toolName);
 				toolStreamSeq.set(event.toolCallId, 0);
+				input.onTranscriptItem?.({
+					id: "tool:" + event.toolCallId,
+					type: "tool",
+					createdAt: toolStartedAt.get(event.toolCallId)!,
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					status: "running",
+					input: toolInput,
+					content: [],
+					isError: false,
+				});
 				input.onProgress({
 					type: "tool.started",
 					sessionId: input.operation.sessionId,
@@ -738,6 +773,20 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			if (event.type === "tool_execution_update") {
 				const output = preview(event.partialResult, this.#maxProgressPreviewChars);
 				const artifact = detailArtifact(event.partialResult);
+				input.onTranscriptItem?.({
+					id: "tool:" + event.toolCallId,
+					type: "tool",
+					createdAt: toolStartedAt.get(event.toolCallId) ?? this.#clock(),
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					status: "running",
+					input: toolInputs.get(event.toolCallId) ?? jsonValue(event.args),
+					content: [
+						{ type: "text", text: output.text },
+						...(artifact ? [{ type: "artifact" as const, artifact }] : []),
+					],
+					isError: false,
+				});
 				input.onProgress({
 					type: "tool.progress",
 					sessionId: input.operation.sessionId,
@@ -755,6 +804,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				if (assistant.stopReason === "error") lastFailureRetryable = isRetryableAssistantError(assistant);
 				const item = mapAssistant(assistant, activeAssistantId ?? this.#idFactory());
 				items.push(item);
+				input.onTranscriptItem?.(item);
 				cumulativeUsage = addUsage(cumulativeUsage, mapUsage(assistant.usage));
 				// Failed/zero-usage responses must not replace a valid occupancy with zero.
 				const tokens =
@@ -766,7 +816,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 						basis: "request",
 					});
 				}
-				requests.push({
+				recordRequest({
 					requestId: item.id,
 					model: { provider: assistant.provider, id: assistant.model },
 					usage: mapUsage(assistant.usage),
@@ -819,7 +869,9 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 					...(artifact ? { artifact } : {}),
 					...(webEvidence ? { webEvidence } : {}),
 				});
-				items.push(mapToolResult(toolResult, toolInputs.get(toolResult.toolCallId) ?? null));
+				const item = mapToolResult(toolResult, toolInputs.get(toolResult.toolCallId) ?? null);
+				items.push(item);
+				input.onTranscriptItem?.(item);
 			}
 			if (event.type === "compaction_start") {
 				input.onProgress({ type: "context.compaction", sessionId: input.operation.sessionId, status: "running" });
@@ -842,7 +894,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				const usage = event.result.usage ? mapUsage(event.result.usage) : undefined;
 				if (usage) {
 					cumulativeUsage = addUsage(cumulativeUsage, usage);
-					requests.push({ requestId: this.#idFactory(), model: input.snapshot.model, usage });
+					recordRequest({ requestId: this.#idFactory(), model: input.snapshot.model, usage });
 				}
 				compactions.push({
 					reason: event.reason,
@@ -887,8 +939,24 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				if (!input.operation.approvalToolCallId || !session.resumeApprovedTool)
 					throw new Error("The Pi runtime cannot resume this approved tool call safely");
 				let recoveredToolSeq = 0;
+				const recoveredTool = input.snapshot.transcript.find(
+					(item): item is Extract<TranscriptItem, { type: "tool" }> =>
+						item.type === "tool" && item.toolCallId === input.operation.approvalToolCallId
+				);
+				if (recoveredTool) input.onTranscriptItem?.({ ...recoveredTool, status: "running", isError: false });
 				const resumed = await session.resumeApprovedTool(input.operation.approvalToolCallId, input.signal, (result) => {
 					const output = preview(result, this.#maxProgressPreviewChars);
+					const artifact = detailArtifact(result);
+					if (recoveredTool)
+						input.onTranscriptItem?.({
+							...recoveredTool,
+							status: "running",
+							isError: false,
+							content: [
+								{ type: "text", text: output.text },
+								...(artifact ? [{ type: "artifact" as const, artifact }] : []),
+							],
+						});
 					input.onProgress({
 						type: "tool.progress",
 						sessionId: input.operation.sessionId,
@@ -901,7 +969,9 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				toolInputs.set(resumed.message.toolCallId, jsonValue(resumed.input));
 				recordToolStart(resumed.message.toolCallId, resumed.message.toolName);
 				recordToolEnd(resumed.message.toolCallId, resumed.message.toolName, resumed.message, resumed.message.isError);
-				items.unshift(mapToolResult(resumed.message, jsonValue(resumed.input)));
+				const item = mapToolResult(resumed.message, jsonValue(resumed.input));
+				items.unshift(item);
+				input.onTranscriptItem?.(item);
 			} else {
 				if (input.operation.payload.mode === "prompt" || !session.isStreaming) session.prepareForPrompt?.();
 				await session.prompt(prepared.text, {

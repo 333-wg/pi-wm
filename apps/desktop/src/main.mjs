@@ -1,9 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from "electron";
-import { appendFileSync, mkdirSync, renameSync, statSync, existsSync } from "node:fs";
+import { appendFileSync, mkdirSync, renameSync, statSync, existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GatewayHost } from "./gateway-host.mjs";
 import { APP_URL, createAppProtocol, isAppUrl } from "./app-protocol.mjs";
+import electronUpdater from "electron-updater";
+import { DesktopUpdates, readUpdatePreferences, saveUpdatePreferences } from "./updates.mjs";
+import { installDesktopUpdate } from "./install-update.mjs";
 
 protocol.registerSchemesAsPrivileged([
 	{
@@ -24,9 +27,11 @@ let allowQuit = false;
 let bootPromise;
 let failureDialog = false;
 let connection;
+let updates;
 const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(here, "../../..");
 const runtimeRoot = app.isPackaged ? join(process.resourcesPath, "runtime") : repositoryRoot;
+const manifest = JSON.parse(readFileSync(join(here, "../package.json"), "utf8"));
 
 function focusWindow() {
 	if (!window || window.isDestroyed()) return;
@@ -112,6 +117,13 @@ async function boot() {
 		minHeight: 600,
 		show: false,
 		title: "Pi-Wm",
+		...(process.platform === "win32"
+			? {
+					titleBarStyle: "hidden",
+					titleBarOverlay: { color: "#f7f8f6", symbolColor: "#202522", height: 36 },
+					autoHideMenuBar: true,
+				}
+			: {}),
 		backgroundColor: "#f7f8f6",
 		webPreferences: {
 			preload: join(here, "preload.cjs"),
@@ -122,6 +134,97 @@ async function boot() {
 			webviewTag: false,
 			spellcheck: false,
 		},
+	});
+	const preferencesPath = join(profile, "desktop-updates.json");
+	const repository = manifest.desktopUpdateRepository;
+	const disabledReason = !app.isPackaged
+		? "development"
+		: process.platform !== "win32"
+			? "platform"
+			: !repository || !existsSync(join(process.resourcesPath, "app-update.yml"))
+				? "unconfigured"
+				: undefined;
+	const updater = disabledReason ? undefined : electronUpdater.autoUpdater;
+	updates = new DesktopUpdates({
+		updater,
+		createCancellationToken: () => new electronUpdater.CancellationToken(),
+		version: app.isPackaged ? app.getVersion() : manifest.version,
+		platform: process.platform,
+		arch: process.arch,
+		disabledReason,
+		repository,
+		preferences: await readUpdatePreferences(preferencesPath),
+		savePreferences: (value) => saveUpdatePreferences(preferencesPath, value),
+	});
+	updates.on("state", (state) => {
+		if (window && !window.isDestroyed()) window.webContents.send("desktop:update-state", state);
+	});
+	ipcMain.handle("desktop:updates", async (event, action, value) => {
+		if (
+			!window ||
+			event.sender !== window.webContents ||
+			event.senderFrame !== window.webContents.mainFrame ||
+			!isAppUrl(event.senderFrame.url)
+		)
+			throw new Error("Forbidden");
+		if (action === "activity") {
+			try {
+				updates.patch({
+					busy: (await host.updateStatus()).busy,
+					activityUnknown: false,
+					...(updates.state.error === "service" || updates.state.error === "busy" ? { error: undefined } : {}),
+				});
+			} catch {
+				updates.patch({ busy: true, activityUnknown: true });
+			}
+			return updates.snapshot();
+		}
+		if (action === "restart") {
+			if (updates.state.error !== "install") throw new Error("Restart is only available after an install failure");
+			app.relaunch();
+			app.quit();
+			return updates.snapshot();
+		}
+		if (action === "install")
+			return installDesktopUpdate({
+				updates,
+				host,
+				confirm: async () =>
+					(
+						await dialog.showMessageBox(window, {
+							type: "question",
+							title: "Pi-Wm",
+							message: "重启并安装更新？",
+							detail: "Pi-Wm 将关闭本地服务和预览服务并重新启动。请先保存外部编辑器中未保存的文件。",
+							buttons: ["稍后", "重启并安装"],
+							defaultId: 0,
+							cancelId: 0,
+						})
+					).response === 1,
+				install: () => {
+					quitting = true;
+					allowQuit = true;
+					updater.quitAndInstall(false, true);
+				},
+			});
+		return updates.dispatch(action, value);
+	});
+	ipcMain.handle("desktop:window-chrome", (event, action, value) => {
+		if (
+			!window ||
+			event.sender !== window.webContents ||
+			event.senderFrame !== window.webContents.mainFrame ||
+			!isAppUrl(event.senderFrame.url) ||
+			process.platform !== "win32"
+		)
+			throw new Error("Forbidden");
+		if (action === "menu") Menu.getApplicationMenu()?.popup({ window, x: 8, y: 36 });
+		else if (action === "theme" && (value === "light" || value === "dark"))
+			window.setTitleBarOverlay({
+				color: value === "dark" ? "#0e120f" : "#f7f8f6",
+				symbolColor: value === "dark" ? "#dbe3dc" : "#202522",
+			});
+		else throw new Error("Invalid window action");
 	});
 	window.webContents.session.setPermissionRequestHandler((_contents, permission, callback) =>
 		callback(permission === "clipboard-sanitized-write")
@@ -152,6 +255,13 @@ async function boot() {
 			{
 				label: "Pi-Wm",
 				submenu: [
+					{
+						label: "关于与更新",
+						click: () => {
+							focusWindow();
+							window?.webContents.send("desktop:open-updates");
+						},
+					},
 					{ label: "Open logs", click: () => void shell.openPath(logs) },
 					{ type: "separator" },
 					{ role: "quit" },
@@ -171,6 +281,7 @@ async function boot() {
 		])
 	);
 	await window.loadURL(APP_URL);
+	updates.start();
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -180,6 +291,7 @@ if (!app.requestSingleInstanceLock()) {
 	app.on("activate", focusWindow);
 	app.on("window-all-closed", () => app.quit());
 	app.on("before-quit", (event) => {
+		updates?.dispose();
 		if (allowQuit) return;
 		event.preventDefault();
 		if (quitting) return;

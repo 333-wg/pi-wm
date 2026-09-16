@@ -96,14 +96,24 @@ choose `short`, `long`, or `none`. Long retention requires compatible model/prov
 settings and can increase cache-write costs; `none` removes SDK cache directives
 but cannot guarantee that a provider disables automatic caching. See
 [prompt cache optimization](docs/prompt-cache-optimization.md) for scope and verification.
-The Agents tab creates independent durable child sessions that inherit the
+Delegated tasks run in independent durable child sessions that inherit the
 parent model, sandbox, and approval policy. Each child has its own transcript,
-operation, approvals, and optional cost/token limits; it continues in the
+model context, and the same automatic context compaction as a primary session.
+Use the top-right child-conversation switcher to inspect task status and open a
+child conversation, switch between siblings, or return to its parent. Subagent
+tool rows also open the full conversation, including failed or running tasks;
+the separate details button retains access to raw tool output.
+The model-facing delegation tool inherits user-configured budgets and cannot
+invent a small cumulative token cap. Explicit budgets remain supported by the
+delegation protocol; compaction reduces context occupancy, not cumulative billed usage.
+New custom model entries default to a 258,000-token context window. Configure
+this to match the actual upstream limit; existing saved model limits are retained.
+Each child also has its own operation, approvals, and optional cost/token limits; it continues in the
 background, can be cancelled, and publishes its terminal result and usage back
-to the parent session exactly once. The workbench can search and filter tasks,
-reuse an earlier task configuration, render structured results, and open the
-child's full conversation for tool-level inspection or follow-up before returning
-to the parent. Delegation can continue recursively to a hard limit of three agent
+to the parent session exactly once. The conversation switcher shows task
+summaries and live status, allows stopping active children, and opens each
+child's full conversation for inspection or follow-up. Reloading restores the
+selected child conversation. Delegation can continue recursively to a hard limit of three agent
 levels; cancelling an ancestor first cancels its active descendants.
 The Goals tab creates durable objectives without starting model work
 immediately. Starting a goal runs one independent child session in the
@@ -311,6 +321,27 @@ the same session permission policy as other process operations.
 
 ### Configure MCP servers
 
+In local-device mode, open the **MCP** tab and use **+** to add a server.
+The dialog accepts manual fields or a JSON configuration; for a multi-server
+JSON document, select the server to import. Saving does not grant local trust.
+Select the saved server, choose **Authorize and connect**, and confirm before
+its process starts or its remote endpoint is contacted. The toolbar also offers
+editing, revoking local trust, and deletion with confirmation. Failed services
+remain editable. Managed pre-trusted servers are disabled when stopped locally.
+
+An agent can still configure/trust a server through its approval-gated tools.
+Configuration or trust changes reload the tool set before the next message in
+the same conversation, without requiring a new chat. A running turn retains its
+tool set; stale or revoked MCP tools are rejected at execution time.
+
+Environment variables and HTTP header values are password inputs. Reading a
+configuration for editing returns null placeholders, never the stored values;
+unchanged placeholders preserve credentials, removing a key deletes it, and a
+new string replaces it. These values are still stored in the workspace JSON
+file, not an encrypted credential store. Do not commit that file with secrets
+or paste secret values into a conversation. OAuth/keychain integration remains
+outside this implementation.
+
 The gateway discovers MCP servers from the workspace-local
 `.wuming/mcp.json`. It accepts the original `servers` array and the
 `mcpServers`/`mcp_servers` map used by common MCP clients. `stdio` and modern
@@ -452,6 +483,10 @@ credentials remain server-side and are never included in their JSON output.
 
 ## Verification
 
+Desktop update behavior, GitHub release configuration and the publishing checklist
+are documented in [Desktop Updates](docs/desktop-updates.md). Run
+`npm run verify:desktop:updates` for the native desktop update checks.
+
 ```sh
 npm install
 npm run check
@@ -464,7 +499,7 @@ npm run build
 The Playwright suite launches isolated demo Gateway and Vite processes on
 dynamic ports with a temporary workspace and SQLite directory. It covers turn
 persistence across reload, approval, cancellation, completed/cancelled
-subagents, and the mobile Agents layout. It never calls a paid provider and
+subagents, and the desktop/mobile child-conversation switcher. It never calls a paid provider and
 does not reuse local development data.
 
 Current implementation status is tracked in `docs/implementation-status.md`.

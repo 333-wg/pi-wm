@@ -8,6 +8,7 @@ let failureFlag: string;
 test.beforeAll(async () => {
 	webUrl = await startWebApp(
 		{
+			WUMING_DEPLOYMENT_MODE: "local_device",
 			WUMING_MCP_TRUSTED_SERVERS_JSON: JSON.stringify([
 				{ workspaceId: "local-workspace", serverId: "broken" },
 				{ workspaceId: "local-workspace", serverId: "empty" },
@@ -135,7 +136,7 @@ for (const width of [1365, 390]) {
 		const broken = workbench.locator(".skill-entry").filter({ hasText: "broken" });
 		await expect(broken).toContainText("工具发现失败");
 		await expect(workbench.locator(".skill-entry").filter({ hasText: "empty" })).toContainText("0 个工具");
-		await expect(workbench.locator(".skill-entry").filter({ hasText: "untrusted" })).toContainText("未由服务端授信");
+		await expect(workbench.locator(".skill-entry").filter({ hasText: "untrusted" })).toContainText("待授权");
 		await broken.click();
 		await expect(workbench.locator(".workbench-error")).toContainText("MCP 工具发现失败");
 		await expect(page.locator("body")).not.toContainText("private-error-canary");

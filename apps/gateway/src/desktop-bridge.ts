@@ -7,6 +7,7 @@ export function createDesktopBridge() {
 	if (!process.send || !process.connected) throw new Error("Desktop host requires a parent IPC channel");
 	let stopping = false;
 	let shutdown: (() => void) | undefined;
+	let updateStatus: ((prepare: boolean) => boolean) | undefined;
 	const pending = new Map<string, (selection?: LocalProjectSelection) => void>();
 	const stop = () => {
 		if (stopping) return;
@@ -19,7 +20,18 @@ export function createDesktopBridge() {
 	process.on("disconnect", stop);
 	process.on("message", (value: unknown) => {
 		if (!value || typeof value !== "object") return;
-		const message = value as { type?: string; id?: string; selection?: LocalProjectSelection };
+		const message = value as { type?: string; id?: string; selection?: LocalProjectSelection; prepare?: boolean };
+		if (message.type === "desktop.update-status" && typeof message.id === "string") {
+			let busy = true;
+			try {
+				busy = stopping || !updateStatus || updateStatus(message.prepare === true);
+			} catch {
+				/* Fail closed. */
+			}
+			process.send?.({ type: "desktop.update-status.result", id: message.id, busy }, () => {
+				if (message.prepare === true && !busy) stop();
+			});
+		}
 		if (message.type === "desktop.shutdown") stop();
 		if (message.type === "desktop.pick.result" && typeof message.id === "string") {
 			const selection = message.selection;
@@ -31,6 +43,9 @@ export function createDesktopBridge() {
 		}
 	});
 	return {
+		onUpdateStatus(callback: (prepare: boolean) => boolean) {
+			updateStatus = callback;
+		},
 		onShutdown(callback: () => void) {
 			shutdown = callback;
 			if (stopping) callback();

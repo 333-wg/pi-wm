@@ -140,6 +140,69 @@ afterEach(async () => {
 });
 
 describe("FileMcpCatalog", () => {
+	it("redacts, preserves, replaces and removes stored credentials during edits", async () => {
+		const { root, script } = await fixtureWorkspace();
+		const catalog = new FileMcpCatalog({ resolveWorkspace: () => root });
+		catalogs.push(catalog);
+		await catalog.configureServer("workspace-1", root, {
+			id: "fixture",
+			command: process.execPath,
+			args: [script],
+			env: { KEY: "secret-canary", DROP: "old" },
+		});
+		const publicConfig = await catalog.getConfiguration(root, "fixture");
+		expect(publicConfig.env).toEqual({ KEY: null, DROP: null });
+		expect(JSON.stringify(publicConfig)).not.toContain("secret-canary");
+		const before = await catalog.configurationKey("workspace-1", root);
+		await catalog.configureServer("workspace-1", root, { ...publicConfig, name: "Edited", env: { KEY: null } });
+		const stored = JSON.parse(await readFile(join(root, ".wuming", "mcp.json"), "utf8"));
+		expect(stored.servers[0].env).toEqual({ KEY: "secret-canary" });
+		expect(await catalog.configurationKey("workspace-1", root)).not.toBe(before);
+		await catalog.configureServer("workspace-1", root, { ...publicConfig, env: { KEY: "replacement" } });
+		expect(await readFile(join(root, ".wuming", "mcp.json"), "utf8")).toContain("replacement");
+		await expect(
+			catalog.configureServer("workspace-1", root, { ...publicConfig, env: { MISSING: null } })
+		).rejects.toThrow("No saved value");
+	});
+
+	it("changes the session configuration key for trust, revocation and removal", async () => {
+		const { root } = await fixtureWorkspace();
+		const catalog = new FileMcpCatalog({ resolveWorkspace: () => root });
+		catalogs.push(catalog);
+		const untrusted = await catalog.configurationKey("workspace-1", root);
+		await catalog.trustServer("workspace-1", root, "fixture");
+		const trusted = await catalog.configurationKey("workspace-1", root);
+		expect(trusted).not.toBe(untrusted);
+		await catalog.untrustServer("workspace-1", root, "fixture");
+		expect(await catalog.configurationKey("workspace-1", root)).toBe(untrusted);
+		await catalog.removeServer("workspace-1", root, "fixture");
+		expect(await catalog.list("workspace-1", root)).toEqual([]);
+		expect(await catalog.configurationKey("workspace-1", root)).not.toBe(untrusted);
+		await expect(catalog.getConfiguration(root, "fixture")).rejects.toMatchObject({ protocolCode: "not_found" });
+	});
+
+	it("serializes concurrent configuration writes without losing another server", async () => {
+		const { root } = await fixtureWorkspace();
+		const catalog = new FileMcpCatalog({ resolveWorkspace: () => root });
+		catalogs.push(catalog);
+		await Promise.all(
+			["one", "two"].map((id) => catalog.configureServer("workspace-1", root, { id, command: "node", enabled: false }))
+		);
+		expect((await catalog.list("workspace-1", root)).map((server) => server.id).sort()).toEqual([
+			"fixture",
+			"one",
+			"two",
+		]);
+	});
+
+	it("disables a managed pre-trusted server instead of silently reauthorizing it", async () => {
+		const { root } = await fixtureWorkspace();
+		const catalog = createCatalog({ resolveWorkspace: () => root });
+		await expect(catalog.untrustServer("workspace-1", root, "fixture")).resolves.toMatchObject({
+			discoveryStatus: "disabled",
+			toolCount: 0,
+		});
+	});
 	it("discovers later pages with opaque cursors and executes a later-page tool", async () => {
 		const { root } = await fixtureWorkspace();
 		await writeFile(

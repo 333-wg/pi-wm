@@ -235,7 +235,9 @@ export interface AgentRuntime {
 		snapshot: SessionSnapshot;
 		signal: AbortSignal;
 		onProgress: (event: ProgressEvent) => void;
+		onTranscriptItem?: (item: TranscriptItem) => void;
 		onContextUsage?: (usage: ContextUsageState) => void;
+		onRequestUsage?: (request: UsageRequestSummary) => void;
 		onRetry?: (event: RuntimeRetryEvent) => void;
 		costBudgetUsd?: number;
 		tokenBudget?: number;
