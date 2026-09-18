@@ -7,6 +7,7 @@
 - Check at startup (after 20 seconds) and every six hours when automatic checking is enabled.
 - Checking does not download. Downloading does not install. Quitting normally does not install.
 - The user explicitly chooses Download, then Restart & install and confirms in a native dialog.
+- After confirmation, Windows installation runs silently and automatically starts the new version. This is explicit consent, not unattended background installation.
 - A 24-hour reminder deferral and the automatic-check preference are stored in the user's existing profile.
 - The main process asks the local service about queued/running operations across all sessions, in-flight requests, recovery, automation ticks, and open terminals. Unknown/busy status blocks installation. It checks again after confirmation, gates new requests, then stops the service before invoking the installer.
 - Update failure does not remove the installed application or user data. The existing Wuming profile and application ID remain unchanged.
@@ -104,6 +105,16 @@ Future versions follow the same process with a higher version number. Do not ove
 - Test release downloads from your actual users' network regions. If GitHub access is unreliable there, plan an HTTPS mirror/update service rather than embedding unofficial proxy addresses or credentials.
 
 No GitHub repository, release, tag or upload is created by this implementation. A full remote N-to-N+1 installation test requires real release artifacts and a configured repository.
+
+## Actual Installation Gate
+
+The `Desktop Installed Update` workflow runs only when manually dispatched on an ephemeral GitHub-hosted Windows runner. Its script refuses to run locally or on a self-hosted runner because this test deliberately installs software and updates the Windows registry.
+
+Build the candidate normally, then run `node scripts/build-desktop-update-fixture.mjs` to produce an unpublished higher-version installer from the same application source in `test-results/desktop-update-fixture`. Neither command publishes anything. Keep the candidate assets and the higher-version fixture in a draft release; name the fixture's metadata asset `update-test-latest.yml`. The workflow validates GitHub asset SHA-256 digests before execution.
+
+The test installs the real candidate, creates isolated test data, drives its update UI against a loopback server serving the actual higher-version installer, and executes the unmodified NSIS launch with silent/restart flags. It checks replacement of the installed binary, updated Windows registration, automatic restart, and preservation of the session, workspace file and settings. Only the update feed and native confirmation response are automated; installer spawning, installation, quitting and restarting are not mocked.
+
+Remove all higher-version fixture assets from the draft before publishing the candidate's stable release. Never publish the fixture version or treat it as a product release. The evidence records which two versions were installed; GitHub-hosted download reachability is checked separately after publication. Unsigned test installers still require a signing plan for wider distribution.
 
 ## References
 

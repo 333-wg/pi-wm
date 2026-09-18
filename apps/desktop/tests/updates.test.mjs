@@ -301,11 +301,11 @@ test("install rechecks after confirmation, stops the service, then installs exac
 			events.push("confirm");
 			return true;
 		},
-		install: () => {
-			events.push("install");
+		install: (silent, forceRunAfter) => {
+			events.push(["install", silent, forceRunAfter]);
 		},
 	};
 	await Promise.all([installDesktopUpdate(options), installDesktopUpdate(options)]);
-	assert.deepEqual(events, ["status", "confirm", "prepare", "stop", "install"]);
+	assert.deepEqual(events, ["status", "confirm", "prepare", "stop", ["install", true, true]]);
 	assert.equal(updates.state.status, "installing");
 });

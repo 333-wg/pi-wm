@@ -1,0 +1,51 @@
+name: Desktop Installed Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Draft release containing the candidate and unpublished higher-version fixture
+        required: true
+        type: string
+      baseline_version:
+        description: Candidate version to install
+        required: true
+        type: string
+      target_version:
+        description: Unpublished higher test version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  installed-update:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      UPDATE_RELEASE_ID: ${{ inputs.release_id }}
+      UPDATE_BASELINE_VERSION: ${{ inputs.baseline_version }}
+      UPDATE_TARGET_VERSION: ${{ inputs.target_version }}
+      UPDATE_FIXTURE_DIRECTORY: ${{ runner.temp }}\desktop-update-fixture
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Download and verify unpublished installation fixtures
+        run: node scripts/download-desktop-update-fixture.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Install candidate and exercise actual in-app replacement and restart
+        run: node scripts/verify-desktop-installed-update.mjs
+      - name: Keep upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-installed-update-evidence
+          path: test-results/desktop-installed-update
+          if-no-files-found: warn
+          retention-days: 14

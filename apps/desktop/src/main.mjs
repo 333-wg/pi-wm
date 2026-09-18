@@ -218,10 +218,10 @@ async function boot() {
 							cancelId: 0,
 						})
 					).response === 1,
-				install: () => {
+				install: (silent, forceRunAfter) => {
 					quitting = true;
 					allowQuit = true;
-					updater.quitAndInstall(false, true);
+					updater.quitAndInstall(silent, forceRunAfter);
 				},
 			});
 		return updates.dispatch(action, value);
