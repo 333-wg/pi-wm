@@ -20,7 +20,10 @@ const headers = {
 	"X-GitHub-Api-Version": "2022-11-28",
 };
 const response = await fetch(`https://api.github.com/repos/${repository}/releases/${releaseId}`, { headers });
-if (!response.ok) throw new Error(`Release lookup failed: ${response.status}`);
+if (!response.ok) {
+	const failure = await response.json().catch(() => ({}));
+	throw new Error(`Release lookup failed: ${response.status} ${failure.message ?? ""}`);
+}
 const release = await response.json();
 if (!release.draft) throw new Error("Installation fixtures must be in a draft release");
 await mkdir(directory, { recursive: true });

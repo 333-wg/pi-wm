@@ -27,7 +27,7 @@ Use Node 22.19+ (Node 22), as required by the existing desktop runtime packaging
 
 1. Increase the desktop version using npm so the lockfile also stays in sync:
 
-   npm version 0.1.4 --workspace @wuming/desktop --no-git-tag-version
+   npm version 0.1.5 --workspace @wuming/desktop --no-git-tag-version
 
 2. Normally no update-source environment variable is needed. To override the default for a dedicated test repository, set it in PowerShell:
 
@@ -85,9 +85,9 @@ For users, the intended path is **Settings > About & updates > Check for updates
 
 ## Publish a Release
 
-Create a draft GitHub Release with a version tag matching the desktop version, for example v0.1.4. Attach the complete generated update set:
+Create a draft GitHub Release with a version tag matching the desktop version, for example v0.1.5. Attach the complete generated update set:
 
-- Pi-Wm-0.1.4-Setup-x64.exe
+- Pi-Wm-0.1.5-Setup-x64.exe
 - The matching .exe.blockmap
 - latest.yml
 

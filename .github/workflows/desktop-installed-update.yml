@@ -23,6 +23,10 @@ jobs:
   installed-update:
     runs-on: windows-latest
     timeout-minutes: 25
+    # GitHub requires push-level access to read unpublished release assets.
+    # This job is manual-only; the token is exposed only to the download step.
+    permissions:
+      contents: write
     env:
       UPDATE_RELEASE_ID: ${{ inputs.release_id }}
       UPDATE_BASELINE_VERSION: ${{ inputs.baseline_version }}

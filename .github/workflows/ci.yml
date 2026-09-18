@@ -42,5 +42,8 @@ jobs:
       # test programs (scripts/check-tests.mjs), and the colour-contrast audit.
       - run: npm run check
 
+      # Sandbox unit/integration tests launch a real headless browser too.
+      - run: npx playwright install --with-deps chromium
+
       # Every workspace's vitest suite.
       - run: npm test
