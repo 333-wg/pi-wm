@@ -112,10 +112,7 @@ export const SessionEventSchema = Type.Union([
 		attempt: Type.Integer({ minimum: 1 }),
 		usage: UsageSchema,
 		tools: Type.Array(UsageToolSummarySchema, { maxItems: 100 }),
-		requests: Type.Array(
-			Type.Object({ requestId: Id, model: ModelRefSchema, usage: UsageSchema }, { additionalProperties: false }),
-			{ maxItems: 100 }
-		),
+		requests: Type.Array(UsageRequestSummarySchema, { maxItems: 100 }),
 		skills: Type.Optional(Type.Array(Id, { maxItems: 128, uniqueItems: true })),
 	}),
 	StrictObject({

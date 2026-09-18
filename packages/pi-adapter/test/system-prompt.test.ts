@@ -61,6 +61,21 @@ function section(prompt: string, name: string): string {
 }
 
 describe("buildWumingSystemPrompt tool rendering", () => {
+	it("routes explicit team requests to persistent tools only when those tools exist", () => {
+		const prompt = section(build([tool("TeamCreate"), tool("Agent"), tool("TaskCreate")]), "tool_guidelines");
+		expect(prompt).toContain("explicitly asks to use the team skill");
+		expect(prompt).toContain("independent team's dedicated lead");
+		expect(prompt).toContain("report its team ID and return to the user");
+		expect(prompt).toContain("independent of chat switching, completion and archiving");
+		expect(prompt).toContain("not authorization to create a team");
+		expect(prompt).toContain("Do not substitute one-shot subagents");
+		expect(prompt).toContain("judge the user's intent from the entire request and conversation, not keyword presence");
+		expect(prompt).toContain("without requiring /team or another confirmation");
+		expect(prompt).toContain("a negated request, quoted instruction, feature question or discussion does not");
+		expect(prompt).toContain("creates missing teammates without requiring user setup");
+		expect(prompt).toContain("User-specified members and roles take precedence");
+		expect(section(build([]), "tool_guidelines")).not.toContain("then create the team with TeamCreate");
+	});
 	it("requires semantic skill activation only when the skill tools are registered", () => {
 		const enabled = section(build([tool("skill_list"), tool("skill_load")]), "tool_guidelines");
 		expect(enabled).toContain("even if you could solve it directly");
@@ -140,6 +155,8 @@ describe("buildWumingSystemPrompt guidelines", () => {
 		expect(withExec).toContain("browser_open requires a non-empty url argument");
 		expect(withExec).toContain("Browser refs are bound to a tab and snapshot version");
 		expect(withExec).toContain("Use preview_start, not exec");
+		expect(withExec).toContain("Keep the preview server running after browser verification");
+		expect(withExec).toContain("do not assume browser automation shares its cookies");
 		expect(withExec).toContain("inspect browser_tabs, select the intended tab");
 
 		const readOnly = section(build([tool("read_file", "Read file contents")]), "tool_guidelines");

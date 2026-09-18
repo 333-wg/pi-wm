@@ -1,4 +1,4 @@
-import type { ToolStatus } from "@wuming/protocol";
+import type { ComputerUseStatus, ToolStatus } from "@wuming/protocol";
 import type { EnvironmentInspection } from "@wuming/sandbox";
 
 export type GatewayRuntimeMode = "pi" | "demo";
@@ -9,6 +9,7 @@ export interface BuiltinToolCatalogOptions {
 	processMode?: "local" | "docker" | "disabled";
 	dockerImage?: string;
 	browserEnabled?: boolean;
+	computerStatus?: () => ComputerUseStatus;
 	previewEnabled?: boolean;
 	inspectEnvironment?: (workspaceId: string) => Promise<EnvironmentInspection | undefined>;
 	searchProvider: "bing" | "duckduckgo" | "brave" | "searxng";
@@ -446,10 +447,73 @@ export function createBuiltinToolCatalog(options: BuiltinToolCatalogOptions): Ga
 		},
 	];
 
+	for (const [name, label, description] of [
+		["TeamCreate", "创建团队", "创建持久化协作团队和共享任务板"],
+		["Agent", "创建常驻成员", "启动可多轮执行、接收队友消息的团队成员"],
+		["TaskCreate", "创建共享任务", "登记负责人、依赖和写入范围"],
+		["TaskList", "读取任务板", "读取当前团队的任务与成员状态"],
+		["TaskGet", "读取团队任务", "读取任务详情、依赖和结果"],
+		["TaskUpdate", "更新团队任务", "原子认领任务、更新进度并提交验证结果"],
+		["SendMessage", "发送队友消息", "持久化点对点或广播消息并唤醒空闲成员"],
+		["TeamFinish", "团队验收", "负责人验证所有任务后结束团队"],
+	] as const)
+		tools.push({
+			name,
+			label,
+			description,
+			category: "agent",
+			status: status(true),
+			backend: "AgentTeamService",
+			risk: name === "TaskList" || name === "TaskGet" ? "low" : "medium",
+			sandboxModes: [...allModes],
+			...reason(true),
+		});
+
 	return {
 		runtime: options.runtime,
 		list: async (workspaceId) => {
 			const listed = tools.map((tool) => ({ ...tool, sandboxModes: [...tool.sandboxModes] }));
+			const computer = localUserCapabilities ? options.computerStatus?.() : undefined;
+			for (const [name, label, description] of [
+				["computer_screenshot", "桌面截图", "开启 Computer Use 后截取 Windows 显示器并向模型返回图片"],
+				["computer_action", "桌面操作", "开启 Computer Use 后切换目标窗口并执行点击、输入、快捷键或滚动"],
+				["computer_release", "释放桌面控制", "释放当前会话持有的桌面控制权"],
+				["computer_control", "授权连续桌面操作", "为当前任务申请限时前台控制，需要明确确认"],
+				["computer_apps", "列出已安装应用", "读取开始菜单应用列表"],
+				["computer_open", "打开应用", "通过已观察的应用快捷方式直接启动应用"],
+				["computer_windows", "列出桌面窗口", "读取窗口列表，不截图、不移动鼠标"],
+				["computer_inspect", "读取窗口控件", "读取指定窗口的控件名称、内容和支持的操作"],
+				["computer_element_action", "操作窗口控件", "通过 UI Automation 操作控件，不主动切换前台或使用真实鼠标"],
+			] as const) {
+				const available = Boolean(
+					computer?.supported && (name === "computer_release" || (computer.enabled && computer.ready))
+				);
+				listed.push({
+					name,
+					label,
+					description,
+					category: "process",
+					status: status(available),
+					backend: "Windows desktop helper",
+					risk: ["computer_action", "computer_element_action", "computer_control", "computer_open"].includes(name)
+						? "high"
+						: name === "computer_release"
+							? "low"
+							: "medium",
+					sandboxModes: ["computer_action", "computer_element_action", "computer_control", "computer_open"].includes(
+						name
+					)
+						? [...writeModes]
+						: [...allModes],
+					...reason(
+						available,
+						computer?.error ??
+							(computer?.supported
+								? "请在设置 > Computer Use 中开启，缺少依赖时会自动准备"
+								: "仅支持 Windows 本地设备的 Pi 运行时")
+					),
+				});
+			}
 			listed.push({
 				name: "media_model_status",
 				label: "查看生成模型配置",
@@ -463,6 +527,7 @@ export function createBuiltinToolCatalog(options: BuiltinToolCatalogOptions): Ga
 			});
 			for (const [name, kind, label] of [
 				["generate_image", "image", "生成图片"],
+				["get_generated_image", "image", "取回已生成图片"],
 				["generate_video", "video", "生成视频"],
 				["get_generated_video", "video", "获取生成视频"],
 			] as const) {

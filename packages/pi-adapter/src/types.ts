@@ -3,10 +3,23 @@ import type { ToolResultMessage, Usage as PiUsage } from "@earendil-works/pi-ai"
 import type { CapabilityManifest } from "@wuming/capability-kernel";
 import type { ContextFragment } from "@wuming/context-engine";
 import type { ArtifactRef, SessionSnapshot } from "@wuming/protocol";
+import type { DurableOperation } from "@wuming/orchestrator";
+
+export interface PiPreparedPrompt {
+	text: string;
+	images: Array<{ type: "image"; data: string; mimeType: string }>;
+}
+
+export interface PiSessionRecovery {
+	snapshot: SessionSnapshot;
+	operations: DurableOperation[];
+	loadPrompt: (operation: DurableOperation) => Promise<PiPreparedPrompt>;
+	signal: AbortSignal;
+}
 
 export interface PiSessionLike {
 	readonly isStreaming: boolean;
-	prepareForPrompt?(): void;
+	prepareForPrompt?(recovery?: PiSessionRecovery): void | Promise<void>;
 	getSystemPrompt?(): string;
 	setSystemPrompt?(prompt: string): void;
 	getCapabilityManifests?(): CapabilityManifest[];
@@ -15,6 +28,7 @@ export interface PiSessionLike {
 	prompt(
 		text: string,
 		options?: {
+			operationId?: string;
 			images?: Array<{ type: "image"; data: string; mimeType: string }>;
 			streamingBehavior?: "steer" | "followUp";
 			expandPromptTemplates?: boolean;

@@ -614,22 +614,24 @@ test("navigates nested child conversations and cancels background work", async (
 		await createTestSubagent(page, "Return a result for " + name, name);
 		await page.getByRole("button", { name: "子对话", exact: true }).click();
 		await page.locator(".child-conversation-open").filter({ hasText: name }).click();
-		await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+		await expect(page.locator(".topbar h1")).toHaveCount(0);
 		await expect(page.getByText("Demo runtime received: Return a result for " + name, { exact: true })).toBeVisible();
 		await expect(page.locator(".right-rail")).toHaveCount(0);
 	}
 	await page.reload();
-	await expect(page.getByRole("heading", { name: "E2E nested level 3" })).toBeVisible();
+	await expect(
+		page.getByText("Demo runtime received: Return a result for E2E nested level 3", { exact: true })
+	).toBeVisible();
 	await page.getByRole("button", { name: "子对话", exact: true }).click();
 	await expect(page.locator('.child-conversation-open[aria-current="page"]')).toContainText("E2E nested level 3");
 	await page.keyboard.press("Escape");
 	await expect(page.getByRole("dialog", { name: "子对话", exact: true })).toHaveCount(0);
 	for (const name of ["E2E nested level 2", "E2E completion"]) {
 		await page.getByRole("button", { name: "返回上级对话", exact: true }).click();
-		await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+		await expect(page.getByText("Demo runtime received: Return a result for " + name, { exact: true })).toBeVisible();
 	}
 	await page.getByRole("button", { name: "返回上级对话", exact: true }).click();
-	await expect(page.getByRole("heading", { name: "E2E child conversation parent", exact: true })).toBeVisible();
+	await expect(page.getByText("Demo runtime received: E2E child conversation parent", { exact: true })).toBeVisible();
 	await createTestSubagent(page, "/approval", "E2E cancellation");
 	await page.getByRole("button", { name: "子对话", exact: true }).click();
 	const task = page.locator(".child-conversation-row").filter({ hasText: "E2E cancellation" });

@@ -1,0 +1,141 @@
+.run-diagnostics p {
+	margin: 8px 0;
+	font-size: 13px;
+}
+.diagnosis-attention {
+	color: var(--amber);
+	font-weight: 600;
+}
+.diagnosis-tool {
+	display: block;
+	overflow-wrap: anywhere;
+	font-size: 12px;
+}
+.request-history {
+	margin-top: 12px;
+	font-size: 12px;
+}
+.request-history summary {
+	cursor: pointer;
+}
+.request-table {
+	overflow-x: auto;
+	margin-top: 8px;
+}
+.request-table table {
+	width: 100%;
+	border-collapse: collapse;
+	font-variant-numeric: tabular-nums;
+}
+.request-table th,
+.request-table td {
+	text-align: left;
+	padding: 6px 4px;
+	white-space: nowrap;
+}
+.session-search {
+	margin: 6px 0 10px;
+	min-width: 0;
+}
+.session-search-field {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.session-search-field input {
+	min-width: 0;
+	width: 100%;
+	font: inherit;
+	font-size: 12px;
+	padding: 7px;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	background: var(--bg);
+	color: inherit;
+}
+.session-search-field button {
+	flex: 0 0 26px;
+	width: 26px;
+	height: 26px;
+	display: grid;
+	place-items: center;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text);
+	cursor: pointer;
+}
+.session-search-results {
+	max-height: 420px;
+	overflow-y: auto;
+}
+.session-search-hit {
+	display: block;
+	width: 100%;
+	padding: 10px 6px;
+	text-align: left;
+	border: 0;
+	border-bottom: 1px solid var(--line);
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	cursor: pointer;
+}
+.session-search-hit:hover,
+.session-search-field button:hover {
+	background: var(--surface-hover);
+}
+.session-search-hit:focus-visible,
+.session-search-field button:focus-visible,
+.session-search-field input:focus-visible {
+	outline: 2px solid var(--green);
+	outline-offset: -2px;
+}
+.session-search-hit strong,
+.session-search-hit span {
+	display: block;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+.session-search-hit strong {
+	font-size: 12px;
+	margin-bottom: 4px;
+}
+.session-search-hit span {
+	font-size: 12px;
+	line-height: 1.5;
+}
+.session-search-hit small {
+	display: block;
+	margin-top: 5px;
+	font-size: 11px;
+}
+.session-search-hit mark {
+	color: var(--green-strong);
+	background: var(--green-soft);
+	border-radius: 2px;
+}
+.session-search-status {
+	font-size: 12px;
+	padding: 8px 4px;
+}
+.search-target {
+	outline: 2px solid var(--green);
+	outline-offset: -2px;
+	scroll-margin-block: 20px;
+}
+.task-notification-setting {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 16px 0;
+	border-bottom: 1px solid var(--line);
+	font-size: 13px;
+}
+.task-notification-setting input {
+	width: 18px;
+	height: 18px;
+	accent-color: var(--green);
+	flex-shrink: 0;
+}

@@ -1,3 +1,4 @@
+import { useT } from "../lib/locale.js";
 import { Check, Copy, GitBranch, Pencil } from "lucide-react";
 import { useCallback, useState } from "react";
 
@@ -23,6 +24,7 @@ export function MessageActions({
 	onFork?: () => void;
 	onEdit?: () => void;
 }) {
+	const t = useT();
 	const [copied, setCopied] = useState(false);
 	const copy = useCallback(() => {
 		if (!navigator.clipboard) return;
@@ -38,15 +40,20 @@ export function MessageActions({
 	return (
 		<div className="message-actions">
 			{text !== "" && (
-				<button type="button" title={copied ? "已复制" : "复制消息"} aria-label="复制消息" onClick={copy}>
+				<button
+					type="button"
+					title={copied ? t("copied") : t("copyMessage")}
+					aria-label={t("copyMessage")}
+					onClick={copy}
+				>
 					{copied ? <Check size={13} /> : <Copy size={13} />}
 				</button>
 			)}
 			{onEdit && (
 				<button
 					type="button"
-					title={branchDisabled ? branchTitle : "编辑并重新发送"}
-					aria-label="编辑并重新发送"
+					title={branchDisabled ? branchTitle : t("editAndResend")}
+					aria-label={t("editAndResend")}
 					disabled={branchDisabled || busy}
 					onClick={onEdit}
 				>
@@ -56,8 +63,8 @@ export function MessageActions({
 			{onFork && (
 				<button
 					type="button"
-					title={branchDisabled ? branchTitle : "从这里分叉出新会话"}
-					aria-label="从这里分叉出新会话"
+					title={branchDisabled ? branchTitle : t("forkFromHere")}
+					aria-label={t("forkFromHere")}
 					disabled={branchDisabled || busy}
 					onClick={onFork}
 				>

@@ -162,6 +162,47 @@ describe("CustomModelRegistry", () => {
 		expect(model).toMatchObject({ reasoning: false, thinking: { mode: "unknown" } });
 	});
 
+	it("persists manual capabilities across reloads, edits and service refreshes, with an explicit automatic reset", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wuming-thinking-override-"));
+		try {
+			const options = { filePath: join(root, "models.enc"), encryptionKey: "master-key" };
+			const first = new CustomModelRegistry(options);
+			await first.set({ ...config, id: "gpt-6-astra", thinkingOverride: { levels: ["high", "xhigh", "max"] } });
+			const loaded = new CustomModelRegistry(options);
+			await loaded.load();
+			const ref = { ...config, id: "gpt-6-astra" };
+			expect(loaded.get(ref)).toMatchObject({ thinkingOverride: { levels: ["high", "xhigh", "max"] } });
+			await loaded.set({ ...ref, name: "Renamed" });
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(JSON.stringify({ data: [{ id: ref.id, reasoning: false }] }))
+			);
+			await loaded.refreshService(ref.provider);
+			expect(loaded.list()[0]).toMatchObject({
+				thinkingLevels: ["high", "xhigh", "max"],
+				thinking: { source: "manual" },
+			});
+			expect(loaded.registrations()[0]?.config.models?.[0]?.thinkingLevelMap).toMatchObject({
+				low: null,
+				xhigh: "xhigh",
+				max: "max",
+			});
+			expect(await loaded.set({ ...ref, thinkingOverride: "auto" })).toMatchObject({
+				reasoning: false,
+				thinking: { source: "endpoint" },
+			});
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("upgrades an existing model without re-adding it or trusting a legacy reasoning checkbox", async () => {
+		const registry = new CustomModelRegistry();
+		expect(await registry.set({ ...config, id: "gpt-6-astra", reasoning: false })).toMatchObject({
+			reasoning: true,
+			thinking: { source: "catalog" },
+		});
+	});
+
 	it("keeps keys out of metadata and provider catalog summaries", async () => {
 		const registry = new CustomModelRegistry();
 		await registry.set(config);
@@ -185,6 +226,7 @@ describe("CustomModelRegistry", () => {
 			api: config.api,
 			baseUrl: config.baseUrl,
 			reasoning: config.reasoning,
+			thinkingLevels: ["off"],
 			input: ["text", "image"],
 			contextWindow: config.contextWindow,
 			maxOutputTokens: config.maxOutputTokens,

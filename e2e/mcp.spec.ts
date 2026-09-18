@@ -50,6 +50,25 @@ test.afterAll(async () => {
 	await stopWebApp();
 });
 
+test("toggling another service preserves list order and the open detail", async ({ page }) => {
+	await openApp(page, webUrl);
+	await page.getByRole("tab", { name: "MCP", exact: true }).click();
+	const workbench = page.getByRole("region", { name: "MCP 服务" });
+	await workbench.getByRole("button", { name: "查看 empty", exact: true }).click();
+	await expect(workbench.getByText("该服务未提供工具", { exact: true })).toBeVisible();
+	const names = workbench.locator(".mcp-server-name strong");
+	const order = await names.allTextContents();
+	const toggle = workbench.getByRole("switch", { name: "启用 untrusted", exact: true });
+	await toggle.click();
+	await expect(toggle).not.toBeChecked();
+	await expect(names).toHaveText(order);
+	await expect(workbench.getByText("该服务未提供工具", { exact: true })).toBeVisible();
+	await toggle.click();
+	await expect(toggle).toBeChecked();
+	await expect(workbench.locator(".mcp-server-open").filter({ hasText: "untrusted" })).toContainText("待授权");
+	await expect(names).toHaveText(order);
+});
+
 for (const action of ["new selection", "refresh", "late failure"] as const) {
 	test("late MCP response cannot undo " + action, async ({ page }) => {
 		let armed = false;
@@ -97,16 +116,16 @@ for (const action of ["new selection", "refresh", "late failure"] as const) {
 		await openApp(page, webUrl);
 		await page.getByRole("tab", { name: "MCP", exact: true }).click();
 		const workbench = page.getByRole("region", { name: "MCP 服务" });
-		await expect(workbench.locator(".skill-entry")).toHaveCount(3);
+		await expect(workbench.locator(".mcp-server-open")).toHaveCount(3);
 		armed = true;
-		await workbench.locator(".skill-entry").filter({ hasText: "empty" }).click();
+		await workbench.locator(".mcp-server-open").filter({ hasText: "empty" }).click();
 		await expect.poll(() => Boolean(release)).toBe(true);
 		if (action === "refresh") {
 			await workbench.getByRole("button", { name: "刷新 MCP 服务", exact: true }).click();
 			await expect(workbench.getByRole("button", { name: "刷新 MCP 服务", exact: true })).toBeEnabled();
 		} else {
-			await workbench.locator(".skill-entry").filter({ hasText: "untrusted" }).click();
-			await expect(workbench.locator(".editor-heading strong")).toHaveText("untrusted");
+			await workbench.locator(".mcp-server-open").filter({ hasText: "untrusted" }).click();
+			await expect(workbench.locator(".mcp-server.is-expanded .mcp-server-name strong")).toHaveText("untrusted");
 		}
 		release!();
 		await expect
@@ -118,10 +137,10 @@ for (const action of ["new selection", "refresh", "late failure"] as const) {
 			)
 			.toBe(true);
 		await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
-		if (action === "refresh") await expect(workbench.getByText("选择一个 MCP 服务", { exact: true })).toBeVisible();
-		else await expect(workbench.locator(".editor-heading strong")).toHaveText("untrusted");
+		if (action === "refresh") await expect(workbench.locator(".mcp-detail")).toHaveCount(0);
+		else await expect(workbench.locator(".mcp-server.is-expanded .mcp-server-name strong")).toHaveText("untrusted");
 		await expect(workbench.locator(".workbench-error")).toHaveCount(0);
-		await expect(workbench.locator(".skill-entry").filter({ hasText: "empty" })).toContainText("0 个工具");
+		await expect(workbench.locator(".mcp-server-open").filter({ hasText: "empty" })).toContainText("0 个工具");
 		await expect(page.locator("body")).not.toContainText("private-stale-error-canary");
 	});
 }
@@ -133,13 +152,15 @@ for (const width of [1365, 390]) {
 		await openApp(page, webUrl);
 		await page.getByRole("tab", { name: "MCP", exact: true }).click();
 		const workbench = page.getByRole("region", { name: "MCP 服务" });
-		const broken = workbench.locator(".skill-entry").filter({ hasText: "broken" });
-		await expect(broken).toContainText("工具发现失败");
-		await expect(workbench.locator(".skill-entry").filter({ hasText: "empty" })).toContainText("0 个工具");
-		await expect(workbench.locator(".skill-entry").filter({ hasText: "untrusted" })).toContainText("待授权");
+		const broken = workbench.locator(".mcp-server-open").filter({ hasText: "broken" });
+		await expect(broken).toContainText("连接异常");
+		await expect(workbench.locator(".mcp-server-open").filter({ hasText: "empty" })).toContainText("0 个工具");
+		await expect(workbench.locator(".mcp-server-open").filter({ hasText: "untrusted" })).toContainText("待授权");
 		await broken.click();
 		await expect(workbench.locator(".workbench-error")).toContainText("MCP 工具发现失败");
 		await expect(page.locator("body")).not.toContainText("private-error-canary");
+		await workbench.getByRole("tab", { name: "诊断", exact: true }).click();
+		await expect(workbench.getByRole("tabpanel")).toContainText("本机启动命令");
 		await page.screenshot({ path: testInfo.outputPath("mcp-failure.png") });
 		await unlink(failureFlag);
 		await broken.click();

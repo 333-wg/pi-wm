@@ -1,0 +1,87 @@
+.terminal-workbench[hidden] {
+	display: none;
+}
+.terminal-workbench .terminal-heading {
+	flex: 0 0 auto;
+	min-height: 45px;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 8px 12px;
+}
+.terminal-workbench .terminal-status {
+	white-space: nowrap;
+	padding: 0;
+	background: none;
+}
+.terminal-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: auto;
+	min-width: 0;
+	flex-wrap: wrap;
+}
+.terminal-actions button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--term-text);
+	cursor: pointer;
+}
+.terminal-actions button:hover:not(:disabled) {
+	border-color: var(--term-line);
+	background: var(--term-bg);
+}
+.terminal-actions button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.terminal-actions select {
+	min-width: 0;
+	max-width: 170px;
+	height: 28px;
+	padding: 0 4px;
+	border: 1px solid var(--term-line);
+	border-radius: 4px;
+	font: inherit;
+	font-size: 11px;
+	background: var(--term-head);
+	color: var(--term-text);
+}
+.terminal-location {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+	padding: 6px 12px;
+	border-bottom: 1px solid var(--term-line);
+	color: var(--term-muted);
+	font-size: 11px;
+}
+.terminal-location span:first-child {
+	flex-shrink: 0;
+}
+.terminal-location span:last-child {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.terminal-workbench .terminal-error {
+	overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+	.terminal-actions {
+		width: 100%;
+		margin-left: 0;
+	}
+	.terminal-actions select {
+		flex: 1;
+		max-width: none;
+	}
+}

@@ -23,6 +23,7 @@ import type {
 	GoalAutomationSummary,
 	ArtifactRef,
 	ModelMetadata,
+	OfficialAccount,
 	ModelRef,
 	RunFailureKind,
 	RunEvaluation,
@@ -50,6 +51,7 @@ import { readStoredPermission, writeStoredPermission } from "./lib/permission-pr
 import { readStoredThinking, thinkingLevelForModel, writeStoredThinking } from "./lib/thinking-preference.js";
 import { isImplicitWorkspace } from "./lib/workspaces.js";
 import { desktopConnection } from "./lib/desktop.js";
+import { bearerProtocol, gatewayWebSocketUrl } from "./lib/gateway-connection.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -192,13 +194,6 @@ function sameModel(left: ModelRef | undefined, right: ModelRef): boolean {
 	return left?.provider === right.provider && left.id === right.id;
 }
 
-function bearerProtocol(token: string): string {
-	const bytes = new TextEncoder().encode(token);
-	let binary = "";
-	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return `wuming.bearer.${btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}`;
-}
-
 function upsertTranscript(snapshot: SessionSnapshot, item: SessionSnapshot["transcript"][number]): SessionSnapshot {
 	const index = snapshot.transcript.findIndex((candidate) => candidate.id === item.id);
 	if (index === -1) return { ...snapshot, transcript: [...snapshot.transcript, item] };
@@ -213,6 +208,7 @@ export function useWumingClient() {
 		() => desktopConnection()?.token ?? localStorage.getItem("wuming.token") ?? ""
 	);
 	const [reconnectAttempt, setReconnectAttempt] = useState(0);
+	const legacyHello = useRef(false);
 	const [state, setState] = useState<ClientState>(initialState);
 	useEffect(() => {
 		const notice = state.liveCompaction;
@@ -388,26 +384,51 @@ export function useWumingClient() {
 				models.find((candidate) => candidate.authenticated)?.model ??
 				models[0]?.model;
 			if (selectedModel) localStorage.setItem("wuming.model", JSON.stringify(selectedModel));
+			else localStorage.removeItem("wuming.model");
 			return { ...current, models, selectedModel };
 		});
 		return models;
 	}, []);
 
+	const [modelSettingsRevision, setModelSettingsRevision] = useState(0);
+	const officialAccounts = useCallback(
+		async (
+			command: Extract<Command, { type: `model.official.${string}` }> = { type: "model.official.list" }
+		): Promise<OfficialAccount[]> => {
+			const result = await requestRef.current?.(command);
+			if (result?.type !== "model.official.accounts") throw new Error("Official accounts are unavailable");
+			return result.accounts;
+		},
+		[]
+	);
+	const listCustomMediaModels = useCallback(async () => {
+		const result = await requestRef.current?.({ type: "model.custom.media.list" });
+		if (result?.type !== "model.custom.media.list") throw new Error("无法读取已添加的生成模型");
+		return result.models;
+	}, []);
 	const configureCustomModels = useCallback(
 		async (configs: CustomModelConfig[]) => {
 			const configured: ModelMetadata[] = [];
-			for (const config of configs) {
-				const result = await requestRef.current?.({ type: "model.custom.set", config });
-				if (result?.type !== "model.custom.configured") throw new Error(`自定义模型 ${config.id} 配置失败`);
-				configured.push(result.model);
+			let available: ModelMetadata[] = [];
+			try {
+				for (const config of configs) {
+					const result = await requestRef.current?.({ type: "model.custom.set", config });
+					if (result?.type !== "model.custom.configured") throw new Error(`自定义模型 ${config.id} 配置失败`);
+					configured.push(result.model);
+				}
+			} finally {
+				setModelSettingsRevision((value) => value + 1);
+				available = await refreshModels();
 			}
-			const selected = configured.at(-1)?.model;
+			const chatModels = configured.filter((item) =>
+				available.some((candidate) => sameModel(item.model, candidate.model))
+			);
+			const selected = chatModels.at(-1)?.model;
 			if (selected) {
 				localStorage.setItem("wuming.model", JSON.stringify(selected));
 				setState((current) => ({ ...current, selectedModel: selected }));
 			}
-			await refreshModels();
-			return configured;
+			return chatModels;
 		},
 		[refreshModels]
 	);
@@ -421,11 +442,16 @@ export function useWumingClient() {
 		[configureCustomModels]
 	);
 
-	const discoverCustomModels = useCallback(async (connection: CustomModelConnection) => {
-		const result = await requestRef.current?.({ type: "model.custom.discover", connection });
-		if (result?.type !== "model.custom.discovered") throw new Error("无法从该地址获取模型列表");
-		return result;
-	}, []);
+	const discoverCustomModels = useCallback(
+		async (connection: CustomModelConnection) => {
+			const result = await requestRef.current?.({ type: "model.custom.discover", connection });
+			if (result?.type !== "model.custom.discovered") throw new Error("无法从该地址获取模型列表");
+			setModelSettingsRevision((value) => value + 1);
+			await refreshModels();
+			return result;
+		},
+		[refreshModels]
+	);
 
 	const listCustomModelServices = useCallback(async (): Promise<CustomModelService[]> => {
 		const result = await requestRef.current?.({ type: "model.custom.service.list" });
@@ -433,11 +459,16 @@ export function useWumingClient() {
 		return result.services;
 	}, []);
 
-	const refreshCustomModelService = useCallback(async (provider: string) => {
-		const result = await requestRef.current?.({ type: "model.custom.service.refresh", provider });
-		if (result?.type !== "model.custom.discovered") throw new Error("无法刷新模型服务");
-		return result;
-	}, []);
+	const refreshCustomModelService = useCallback(
+		async (provider: string) => {
+			const result = await requestRef.current?.({ type: "model.custom.service.refresh", provider });
+			if (result?.type !== "model.custom.discovered") throw new Error("无法刷新模型服务");
+			setModelSettingsRevision((value) => value + 1);
+			await refreshModels();
+			return result;
+		},
+		[refreshModels]
+	);
 
 	const removeCustomModelService = useCallback(async (provider: string) => {
 		const result = await requestRef.current?.({ type: "model.custom.service.remove", provider });
@@ -454,6 +485,7 @@ export function useWumingClient() {
 		async (model: ModelRef) => {
 			const result = await requestRef.current?.({ type: "model.custom.remove", model });
 			if (result?.type !== "model.custom.removed") throw new Error("删除自定义模型失败");
+			setModelSettingsRevision((value) => value + 1);
 			await refreshModels();
 		},
 		[refreshModels]
@@ -477,6 +509,26 @@ export function useWumingClient() {
 	const setMediaModel = useCallback(async (config: MediaModelConfig) => {
 		const result = await requestRef.current?.({ type: "model.media.set", config });
 		if (result?.type !== "model.media.settings") throw new Error("无法保存生成模型");
+		return result.settings;
+	}, []);
+	const setDefaultImageModel = useCallback(async (model: ModelRef) => {
+		const result = await requestRef.current?.({ type: "model.media.image.default", model });
+		if (result?.type !== "model.media.settings") throw new Error("无法设置默认生图模型");
+		return result.settings;
+	}, []);
+	const setDefaultVideoModel = useCallback(async (model: ModelRef) => {
+		const result = await requestRef.current?.({ type: "model.media.video.default", model });
+		if (result?.type !== "model.media.settings") throw new Error("无法设置默认视频模型");
+		return result.settings;
+	}, []);
+	const removeVideoModel = useCallback(async (model: ModelRef) => {
+		const result = await requestRef.current?.({ type: "model.media.video.remove", model });
+		if (result?.type !== "model.media.settings") throw new Error("无法删除视频模型");
+		return result.settings;
+	}, []);
+	const removeImageModel = useCallback(async (model: ModelRef) => {
+		const result = await requestRef.current?.({ type: "model.media.image.remove", model });
+		if (result?.type !== "model.media.settings") throw new Error("无法删除生图模型");
 		return result.settings;
 	}, []);
 	const removeMediaModel = useCallback(async (kind: MediaKind) => {
@@ -772,6 +824,7 @@ export function useWumingClient() {
 
 	useEffect(() => {
 		let disposed = false;
+		let helloReceived = false;
 		let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 		if (!token) {
 			requestRef.current = undefined;
@@ -786,11 +839,7 @@ export function useWumingClient() {
 			return;
 		}
 		setState((current) => ({ ...current, connection: "connecting", error: undefined }));
-		const scheme = location.protocol === "https:" ? "wss" : "ws";
-		const ws = new WebSocket(desktopConnection()?.websocketUrl ?? `${scheme}://${location.host}/api/ws`, [
-			"wuming.v1",
-			bearerProtocol(token),
-		]);
+		const ws = new WebSocket(gatewayWebSocketUrl(), ["wuming.v1", bearerProtocol(token)]);
 
 		const request = (command: Command, idempotencyKey = id()) =>
 			new Promise<CommandResult>((resolve, reject) => {
@@ -831,7 +880,15 @@ export function useWumingClient() {
 		};
 
 		const applyMessage = (message: ServerMessage) => {
+			if (message.type === "task.notification") {
+				if (localStorage.getItem("wuming.taskNotifications") !== "false") {
+					const { id, sessionId, workspaceId, kind } = message;
+					void window.wumingDesktop?.notifications?.show({ id, sessionId, workspaceId, kind }).catch(() => undefined);
+				}
+				return;
+			}
 			if (message.type === "hello") {
+				helloReceived = true;
 				restoringSession.current = true;
 				if (!desktopConnection()) localStorage.setItem("wuming.token", token);
 				capabilitiesRef.current = message.capabilities;
@@ -1243,14 +1300,27 @@ export function useWumingClient() {
 						"run.trajectory",
 						"session.memory",
 						"evaluation",
+						...(legacyHello.current ? [] : ["task.notifications"]),
 					],
 					...(cursorRef.current ? { resumeCursor: cursorRef.current } : {}),
 				})
 			);
 		});
 		ws.addEventListener("message", (raw) => applyMessage(JSON.parse(String(raw.data)) as ServerMessage));
-		ws.addEventListener("close", () => {
+		ws.addEventListener("close", (event) => {
 			if (!disposed) {
+				// Older gateways reject unknown optional capabilities before hello.
+				// Retry once with the original capabilities; authentication is unchanged.
+				if (
+					!helloReceived &&
+					!legacyHello.current &&
+					event.code === 1002 &&
+					event.reason === "Invalid protocol message"
+				) {
+					legacyHello.current = true;
+					setReconnectAttempt((attempt) => attempt + 1);
+					return;
+				}
 				setState((current) => ({
 					...current,
 					connection: "disconnected",
@@ -1450,7 +1520,8 @@ export function useWumingClient() {
 			command: Extract<
 				Command,
 				{
-					type: "mcp.configure" | "mcp.configuration.get" | "mcp.trust" | "mcp.untrust" | "mcp.remove";
+					type:
+						"mcp.configure" | "mcp.configuration.get" | "mcp.trust" | "mcp.untrust" | "mcp.remove" | "mcp.setEnabled";
 				}
 			>
 		): Promise<CommandResult> => {
@@ -1473,8 +1544,13 @@ export function useWumingClient() {
 						};
 					return {
 						...current,
-						mcpServers: [...current.mcpServers.filter((server) => server.id !== result.server.id), result.server],
-						selectedMcpServer: result.server,
+						mcpServers: current.mcpServers.some((server) => server.id === result.server.id)
+							? current.mcpServers.map((server) => (server.id === result.server.id ? result.server : server))
+							: [...current.mcpServers, result.server],
+						selectedMcpServer:
+							command.type === "mcp.configure" || current.selectedMcpServer?.id === result.server.id
+								? result.server
+								: current.selectedMcpServer,
 					};
 				});
 			}
@@ -1564,6 +1640,12 @@ export function useWumingClient() {
 		},
 		[attachSession, refreshSessions]
 	);
+
+	const searchSessions = useCallback(async (workspaceId: string, query: string, archived: boolean) => {
+		const result = await requestRef.current?.({ type: "session.search", workspaceId, query, archived, limit: 30 });
+		if (result?.type !== "session.search") throw new Error("聊天搜索不可用");
+		return { matches: result.matches, truncated: result.truncated };
+	}, []);
 
 	const selectModel = useCallback(
 		(model: ModelRef) => {
@@ -1909,6 +1991,8 @@ export function useWumingClient() {
 				...artifacts.map((artifact) => ({ type: "artifact" as const, artifact })),
 			];
 			if (content.length === 0) throw new Error("请输入消息或添加附件");
+			const launchTeam = state.selectedSkill?.id === "team" || /^\/team(?:\s|$)/.test(text.trim());
+			if (launchTeam && snapshot.session.phase !== "idle") throw new Error("请先停止当前任务，或在新对话中启动团队");
 			const type =
 				snapshot.session.phase === "idle" ? "turn.prompt" : queueMode === "steer" ? "turn.steer" : "turn.follow_up";
 			await requestRef.current?.({
@@ -1917,6 +2001,10 @@ export function useWumingClient() {
 				content,
 				...(state.selectedSkill ? { skills: [state.selectedSkill.id] } : {}),
 			});
+			if (launchTeam)
+				setState((current) =>
+					current.selectedSkill === state.selectedSkill ? { ...current, selectedSkill: undefined } : current
+				);
 			await refreshRuns(snapshot.session.id);
 		},
 		[refreshRuns, state.selectedSkill]
@@ -1997,10 +2085,17 @@ export function useWumingClient() {
 				...(input.tokenBudget === undefined ? {} : { tokenBudget: input.tokenBudget }),
 			});
 			if (result?.type !== "subagent.created") throw new Error("子智能体创建失败");
-			setState((current) => ({
-				...current,
-				subagents: [result.subagent, ...current.subagents.filter((candidate) => candidate.id !== result.subagent.id)],
-			}));
+			setState((current) =>
+				current.snapshot?.session.id !== snapshot.session.id
+					? current
+					: {
+							...current,
+							subagents: [
+								result.subagent,
+								...current.subagents.filter((candidate) => candidate.id !== result.subagent.id),
+							],
+						}
+			);
 			return result.subagent;
 		},
 		[]
@@ -2058,10 +2153,14 @@ export function useWumingClient() {
 				...review,
 			});
 			if (result?.type !== "goal.created") throw new Error("目标创建失败");
-			setState((current) => ({
-				...current,
-				goals: [result.goal, ...current.goals.filter((goal) => goal.id !== result.goal.id)],
-			}));
+			setState((current) =>
+				current.snapshot?.session.id !== snapshot.session.id
+					? current
+					: {
+							...current,
+							goals: [result.goal, ...current.goals.filter((goal) => goal.id !== result.goal.id)],
+						}
+			);
 			return result.goal;
 		},
 		[]
@@ -2262,13 +2361,37 @@ export function useWumingClient() {
 		await refreshRuns(snapshot.session.id);
 	}, [refreshRuns]);
 
+	const agentTemplates = useCallback(async (command: Extract<Command, { type: `agent.template.${string}` }>) => {
+		const result = await requestRef.current?.(command);
+		if (result?.type !== "agent.templates") throw new Error("Agent template request failed");
+		return result;
+	}, []);
+	const listTeams = useCallback(async (workspaceId: string) => {
+		const result = await requestRef.current?.({ type: "team.list", workspaceId });
+		if (result?.type !== "team.list") throw new Error("Team list request failed");
+		return result.teams;
+	}, []);
+
+	const teamCommand = useCallback(
+		async (command: Exclude<Extract<Command, { type: `team.${string}` }>, { type: "team.list" }>) => {
+			const result = await requestRef.current?.(command);
+			if (result?.type !== "team.snapshot") throw new Error("Team request failed");
+			return result.team;
+		},
+		[]
+	);
+
 	return {
 		...state,
+		teamCommand,
+		agentTemplates,
+		listTeams,
 		token,
 		setToken,
 		selectWorkspace,
 		selectModel,
 		browseSessions,
+		searchSessions,
 		refreshSessions,
 		refreshUsageOverview,
 		refreshRuns,
@@ -2291,7 +2414,10 @@ export function useWumingClient() {
 		manageMcp,
 		refreshMcp,
 		refreshModels,
+		officialAccounts,
 		discoverCustomModels,
+		listCustomMediaModels,
+		modelSettingsRevision,
 		listCustomModelServices,
 		refreshCustomModelService,
 		removeCustomModelService,
@@ -2301,6 +2427,10 @@ export function useWumingClient() {
 		removeCustomModel,
 		testCustomModel,
 		listMediaModels,
+		setDefaultImageModel,
+		setDefaultVideoModel,
+		removeVideoModel,
+		removeImageModel,
 		discoverMediaModels,
 		setMediaModel,
 		removeMediaModel,

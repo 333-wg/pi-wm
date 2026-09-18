@@ -180,7 +180,7 @@ describe("model-driven skill discovery", () => {
 		expect(block?.type).toBe("text");
 		if (block?.type !== "text") throw new Error("No page");
 		expect(JSON.parse(block.text)).toMatchObject({
-			total: 7,
+			total: summaries.length,
 			nextOffset: 2,
 			skills: [{ id: "code-change" }, { id: "code-review" }],
 		});

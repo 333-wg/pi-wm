@@ -3,6 +3,49 @@ export interface DesktopConnection {
 	websocketUrl: string;
 }
 
+export interface BrowserTabState {
+	id: string;
+	url: string;
+	title: string;
+	loading: boolean;
+	error?: string;
+	canGoBack: boolean;
+	canGoForward: boolean;
+	zoom: number;
+}
+
+export interface BrowserState {
+	workspaceId: string;
+	sessionId: string;
+	revision: number;
+	activeId?: string;
+	tabs: BrowserTabState[];
+}
+
+export interface BrowserRequest {
+	workspaceId: string;
+	sessionId: string;
+	action:
+		| "state"
+		| "open"
+		| "hide"
+		| "activate"
+		| "close"
+		| "navigate"
+		| "back"
+		| "forward"
+		| "reload"
+		| "stop"
+		| "zoom"
+		| "devtools"
+		| "external"
+		| "bounds";
+	tabId?: string | undefined;
+	url?: string | undefined;
+	zoom?: number;
+	bounds?: { x: number; y: number; width: number; height: number };
+}
+
 export interface DesktopUpdateState {
 	revision: number;
 	status: "disabled" | "idle" | "checking" | "latest" | "available" | "downloading" | "ready" | "installing" | "error";
@@ -32,10 +75,24 @@ export type DesktopUpdateAction =
 declare global {
 	interface Window {
 		wumingDesktop?: {
+			browser?: {
+				invoke(request: BrowserRequest): Promise<BrowserState>;
+				onFocusAddress(callback: (owner: { workspaceId: string; sessionId: string }) => void): () => void;
+				onState(callback: (state: BrowserState) => void): () => void;
+			};
 			connect(): Promise<DesktopConnection>;
 			windowChrome?: boolean;
 			openMenu?(): Promise<void>;
 			setWindowTheme?(theme: "light" | "dark"): Promise<void>;
+			notifications?: {
+				show(value: {
+					id: string;
+					sessionId: string;
+					workspaceId: string;
+					kind: "completed" | "failed" | "approval";
+				}): Promise<boolean>;
+				onOpen(callback: (target: { sessionId: string; workspaceId: string }) => void): () => void;
+			};
 			updates?: {
 				invoke(action: DesktopUpdateAction, value?: boolean): Promise<DesktopUpdateState>;
 				onState(callback: (state: DesktopUpdateState) => void): () => void;

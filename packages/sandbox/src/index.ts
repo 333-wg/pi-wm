@@ -13,3 +13,5 @@ export * from "./workspace-files.js";
 export * from "./workspace-inspector.js";
 export * from "./workspace-git.js";
 export * from "./workspace-search.js";
+export * from "./computer.js";
+export * from "./computer-tools.js";

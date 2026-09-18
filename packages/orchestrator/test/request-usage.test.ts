@@ -11,6 +11,10 @@ const request: UsageRequestSummary = {
 	requestId: "request-1",
 	model,
 	usage: { ...EMPTY_USAGE, inputTokens: 100, cacheReadTokens: 900, outputTokens: 10, totalTokens: 1010 },
+	startedAt: 100,
+	firstContentAt: 150,
+	finishedAt: 200,
+	status: "complete",
 };
 
 async function queueTurn(orchestrator: SessionOrchestrator) {
@@ -34,6 +38,71 @@ async function queueTurn(orchestrator: SessionOrchestrator) {
 }
 
 describe("live request usage", () => {
+	it.each(["complete", "failure", "retry"] as const)(
+		"settles timed requests after desktop tools without losing progress (%s)",
+		async (outcome) => {
+			const store = new SqliteOrchestratorStore(":memory:");
+			let calls = 0;
+			let launches = 0;
+			const runtime: AgentRuntime = {
+				async executeTurn(input) {
+					calls++;
+					if (calls > 1) {
+						expect(input.snapshot.transcript.filter((item) => item.type === "tool")).toHaveLength(1);
+						expect(input.snapshot.usage).toEqual(request.usage);
+						return { items: [] };
+					}
+					launches++;
+					const item = {
+						id: "launched",
+						type: "tool" as const,
+						toolCallId: "launch",
+						toolName: "computer_open",
+						createdAt: 100,
+						status: "complete" as const,
+						input: { app_ref: "opaque-ref" },
+						content: [{ type: "text" as const, text: '{"performed":true,"outcome":"launch_requested"}' }],
+						isError: false,
+					};
+					input.onTranscriptItem?.(item);
+					input.onRequestUsage?.(request);
+					return {
+						items: [item],
+						usage: request.usage,
+						requests: [request],
+						tools: [{ toolName: "computer_open", callCount: 1, succeededCount: 1, usage: EMPTY_USAGE }],
+						...(outcome === "complete"
+							? {}
+							: {
+									failure: {
+										code: "runtime_error" as const,
+										message: "Connection error.",
+										kind: "provider_network" as const,
+										retryable: outcome === "retry",
+									},
+								}),
+					};
+				},
+			};
+			try {
+				const orchestrator = new SessionOrchestrator(store, runtime, { maxRetries: 1, retryBaseDelayMs: 0 });
+				const sessionId = await queueTurn(orchestrator);
+				await orchestrator.drainSession(sessionId);
+				const operation = store.listOperations(sessionId)[0]!;
+				expect(operation.status).toBe(outcome === "failure" ? "failed" : "completed");
+				expect(operation.error).toBe(outcome === "failure" ? "Connection error." : undefined);
+				expect(operation.attempt).toBe(outcome === "retry" ? 2 : 1);
+				expect(launches).toBe(1);
+				const saved = store.loadSnapshot(sessionId)!;
+				expect(saved.usageByTurn?.[0]?.requests).toEqual([request]);
+				expect(saved.transcript.filter((item) => item.type === "tool")).toHaveLength(1);
+				expect(replaySessionEvents(store.loadEvents(sessionId))).toEqual(saved);
+			} finally {
+				store.close();
+			}
+		}
+	);
+
 	it("persists during execution, replaces corrections and reconciles without charging twice", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "wuming-request-usage-"));
 		const path = join(directory, "state.db");

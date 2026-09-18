@@ -2,7 +2,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import { verifyCapabilityPlan, type CapabilityManifest } from "@wuming/capability-kernel";
 import { verifyContextPlan } from "@wuming/context-engine";
-import type { DurableOperation } from "@wuming/orchestrator";
+import { SessionOrchestrator, SqliteOrchestratorStore, type DurableOperation } from "@wuming/orchestrator";
 import type { ContextUsageState, SessionSnapshot, TranscriptItem, UsageRequestSummary } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
 import { PiAgentRuntime, type PiSessionLike } from "../src/index.js";
@@ -150,6 +150,45 @@ class FakePiSession implements PiSessionLike {
 		this.disposed = true;
 	}
 }
+
+it("records request timing, first content and failure without carrying timing into the next request", async () => {
+	const session = new FakePiSession();
+	const observations: UsageRequestSummary[] = [];
+	let now = 100;
+	session.emitScript = async (current) => {
+		const partial = assistant([{ type: "text", text: "hello" }], "stop", 1, 1);
+		current.emit({ type: "message_start", message: partial });
+		expect(observations.at(-1)).toMatchObject({ startedAt: 100, status: "pending" });
+		now = 150;
+		current.emit({
+			type: "message_update",
+			message: partial,
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello", partial },
+		});
+		now = 200;
+		current.emit({ type: "message_end", message: partial });
+		now = 300;
+		current.emit({ type: "message_start", message: partial });
+		now = 350;
+		current.emit({ type: "message_end", message: assistant([], "error", 0, 0) });
+	};
+	const runtime = new PiAgentRuntime({ createSession: async () => session, clock: () => now });
+	const result = await runtime.executeTurn({
+		operation: operation([{ type: "text", text: "inspect" }]),
+		snapshot,
+		signal: new AbortController().signal,
+		onProgress: () => {},
+		onRequestUsage: (request) => observations.push(request),
+	});
+	expect(result.requests?.[0]).toMatchObject({
+		startedAt: 100,
+		firstContentAt: 150,
+		finishedAt: 200,
+		status: "complete",
+	});
+	expect(result.requests?.[1]).toMatchObject({ startedAt: 300, finishedAt: 350, status: "error" });
+	expect(result.requests?.[1]).not.toHaveProperty("firstContentAt");
+});
 
 it("reports each completed model request while the tool loop is still running", async () => {
 	const session = new FakePiSession();
@@ -434,6 +473,91 @@ function operation(content: DurableOperation["payload"]["content"], skills?: str
 }
 
 describe("PiAgentRuntime", () => {
+	it("recovers a connection failure after desktop tools through the real event store", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		const session = new FakePiSession();
+		let launches = 0;
+		session.emitScript = async (current) => {
+			if (current.prompts.length > 1) {
+				expect(current.prompts.at(-1)?.text).toContain("Resume the same unfinished task");
+				expect(current.prompts.at(-1)?.text).toContain('"toolCallId":"launch"');
+				expect(current.prompts.at(-1)?.text).toContain("Inspect current app/window state");
+				const done = assistant([{ type: "text", text: "continued" }], "stop", 5, 2);
+				current.emit({ type: "message_start", message: done });
+				current.emit({ type: "message_end", message: done });
+				return;
+			}
+			const call = assistant(
+				[{ type: "toolCall", id: "launch", name: "computer_open", arguments: { app_ref: "ref" } }],
+				"toolUse",
+				5,
+				2
+			);
+			current.emit({ type: "message_start", message: call });
+			current.emit({ type: "message_end", message: call });
+			current.emit({
+				type: "tool_execution_start",
+				toolCallId: "launch",
+				toolName: "computer_open",
+				args: { app_ref: "ref" },
+			});
+			launches++;
+			const result: ToolResultMessage = {
+				role: "toolResult",
+				toolCallId: "launch",
+				toolName: "computer_open",
+				content: [{ type: "text", text: '{"performed":true,"outcome":"launch_requested"}' }],
+				isError: false,
+				timestamp: 11,
+			};
+			current.emit({
+				type: "tool_execution_end",
+				toolCallId: "launch",
+				toolName: "computer_open",
+				result,
+				isError: false,
+			});
+			current.emit({ type: "message_end", message: result });
+			const failure = { ...assistant([], "error", 0, 0), errorMessage: "Connection error." };
+			current.emit({ type: "message_start", message: failure });
+			current.emit({ type: "message_end", message: failure });
+		};
+		const runtime = new PiAgentRuntime({ createSession: async () => session });
+		try {
+			const orchestrator = new SessionOrchestrator(store, runtime, { maxRetries: 1, retryBaseDelayMs: 0 });
+			const created = await orchestrator.createSession({
+				principalId: "test",
+				idempotencyKey: "create",
+				workspaceId: "test",
+				model: snapshot.model,
+				thinkingLevel: "off",
+				sandboxMode: "unrestricted",
+				approvalPolicy: "never",
+			});
+			const sessionId = created.snapshot.session.id;
+			await orchestrator.acceptTurn({
+				principalId: "test",
+				idempotencyKey: "turn",
+				sessionId,
+				mode: "prompt",
+				content: [{ type: "text", text: "Open the app and inspect it" }],
+			});
+			await orchestrator.drainSession(sessionId);
+			expect(store.listOperations(sessionId)[0]).toMatchObject({ status: "completed", attempt: 2 });
+			expect(launches).toBe(1);
+			expect(session.prompts).toHaveLength(2);
+			const saved = store.loadSnapshot(sessionId)!;
+			expect(saved.transcript.filter((item) => item.type === "tool")).toHaveLength(1);
+			expect(saved.usageByTurn?.[0]?.requests).toHaveLength(3);
+			expect(saved.usageByTurn?.[0]?.requests.every((request) => request.finishedAt !== undefined)).toBe(true);
+			expect(saved.usage.totalTokens).toBe(14);
+			expect(saved.usageByTurn?.[0]?.tools[0]?.callCount).toBe(1);
+		} finally {
+			await runtime[Symbol.asyncDispose]();
+			store.close();
+		}
+	});
+
 	it("rebuilds changed MCP tools in the same conversation at the next idle boundary", async () => {
 		let key = "before";
 		const sessions: FakePiSession[] = [];
@@ -630,6 +754,67 @@ describe("PiAgentRuntime", () => {
 			"workspace:README.md",
 		]);
 		expect(JSON.stringify(plan)).not.toContain("Authentication token refresh implementation.");
+	});
+
+	it("reconciles history before context budgeting and does not reinsert it after compaction", async () => {
+		const session = new FakePiSession();
+		let recovered = false;
+		let preparations = 0;
+		const turn = operation([{ type: "text", text: "continue" }]);
+		const previous = { ...turn, id: "previous", status: "interrupted" as const };
+		Object.assign(session, {
+			prepareForPrompt: async (input: import("../src/types.js").PiSessionRecovery) => {
+				preparations++;
+				expect(input.operations.map((item) => item.id)).toEqual(["previous"]);
+				if (recovered) return;
+				recovered = true;
+				session.contextUsage = { tokens: 995, contextWindow: 1000, percent: 99.5 };
+			},
+		});
+		const runtime = new PiAgentRuntime({
+			createSession: async () => session,
+			resolveRecoveryOperations: () => [previous, turn],
+			resolveContextBudget: () => ({ contextWindowTokens: 1000, reservedOutputTokens: 50, maxSystemTokens: 250 }),
+		});
+		try {
+			const signal = new AbortController().signal;
+			const contextPlan = await runtime.resolveContext({ snapshot, operation: turn, signal });
+			expect(session.compactCalls).toBe(1);
+			expect(contextPlan.budget.observedContextTokens).toBe(200);
+			await runtime.executeTurn({ snapshot, operation: turn, signal, contextPlan, onProgress: () => {} });
+			expect(preparations).toBe(2);
+			expect(session.compactCalls).toBe(1);
+			expect(session.prompts).toHaveLength(1);
+		} finally {
+			await runtime[Symbol.asyncDispose]();
+		}
+	});
+
+	it("does not reconcile historical messages while a tool approval is being resumed", async () => {
+		const session = new FakePiSession();
+		let recoveryReads = 0;
+		Object.assign(session, {
+			prepareForPrompt: async () => {
+				throw new Error("Approval leaf must not change");
+			},
+		});
+		const runtime = new PiAgentRuntime({
+			createSession: async () => session,
+			resolveRecoveryOperations: () => {
+				recoveryReads++;
+				return [];
+			},
+		});
+		try {
+			await runtime.resolveContext({
+				snapshot,
+				operation: { ...operation([{ type: "text", text: "approved" }]), approvalToolCallId: "pending" },
+				signal: new AbortController().signal,
+			});
+			expect(recoveryReads).toBe(0);
+		} finally {
+			await runtime[Symbol.asyncDispose]();
+		}
 	});
 
 	it("rejects context drift before sending a model request", async () => {

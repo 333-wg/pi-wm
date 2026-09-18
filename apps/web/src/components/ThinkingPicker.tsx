@@ -1,3 +1,4 @@
+import { createTranslator, useT, type Translate } from "../lib/locale.js";
 import { ArrowLeft, Bot, Check, ChevronDown, ChevronRight, Info } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { ModelMetadata, ModelRef, ThinkingLevel } from "@wuming/protocol";
@@ -10,42 +11,50 @@ interface ThinkingOption {
 	strength: number;
 }
 
-const OPTIONS: ThinkingOption[] = [
-	{ id: "off", label: "关闭", description: "不额外推理，直接作答，最快也最省", strength: 0 },
-	{ id: "minimal", label: "极简", description: "只留一点推理余量，适合改一行字这类小活", strength: 1 },
-	{ id: "low", label: "低", description: "轻量推理，适合明确的小改动", strength: 2 },
-	{ id: "medium", label: "中", description: "默认档，多数任务在这里最划算", strength: 3 },
-	{ id: "high", label: "高", description: "更长的推理，适合排查问题与方案设计", strength: 4 },
-	{ id: "xhigh", label: "极高", description: "接近上限的推理预算，明显更慢更贵", strength: 5 },
-	{ id: "max", label: "最大", description: "用满模型的推理上限，留给真正难的题", strength: 6 },
+const getOptions = (t: Translate): ThinkingOption[] => [
+	{ id: "off", label: t("thinkingOff"), description: t("thinkingOffHint"), strength: 0 },
+	{ id: "minimal", label: t("thinkingMinimal"), description: t("thinkingMinimalHint"), strength: 1 },
+	{ id: "low", label: t("thinkingLow"), description: t("thinkingLowHint"), strength: 2 },
+	{ id: "medium", label: t("thinkingMedium"), description: t("thinkingMediumHint"), strength: 3 },
+	{ id: "high", label: t("thinkingHigh"), description: t("thinkingHighHint"), strength: 4 },
+	{ id: "xhigh", label: t("thinkingXhigh"), description: t("thinkingXhighHint"), strength: 5 },
+	{ id: "max", label: t("thinkingMax"), description: t("thinkingMaxHint"), strength: 6 },
 ];
 
-const BY_ID = new Map(OPTIONS.map((option) => [option.id, option]));
+const byId = (t: Translate) => new Map(getOptions(t).map((option) => [option.id, option]));
 
-export function thinkingLabel(level: ThinkingLevel): string {
-	return BY_ID.get(level)?.label ?? level;
+export function thinkingLabel(level: ThinkingLevel, t: Translate = createTranslator("zh")): string {
+	return byId(t).get(level)?.label ?? level;
 }
 
-export function thinkingOptions(): readonly ThinkingOption[] {
-	return THINKING_LEVELS.map((level) => BY_ID.get(level)).filter(
+export function thinkingOptions(t: Translate = createTranslator("zh")): readonly ThinkingOption[] {
+	const options = byId(t);
+	return THINKING_LEVELS.map((level) => options.get(level)).filter(
 		(option): option is ThinkingOption => option !== undefined
 	);
 }
 
-export function modelThinkingDescription(model: ModelMetadata): string {
-	if (!model.authenticated) return "模型未认证，暂不可用";
+export function modelThinkingDescription(model: ModelMetadata, t: Translate = createTranslator("zh")): string {
+	if (!model.authenticated) return t("modelUnauthenticated");
 	const mode = model.thinking?.mode;
-	if (mode === "unknown") return "思考能力未识别";
-	if (!model.reasoning) return "该模型不支持思考强度";
+	if (mode === "unknown") return t("thinkingUnknown");
+	if (!model.reasoning) return t("thinkingUnsupported");
 	const description =
 		mode === "budget"
-			? "支持思考预算"
+			? t("thinkingBudgetSupported")
 			: mode === "adaptive"
-				? "支持自适应思考强度"
+				? t("thinkingAdaptiveSupported")
 				: mode === "toggle"
-					? "支持推理，不分强度档位"
-					: "支持 Effort 思考强度";
-	return model.thinking?.source === "catalog" ? description + " · 接口待确认" : description;
+					? t("thinkingToggleSupported")
+					: t("thinkingEffortSupported");
+	const source = model.thinking?.source;
+	return source === "catalog"
+		? description + t("thinkingCatalogSource")
+		: source === "family"
+			? description + t("thinkingFamilySource")
+			: source === "manual"
+				? description + t("thinkingManualSource")
+				: description;
 }
 
 export function ThinkingPicker({
@@ -69,6 +78,7 @@ export function ThinkingPicker({
 	onSelectModel: (model: ModelRef) => void;
 	onChange: (level: ThinkingLevel) => Promise<void>;
 }) {
+	const t = useT();
 	const [open, setOpen] = useState(false);
 	const [showEffortMenu, setShowEffortMenu] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -77,14 +87,17 @@ export function ThinkingPicker({
 	const effortMenu = useRef<HTMLDivElement>(null);
 	const [effortPosition, setEffortPosition] = useState<CSSProperties>({});
 	const toggleOnly = selectedModel?.thinking?.mode === "toggle";
-	const options = thinkingOptions()
+	const options = thinkingOptions(t)
 		.filter((option) => supportedLevels === undefined || supportedLevels.includes(option.id))
 		.map((option) =>
-			toggleOnly && option.id !== "off" ? { ...option, label: "开启", description: "启用模型推理" } : option
+			toggleOnly && option.id !== "off"
+				? { ...option, label: t("thinkingOn"), description: t("thinkingEnable") }
+				: option
 		);
-	const selected = options.find((option) => option.id === level) ?? BY_ID.get(level) ?? OPTIONS[0]!;
-	const valueLabel = selectedModel?.thinking?.mode === "unknown" ? "未识别" : selected.label;
-	const controlLabel = selectedModel?.thinking?.mode === "budget" ? "思考预算" : toggleOnly ? "推理" : "Effort";
+	const selected = options.find((option) => option.id === level) ?? byId(t).get(level) ?? getOptions(t)[0]!;
+	const valueLabel = selectedModel?.thinking?.mode === "unknown" ? t("unrecognized") : selected.label;
+	const controlLabel =
+		selectedModel?.thinking?.mode === "budget" ? t("thinkingBudget") : toggleOnly ? t("thinkingReasoning") : "Effort";
 	const locked = modelSelectionDisabled || models.length === 0;
 	const effortLocked = disabled || !supported;
 
@@ -176,15 +189,15 @@ export function ThinkingPicker({
 		}
 	};
 
-	const modelLabel = selectedModel?.name ?? "选择模型";
+	const modelLabel = selectedModel?.name ?? t("chooseModel");
 	const hint = locked
-		? "请先在设置中添加可用模型"
+		? t("addAvailableModel")
 		: effortLocked
 			? supported
-				? "会话空闲时可更改思考强度"
+				? t("thinkingLocked")
 				: selectedModel
-					? modelThinkingDescription(selectedModel)
-					: "思考能力未识别"
+					? modelThinkingDescription(selectedModel, t)
+					: t("thinkingUnknown")
 			: selected.description;
 
 	return (
@@ -193,7 +206,7 @@ export function ThinkingPicker({
 				className="thinking-trigger"
 				type="button"
 				disabled={locked || saving}
-				aria-label={`模型：${modelLabel}，思考强度：${valueLabel}`}
+				aria-label={t("modelAndThinking", { model: modelLabel, effort: valueLabel })}
 				aria-haspopup="menu"
 				aria-expanded={open}
 				aria-busy={saving}
@@ -210,7 +223,7 @@ export function ThinkingPicker({
 			</button>
 			{open && (
 				<div className="thinking-menu-wrapper">
-					<div className="thinking-menu" role="menu" aria-label="模型设置">
+					<div className="thinking-menu" role="menu" aria-label={t("modelMenu")}>
 						<div className="thinking-model-options">
 							{models.map((model) => (
 								<button
@@ -229,13 +242,13 @@ export function ThinkingPicker({
 											<Bot size={15} />
 											<strong>{model.name}</strong>
 										</span>
-										<span className="thinking-model-option-desc">{modelThinkingDescription(model)}</span>
+										<span className="thinking-model-option-desc">{modelThinkingDescription(model, t)}</span>
 									</span>
 									{model.model.provider === selectedModel?.model.provider &&
 										model.model.id === selectedModel?.model.id && <Check className="thinking-check" size={20} />}
 								</button>
 							))}
-							{models.length === 0 && <div className="thinking-menu-empty">请在设置中添加模型</div>}
+							{models.length === 0 && <div className="thinking-menu-empty">{t("addModelInSettings")}</div>}
 						</div>
 						<div className="thinking-menu-divider" />
 						<button
@@ -260,22 +273,20 @@ export function ThinkingPicker({
 						<div
 							className="thinking-effort-menu"
 							role="menu"
-							aria-label="思考强度"
+							aria-label={t("thinkingEffort")}
 							ref={effortMenu}
 							style={effortPosition}
 						>
 							<button
 								className="icon-button"
 								type="button"
-								aria-label="返回模型设置"
-								title="返回模型设置"
+								aria-label={t("backToModelSettings")}
+								title={t("backToModelSettings")}
 								onClick={() => setShowEffortMenu(false)}
 							>
 								<ArrowLeft size={16} />
 							</button>
-							{!toggleOnly && (
-								<div className="thinking-menu-intro">更高的思考强度意味着更全面的回答，但会更慢并更快消耗额度。</div>
-							)}
+							{!toggleOnly && <div className="thinking-menu-intro">{t("thinkingEffortHint")}</div>}
 							<div className="thinking-options">
 								{options.map((option) => (
 									<button
@@ -290,7 +301,7 @@ export function ThinkingPicker({
 										<span className="thinking-option-content">
 											<span className="thinking-option-header">
 												<strong>{option.label}</strong>
-												{option.id === "medium" && <span className="thinking-badge">默认</span>}
+												{option.id === "medium" && <span className="thinking-badge">{t("default")}</span>}
 												{option.id === "max" && <Info size={14} className="thinking-info" />}
 											</span>
 											<span className="thinking-option-desc">{option.description}</span>

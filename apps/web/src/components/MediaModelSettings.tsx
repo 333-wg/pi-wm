@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
-import { Image, Video, Save, Trash2, RefreshCw, ListFilter, Star } from "lucide-react";
+import { Image, Video, Save, Trash2, RefreshCw, ListFilter, Star, Pencil } from "lucide-react";
 import type {
 	CustomModelCandidate,
+	CustomModelConfig,
+	CustomModelSettings,
+	ModelRef,
 	MediaKind,
 	MediaModelConfig,
 	MediaModelDiscoveryConnection,
@@ -10,6 +13,14 @@ import type {
 } from "@wuming/protocol";
 
 interface Props {
+	onSetDefaultVideo: (model: ModelRef) => Promise<SavedModel[]>;
+	onRemoveVideo: (model: ModelRef) => Promise<SavedModel[]>;
+	onSetDefaultImage: (model: ModelRef) => Promise<SavedModel[]>;
+	onRemoveImage: (model: ModelRef) => Promise<SavedModel[]>;
+	revision: number;
+	onListCatalog: () => Promise<CustomModelSettings[]>;
+	onRemoveCatalog: (model: ModelRef) => Promise<void>;
+	onConfigureCatalog: (configs: CustomModelConfig[]) => Promise<unknown>;
 	connected: boolean;
 	onList: () => Promise<SavedModel[]>;
 	onSave: (config: MediaModelConfig) => Promise<SavedModel[]>;
@@ -20,11 +31,16 @@ interface Props {
 function ModelForm({
 	kind,
 	saved,
+	managed = false,
 	connected,
 	onSave,
 	onRemove,
 	onDiscover,
-}: Omit<Props, "onList"> & { kind: MediaKind; saved?: SavedModel | undefined }) {
+}: Pick<Props, "connected" | "onSave" | "onRemove" | "onDiscover"> & {
+	kind: MediaKind;
+	saved?: SavedModel | undefined;
+	managed?: boolean;
+}) {
 	const [baseUrl, setBaseUrl] = useState(saved?.baseUrl ?? "");
 	const [model, setModel] = useState(saved?.model ?? "");
 	const [apiKey, setApiKey] = useState("");
@@ -97,6 +113,7 @@ function ModelForm({
 				void perform(async () => {
 					await onSave({
 						kind,
+						...(kind === "video" && saved?.provider ? { provider: saved.provider } : {}),
 						baseUrl: baseUrl.trim(),
 						model: model.trim(),
 						...(kind === "image" ? { models: imageModels } : {}),
@@ -111,7 +128,7 @@ function ModelForm({
 		>
 			<div className="media-model-heading">
 				{kind === "image" ? <Image size={18} /> : <Video size={18} />}
-				<h4>{kind === "image" ? "默认生图模型" : "默认生视频模型"}</h4>
+				<h4>{kind === "image" ? "添加生图服务" : saved ? "视频模型配置" : "添加视频服务"}</h4>
 				<span>{saved ? (kind === "image" ? `已配置 ${saved.models?.length ?? 1} 个` : "已配置") : "未配置"}</span>
 			</div>
 			<fieldset disabled={!connected || busy}>
@@ -151,6 +168,7 @@ function ModelForm({
 						type="url"
 						required
 						value={baseUrl}
+						readOnly={kind === "video" && Boolean(saved?.provider)}
 						placeholder="https://api.openai.com/v1"
 						autoComplete="off"
 						onChange={(event) => {
@@ -160,11 +178,12 @@ function ModelForm({
 					/>
 				</label>
 				<label>
-					{kind === "image" ? "默认模型 ID" : "模型 ID"}
+					模型 ID
 					<input
 						required
 						maxLength={200}
 						value={model}
+						readOnly={kind === "video" && Boolean(saved?.provider)}
 						autoComplete="off"
 						onChange={(event) => setModel(event.target.value)}
 					/>
@@ -174,6 +193,7 @@ function ModelForm({
 					<input
 						type="password"
 						value={apiKey}
+						readOnly={managed}
 						autoComplete="new-password"
 						placeholder={saved ? "已保存，留空不修改" : "输入 API Key"}
 						onChange={(event) => {
@@ -257,12 +277,13 @@ function ModelForm({
 					<button
 						type="button"
 						className="secondary-button"
-						disabled={!canDiscover}
+						disabled={!canDiscover || (kind === "video" && Boolean(saved?.provider))}
 						onClick={() =>
 							void perform(async () => {
 								setCandidates([]);
 								const values = await onDiscover({
 									kind,
+									...(saved?.provider ? { provider: saved.provider } : {}),
 									baseUrl: baseUrl.trim(),
 									...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
 								});
@@ -289,8 +310,8 @@ function ModelForm({
 					<button
 						type="button"
 						className="icon-button"
-						title="移除默认模型"
-						aria-label="移除默认模型"
+						title="移除此模型"
+						aria-label="移除此模型"
 						disabled={!saved}
 						onClick={() => {
 							if (window.confirm(`移除${kind === "image" ? "生图" : "生视频"}默认模型配置？`))
@@ -325,19 +346,30 @@ function ModelForm({
 
 export function MediaModelSettings(props: Props) {
 	const [settings, setSettings] = useState<SavedModel[]>([]);
+	const [catalog, setCatalog] = useState<CustomModelSettings[]>([]);
+	const [catalogBusy, setCatalogBusy] = useState(false);
+	const [catalogError, setCatalogError] = useState("");
 	const [loaded, setLoaded] = useState(false);
 	const [error, setError] = useState("");
 	const [revision, setRevision] = useState(0);
+	const [addImageOpen, setAddImageOpen] = useState(false);
+	const [addVideoOpen, setAddVideoOpen] = useState(false);
+	const [editingVideo, setEditingVideo] = useState<ModelRef>();
+	const imageSettings = settings.find((value) => value.kind === "image");
+	const videoSettings = settings.find((value) => value.kind === "video");
+	const videoToEdit = videoSettings?.availableModels?.find(
+		(item) => item.provider === editingVideo?.provider && item.id === editingVideo.id
+	);
 	useEffect(() => {
 		let disposed = false;
 		setLoaded(false);
 		setError("");
 		if (props.connected)
-			void props
-				.onList()
-				.then((values) => {
+			void Promise.all([props.onList(), props.onListCatalog()])
+				.then(([values, models]) => {
 					if (!disposed) {
 						setSettings(values);
+						setCatalog(models);
 						setLoaded(true);
 					}
 				})
@@ -347,10 +379,239 @@ export function MediaModelSettings(props: Props) {
 		return () => {
 			disposed = true;
 		};
-	}, [props.connected, props.onList, revision]);
+	}, [props.connected, props.onList, props.onListCatalog, props.revision, revision]);
+	async function catalogAction(action: () => Promise<unknown>) {
+		setCatalogBusy(true);
+		setCatalogError("");
+		try {
+			await action();
+		} catch (failure) {
+			setCatalogError(failure instanceof Error ? failure.message : "操作失败");
+		} finally {
+			setCatalogBusy(false);
+		}
+	}
+	async function saveVideo(config: MediaModelConfig) {
+		const values = await props.onSave(config);
+		setSettings(values);
+		return values;
+	}
 	return (
 		<section className="media-model-settings" aria-label="图片与视频生成模型">
 			<h3>图片与视频生成</h3>
+			{catalogError && (
+				<div className="media-model-error" role="alert">
+					{catalogError}
+				</div>
+			)}
+			<div className="media-imported-models">
+				<div className="saved-models-heading">
+					<strong>已添加生图模型</strong>
+					<span>{imageSettings?.availableModels?.length ?? 0}</span>
+				</div>
+				{(imageSettings?.availableModels ?? []).map((item) => {
+					const active = imageSettings?.provider === item.provider && imageSettings.model === item.id;
+					const original = catalog.find(
+						(candidate) => candidate.model.provider === item.provider && candidate.model.id === item.id
+					);
+					return (
+						<div className="custom-model-row" key={`${item.provider}/${item.id}`} data-provider={item.provider}>
+							<span className="custom-model-copy">
+								<strong>{item.name}</strong>
+								<small>{item.id}</small>
+								<small>{item.baseUrl}</small>
+							</span>
+							<div className="custom-model-row-actions">
+								{original && (
+									<select
+										className="model-kind-select"
+										aria-label={`模型类型：${item.id}`}
+										value="image"
+										disabled={catalogBusy || !props.connected || !loaded}
+										onChange={(event) => {
+											const { model, thinkingLevels: _levels, ...config } = original;
+											void catalogAction(() =>
+												props.onConfigureCatalog([
+													{
+														...config,
+														provider: model.provider,
+														id: model.id,
+														kind: event.target.value as "chat" | "image" | "video",
+													},
+												])
+											);
+										}}
+									>
+										<option value="chat">对话</option>
+										<option value="image">生图</option>
+										<option value="video">视频</option>
+									</select>
+								)}
+								<button
+									type="button"
+									className="icon-button"
+									title={active ? "当前默认模型" : "设为默认模型"}
+									aria-label={`启用默认模型：${item.id}`}
+									aria-pressed={active}
+									disabled={catalogBusy || !props.connected || !loaded || active}
+									onClick={() =>
+										void catalogAction(async () =>
+											setSettings(await props.onSetDefaultImage({ provider: item.provider, id: item.id }))
+										)
+									}
+								>
+									<Star size={15} fill={active ? "currentColor" : "none"} />
+								</button>
+								<button
+									type="button"
+									className="icon-button"
+									title="移除已添加模型"
+									aria-label={`移除模型：${item.id}`}
+									disabled={catalogBusy || !props.connected || !loaded}
+									onClick={() => {
+										if (window.confirm(`移除已添加的模型 ${item.name}？`))
+											void catalogAction(async () => {
+												const ref = { provider: item.provider, id: item.id };
+												if (item.custom) await props.onRemoveCatalog(ref);
+												else setSettings(await props.onRemoveImage(ref));
+											});
+									}}
+								>
+									<Trash2 size={15} />
+								</button>
+							</div>
+						</div>
+					);
+				})}
+			</div>
+			<details
+				className="media-add-image-service"
+				open={addImageOpen}
+				onToggle={(event) => setAddImageOpen(event.currentTarget.open)}
+			>
+				<summary>手动添加生图服务</summary>
+				{addImageOpen && (
+					<ModelForm
+						kind="image"
+						connected={props.connected && loaded}
+						onDiscover={props.onDiscover}
+						onRemove={props.onRemove}
+						onSave={async (config) => {
+							let values = await props.onSave(config);
+							if (
+								imageSettings?.provider &&
+								values.some((value) =>
+									value.availableModels?.some(
+										(item) => item.provider === imageSettings.provider && item.id === imageSettings.model
+									)
+								)
+							)
+								values = await props.onSetDefaultImage({ provider: imageSettings.provider, id: imageSettings.model });
+							setSettings(values);
+							setAddImageOpen(false);
+							return values;
+						}}
+					/>
+				)}
+			</details>
+			{(() => {
+				const items = videoSettings?.availableModels ?? [];
+				return (
+					<div className="media-imported-models">
+						<div className="saved-models-heading">
+							<strong>已添加视频模型</strong>
+							<span>{items.length}</span>
+						</div>
+						{items.map((item) => {
+							const active = videoSettings?.provider === item.provider && videoSettings.model === item.id;
+							const original = catalog.find(
+								(candidate) => candidate.model.provider === item.provider && candidate.model.id === item.id
+							);
+							return (
+								<div className="custom-model-row" key={`${item.provider}/${item.id}`} data-provider={item.provider}>
+									<span className="custom-model-copy">
+										<strong>{item.name}</strong>
+										<small>{item.id}</small>
+										<small>{item.baseUrl}</small>
+									</span>
+									<div className="custom-model-row-actions">
+										{original && (
+											<select
+												className="model-kind-select"
+												aria-label={`模型类型：${item.id}`}
+												value="video"
+												disabled={catalogBusy || !props.connected}
+												onChange={(event) => {
+													const nextKind = event.target.value as "chat" | "image" | "video";
+													const { model, thinkingLevels: _levels, ...config } = original;
+													void catalogAction(() =>
+														props.onConfigureCatalog([
+															{ ...config, provider: model.provider, id: model.id, kind: nextKind },
+														])
+													);
+												}}
+											>
+												<option value="chat">对话</option>
+												<option value="image">生图</option>
+												<option value="video">视频</option>
+											</select>
+										)}
+										<button
+											type="button"
+											className="icon-button"
+											title="视频模型配置"
+											aria-label={`配置视频模型：${item.id}`}
+											aria-expanded={videoToEdit?.provider === item.provider && videoToEdit.id === item.id}
+											disabled={catalogBusy || !props.connected || !loaded}
+											onClick={() =>
+												setEditingVideo(
+													videoToEdit?.provider === item.provider && videoToEdit.id === item.id
+														? undefined
+														: { provider: item.provider, id: item.id }
+												)
+											}
+										>
+											<Pencil size={15} />
+										</button>
+										<button
+											type="button"
+											className="icon-button"
+											title={active ? "当前默认模型" : "设为默认模型"}
+											aria-label={`启用默认模型：${item.id}`}
+											aria-pressed={active}
+											disabled={catalogBusy || !props.connected || active}
+											onClick={() =>
+												void catalogAction(async () =>
+													setSettings(await props.onSetDefaultVideo({ provider: item.provider, id: item.id }))
+												)
+											}
+										>
+											<Star size={15} fill={active ? "currentColor" : "none"} />
+										</button>
+										<button
+											type="button"
+											className="icon-button"
+											title="移除已添加模型"
+											aria-label={`移除模型：${item.id}`}
+											disabled={catalogBusy || !props.connected}
+											onClick={() => {
+												if (window.confirm(`移除已添加的模型 ${item.name}？`))
+													void catalogAction(async () => {
+														const ref = { provider: item.provider, id: item.id };
+														if (item.custom) await props.onRemoveCatalog(ref);
+														else setSettings(await props.onRemoveVideo(ref));
+													});
+											}}
+										>
+											<Trash2 size={15} />
+										</button>
+									</div>
+								</div>
+							);
+						})}
+					</div>
+				);
+			})()}
 			{error ? (
 				<div role="alert">
 					{error}
@@ -364,25 +625,54 @@ export function MediaModelSettings(props: Props) {
 					</button>
 				</div>
 			) : null}
-			{(["image", "video"] as const).map((kind) => (
+			{videoToEdit && (
 				<ModelForm
-					key={kind}
-					kind={kind}
-					saved={settings.find((value) => value.kind === kind)}
+					key={`${videoToEdit.provider}/${videoToEdit.id}`}
+					kind="video"
+					managed={videoToEdit.custom}
+					saved={{
+						kind: "video",
+						provider: videoToEdit.provider,
+						baseUrl: videoToEdit.baseUrl,
+						model: videoToEdit.id,
+						authenticated: true,
+						...(videoToEdit.videoProtocol ? { videoProtocol: videoToEdit.videoProtocol } : {}),
+						...(videoToEdit.videoReferenceFormat ? { videoReferenceFormat: videoToEdit.videoReferenceFormat } : {}),
+					}}
 					connected={props.connected && loaded}
-					onSave={async (config) => {
-						const values = await props.onSave(config);
-						setSettings(values);
-						return values;
-					}}
-					onRemove={async (value) => {
-						const values = await props.onRemove(value);
-						setSettings(values);
-						return values;
-					}}
+					onSave={saveVideo}
 					onDiscover={props.onDiscover}
+					onRemove={async () => {
+						const ref = { provider: videoToEdit.provider, id: videoToEdit.id };
+						if (videoToEdit.custom) await props.onRemoveCatalog(ref);
+						else await props.onRemoveVideo(ref);
+						const values = await props.onList();
+						setSettings(values);
+						setEditingVideo(undefined);
+						return values;
+					}}
 				/>
-			))}
+			)}
+			<details
+				className="media-add-image-service"
+				open={addVideoOpen}
+				onToggle={(event) => setAddVideoOpen(event.currentTarget.open)}
+			>
+				<summary>手动添加视频服务</summary>
+				{addVideoOpen && (
+					<ModelForm
+						kind="video"
+						connected={props.connected && loaded}
+						onDiscover={props.onDiscover}
+						onRemove={props.onRemove}
+						onSave={async (config) => {
+							const values = await saveVideo(config);
+							setAddVideoOpen(false);
+							return values;
+						}}
+					/>
+				)}
+			</details>
 		</section>
 	);
 }

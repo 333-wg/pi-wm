@@ -1,14 +1,24 @@
 import { GoalPlanEditor, GoalPlanView, newGoalPlan } from "./components/GoalPlan";
+import clover from "./assets/wuming-clover.png";
 import { findToolSubagent } from "./lib/subagent-navigation.js";
+import { connectionFailure, desktopContinuation, retrySummary, supersededFailure } from "./lib/failure-state.js";
 import { ChildConversationMenu } from "./components/ChildConversations.js";
+import { AgentTeamsWorkbench } from "./components/AgentTeamsWorkbench.js";
+import { PersistentAgentTeams } from "./components/PersistentAgentTeams.js";
 import { CompactionActivity } from "./components/CompactionActivity.js";
 import { GoalActivityCard } from "./components/GoalActivityCard";
 import { SkillManagerDialog } from "./components/SkillManagerDialog.js";
 import { McpView } from "./components/McpView.js";
 import { MediaModelSettings } from "./components/MediaModelSettings.js";
+import { ComputerUseSettings, useComputerUse } from "./components/ComputerUseSettings.js";
+import { OfficialAccountSettings } from "./components/OfficialAccountSettings.js";
+import { AgentTemplateSettings } from "./components/AgentTemplateSettings.js";
+import { TeamLaunchNotice } from "./components/TeamLaunchNotice.js";
 import { DesktopUpdateNotice, DesktopUpdateSettings, useDesktopUpdates } from "./components/DesktopUpdates.js";
 import { WelcomeScreen } from "./components/WelcomeScreen.js";
 import { ApprovalPanel } from "./components/ApprovalPanel.js";
+import { BrowserPanel } from "./components/BrowserPanel.js";
+import { OPEN_BROWSER_EVENT, previewUrl } from "./lib/browser-preview.js";
 import { DESKTOP_WELCOME_KEY, isDesktopWelcomePassword, readDesktopWelcome } from "./lib/welcome.js";
 import {
 	Activity,
@@ -34,10 +44,13 @@ import {
 	FolderOpen,
 	GitBranch,
 	GitCompareArrows,
+	Globe,
 	Hourglass,
 	TerminalSquare,
 	Trash2,
 	Upload,
+	UserRound,
+	Users,
 	Menu,
 	MoreHorizontal,
 	MessageSquareCode,
@@ -89,6 +102,7 @@ import type {
 	AutomationSchedule,
 	CommandResult,
 	CustomModelApi,
+	CustomModelKind,
 	CustomModelConfig,
 	CustomModelConnection,
 	CustomModelService,
@@ -120,6 +134,9 @@ import type {
 import { type LiveAssistant, type LiveRetry, type LiveTool, useWumingClient } from "./use-wuming-client.js";
 import { workspaceApi } from "./workspace-api.js";
 import { desktopConnection } from "./lib/desktop.js";
+import { RunDiagnostics } from "./components/RunDiagnostics";
+import { SessionSearch, type SearchSessions } from "./components/SessionSearch";
+import { TaskNotificationSettings } from "./components/TaskNotificationSettings";
 import { Markdown } from "./components/Markdown.js";
 import { ChangesView as WorkspaceChangesView } from "./components/ChangesView.js";
 import {
@@ -144,7 +161,7 @@ import { ShortcutsDialog } from "./components/ShortcutsDialog.js";
 import { ContextMeter, ContextPill } from "./components/ContextMeter.js";
 import { EvaluationDialog } from "./components/EvaluationDialog.js";
 import { PermissionPicker, type PermissionValue } from "./components/PermissionPicker.js";
-import { ThinkingPicker, thinkingLabel } from "./components/ThinkingPicker.js";
+import { ThinkingPicker, thinkingLabel, modelThinkingDescription } from "./components/ThinkingPicker.js";
 import { readStoredPermission, writeStoredPermission } from "./lib/permission-preference.js";
 import {
 	readStoredThinking,
@@ -158,50 +175,53 @@ import { anchorBefore, formatItemTime, formatItemTimestamp, hasVisibleContent, m
 import { groupConsecutiveTools } from "./lib/tool-groups.js";
 import { ToolGroup } from "./components/ToolGroup.js";
 import { isNearBottom } from "./lib/scroll.js";
-import { themeLabel, type ThemeChoice } from "./lib/theme.js";
-import { localeLabel, useLocale, useT } from "./lib/locale.js";
+import { themeLabel } from "./lib/theme.js";
+import { ThemeSettings } from "./components/ThemeSettings.js";
+import { createTranslator, localeLabel, useLocale, useT, type LocaleKey, type Translate } from "./lib/locale.js";
 import { isImplicitWorkspace, resolveNewChatWorkspace } from "./lib/workspaces.js";
 import { useTheme } from "./use-theme.js";
 import { applyCompletion, cycleIndex, detectTrigger, quoteMention, type Trigger } from "./lib/suggest.js";
-const TerminalView = lazy(() => import("./terminal-view.js").then((module) => ({ default: module.TerminalView })));
+const TerminalWorkbench = lazy(() =>
+	import("./terminal-view.js").then((module) => ({ default: module.TerminalWorkbench }))
+);
 
 function formatMoney(value: number): string {
 	if (value === 0) return "$0.00";
 	return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
 }
 
-const STATUS_LABELS: Record<string, string> = {
-	idle: "空闲",
-	turn: "执行中",
-	running: "运行中",
-	queued: "排队中",
-	awaiting_approval: "等待批准",
-	compaction: "整理上下文",
-	retry: "重试中",
-	cancelling: "正在取消",
-	paused: "已暂停",
-	cancelled: "已取消",
-	aborted: "已中止",
-	streaming: "正在输出",
-	complete: "已完成",
-	completed: "已完成",
-	failed: "失败",
-	connected: "已连接",
-	connecting: "连接中",
-	reconnecting: "重新连接中",
-	disconnected: "已断开",
-	dispatching: "正在分派",
-	ready: "就绪",
-	closed: "已关闭",
-	error: "错误",
-	pending: "等待中",
-	approved: "已批准",
-	denied: "已拒绝",
+const STATUS_LABELS: Record<string, LocaleKey> = {
+	idle: "statusIdle",
+	turn: "statusTurn",
+	running: "statusRunning",
+	queued: "statusQueued",
+	awaiting_approval: "statusApproval",
+	compaction: "statusCompaction",
+	retry: "statusRetry",
+	cancelling: "statusCancelling",
+	paused: "statusPaused",
+	cancelled: "statusCancelled",
+	aborted: "statusAborted",
+	streaming: "statusStreaming",
+	complete: "statusComplete",
+	completed: "statusComplete",
+	failed: "statusFailed",
+	connected: "connected",
+	connecting: "connecting",
+	reconnecting: "statusReconnecting",
+	disconnected: "statusDisconnected",
+	dispatching: "statusDispatching",
+	ready: "statusReady",
+	closed: "statusClosed",
+	error: "statusError",
+	pending: "statusPending",
+	approved: "statusApproved",
+	denied: "statusDenied",
 };
 
 const ONBOARDING_STORAGE_KEY = "wuming.onboarding.complete";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "wuming.sidebar.collapsed";
-type SettingsSection = "general" | "models" | "usage" | "connection" | "updates";
+type SettingsSection = "general" | "official" | "models" | "usage" | "connection" | "updates" | "computer" | "agents";
 type UsageRange = 7 | 14 | 30;
 const SIDEBAR_WIDTH_STORAGE_KEY = "wuming.sidebar.width";
 const DEFAULT_SIDEBAR_WIDTH = 252;
@@ -218,8 +238,9 @@ function storedSidebarWidth(): number {
 	return Number.isFinite(width) && width > 0 ? clampSidebarWidth(width) : DEFAULT_SIDEBAR_WIDTH;
 }
 
-function statusLabel(value: string): string {
-	return STATUS_LABELS[value] ?? value.replaceAll("_", " ");
+function statusLabel(value: string, t: Translate = createTranslator("zh")): string {
+	const key = STATUS_LABELS[value];
+	return key ? t(key) : value.replaceAll("_", " ");
 }
 
 function GatewayPasswordForm({
@@ -282,19 +303,24 @@ function GatewayPasswordForm({
 	);
 }
 
-function sandboxLabel(value: string | undefined): string {
+function sandboxLabel(value: string | undefined, t: Translate = createTranslator("zh")): string {
 	if (!value) return "-";
 	return (
-		({ read_only: "只读", workspace_write: "工作区可写", unrestricted: "完全访问" } as Record<string, string>)[value] ??
-		value.replaceAll("_", " ")
+		(
+			{ read_only: t("readOnly"), workspace_write: t("workspaceWrite"), unrestricted: t("unrestricted") } as Record<
+				string,
+				string
+			>
+		)[value] ?? value.replaceAll("_", " ")
 	);
 }
 
-function approvalPolicyLabel(value: string | undefined): string {
+function approvalPolicyLabel(value: string | undefined, t: Translate = createTranslator("zh")): string {
 	if (!value) return "-";
 	return (
-		({ on_risk: "遇到风险时询问", always: "始终询问", never: "从不询问" } as Record<string, string>)[value] ??
-		value.replaceAll("_", " ")
+		({ on_risk: t("approvalRisk"), always: t("approvalAlways"), never: t("approvalNever") } as Record<string, string>)[
+			value
+		] ?? value.replaceAll("_", " ")
 	);
 }
 
@@ -478,6 +504,8 @@ function ProjectImportDialog({
 
 function CustomModelSettings({
 	models,
+	onListMedia,
+	revision,
 	onDiscover,
 	onListServices,
 	onRefreshService,
@@ -487,7 +515,9 @@ function CustomModelSettings({
 	onTest,
 	onRemove,
 }: {
-	models: Array<{ model: { provider: string; id: string }; name: string; custom?: boolean }>;
+	onListMedia: () => Promise<CustomModelSettingsValue[]>;
+	revision: number;
+	models: ModelMetadata[];
 	onDiscover: (
 		connection: CustomModelConnection
 	) => Promise<Extract<CommandResult, { type: "model.custom.discovered" }>>;
@@ -503,6 +533,8 @@ function CustomModelSettings({
 }) {
 	const t = useT();
 	const [services, setServices] = useState<CustomModelService[]>([]);
+	const [mediaModels, setMediaModels] = useState<CustomModelSettingsValue[]>([]);
+	const [kindOverrides, setKindOverrides] = useState<Record<string, CustomModelKind>>({});
 	const [baseUrl, setBaseUrl] = useState("");
 	const [apiKey, setApiKey] = useState("");
 	const [discovery, setDiscovery] = useState<Extract<CommandResult, { type: "model.custom.discovered" }>>();
@@ -528,9 +560,12 @@ function CustomModelSettings({
 	};
 	useEffect(() => {
 		let active = true;
-		void onListServices()
-			.then((loaded) => {
-				if (active) setServices(loaded);
+		void Promise.all([onListServices(), onListMedia()])
+			.then(([loaded, media]) => {
+				if (active) {
+					setServices(loaded);
+					setMediaModels(media);
+				}
 			})
 			.catch((cause) => {
 				if (active) setError(cause instanceof Error ? cause.message : String(cause));
@@ -538,8 +573,9 @@ function CustomModelSettings({
 		return () => {
 			active = false;
 		};
-	}, [onListServices]);
+	}, [onListServices, onListMedia, revision]);
 	const resetDiscovery = () => {
+		setKindOverrides({});
 		setDiscovery(undefined);
 		setSelectedIds([]);
 		setModelQuery("");
@@ -554,6 +590,7 @@ function CustomModelSettings({
 			if (!baseUrl.trim() || !apiKey) throw new Error(t("fillBaseUrlAndKey"));
 			const result = await onDiscover({ baseUrl: baseUrl.trim(), apiKey });
 			setDiscovery(result);
+			setKindOverrides({});
 			setBaseUrl(result.baseUrl);
 			setApiKey("");
 			setApi(result.api);
@@ -577,6 +614,7 @@ function CustomModelSettings({
 		try {
 			const result = await onRefreshService(service.provider);
 			setDiscovery(result);
+			setKindOverrides({});
 			setApi(result.api);
 			setSelectedIds([]);
 			setModelQuery("");
@@ -615,6 +653,7 @@ function CustomModelSettings({
 				const selected = discovery.models.find((model) => model.id === id);
 				return {
 					provider: discovery.provider,
+					...(kindOverrides[id] ? { kind: kindOverrides[id] } : {}),
 					id,
 					name: selectedIds.length === 1 && name.trim() ? name.trim() : selected?.name || id,
 					api,
@@ -672,11 +711,13 @@ function CustomModelSettings({
 			await onConfigure([
 				{
 					provider: editing.model.provider,
+					...(editing.kind ? { kind: editing.kind } : {}),
 					id: editing.model.id,
 					name: editing.name,
 					api: editing.api,
 					baseUrl: editing.baseUrl,
 					input: editing.input,
+					thinkingOverride: editing.thinkingOverride ?? "auto",
 					contextWindow: editing.contextWindow,
 					maxOutputTokens: editing.maxOutputTokens,
 				},
@@ -701,7 +742,9 @@ function CustomModelSettings({
 		}
 	};
 	const savedIds = new Set(
-		savedModels.filter((model) => model.model.provider === discovery?.provider).map((model) => model.model.id)
+		[...savedModels, ...mediaModels]
+			.filter((model) => model.model.provider === discovery?.provider)
+			.map((model) => model.model.id)
 	);
 	const visibleModels =
 		discovery?.models.filter((model) => {
@@ -769,6 +812,7 @@ function CustomModelSettings({
 						<span className="custom-model-copy">
 							<strong>{model.name}</strong>
 							<small>{model.model.id}</small>
+							<small>{modelThinkingDescription(model)}</small>
 						</span>
 						<div className="custom-model-row-actions">
 							<button
@@ -818,6 +862,18 @@ function CustomModelSettings({
 						<small>{editing.baseUrl}</small>
 					</div>
 					<label>
+						模型类型
+						<select
+							aria-label="模型类型"
+							value={editing.kind ?? "chat"}
+							onChange={(event) => setEditing({ ...editing, kind: event.target.value as CustomModelKind })}
+						>
+							<option value="chat">对话模型</option>
+							<option value="image">生图模型</option>
+							<option value="video">视频模型</option>
+						</select>
+					</label>
+					<label>
 						{t("name")}
 						<input
 							value={editing.name}
@@ -857,7 +913,69 @@ function CustomModelSettings({
 							/>
 						</label>
 					</div>
-					<button className="primary-button" disabled={editBusy}>
+					<label>
+						{t("modelThinking")}
+						<select
+							aria-label={t("modelThinking")}
+							value={typeof editing.thinkingOverride === "object" ? "manual" : (editing.thinkingOverride ?? "auto")}
+							onChange={(event) => {
+								const mode = event.target.value;
+								setEditing({
+									...editing,
+									thinkingOverride:
+										mode === "manual"
+											? {
+													levels:
+														editing.reasoning && editing.thinkingLevels?.length
+															? [...editing.thinkingLevels]
+															: ["low", "medium", "high"],
+												}
+											: mode === "disabled"
+												? "disabled"
+												: "auto",
+								});
+							}}
+						>
+							<option value="auto">{t("thinkingAuto")}</option>
+							<option value="manual">{t("thinkingManual")}</option>
+							<option value="disabled">{t("thinkingDisabled")}</option>
+						</select>
+					</label>
+					{typeof editing.thinkingOverride === "object" && (
+						<fieldset className="model-thinking-levels">
+							<legend>{t("thinkingLevels")}</legend>
+							{THINKING_LEVELS.map((level) => (
+								<label key={level}>
+									<input
+										type="checkbox"
+										checked={
+											typeof editing.thinkingOverride === "object" && editing.thinkingOverride.levels.includes(level)
+										}
+										onChange={(event) => {
+											const checked = event.target.checked;
+											setEditing((current) => {
+												if (!current || typeof current.thinkingOverride !== "object") return current;
+												const selected = new Set(current.thinkingOverride.levels);
+												if (checked) selected.add(level);
+												else selected.delete(level);
+												return {
+													...current,
+													thinkingOverride: { levels: THINKING_LEVELS.filter((value) => selected.has(value)) },
+												};
+											});
+										}}
+									/>
+									{thinkingLabel(level)}
+								</label>
+							))}
+						</fieldset>
+					)}
+					<button
+						className="primary-button"
+						disabled={
+							editBusy || (typeof editing.thinkingOverride === "object" && editing.thinkingOverride.levels.length === 0)
+						}
+					>
 						{editBusy ? t("saving") : t("saveChanges")}
 					</button>
 				</form>
@@ -953,19 +1071,44 @@ function CustomModelSettings({
 						<div className="model-picker-list">
 							{visibleModels.length > 0 ? (
 								visibleModels.map((model) => (
-									<label className={`model-option ${savedIds.has(model.id) ? "already-added" : ""}`} key={model.id}>
-										<input
-											type="checkbox"
+									<div className={`model-option ${savedIds.has(model.id) ? "already-added" : ""}`} key={model.id}>
+										<label className="model-option-label">
+											<input
+												type="checkbox"
+												aria-label={model.name}
+												disabled={savedIds.has(model.id)}
+												checked={savedIds.has(model.id) || selectedIds.includes(model.id)}
+												onChange={() => toggleModel(model.id)}
+											/>
+											<span>
+												<strong>{model.name}</strong>
+												{model.name !== model.id && <small>{model.id}</small>}
+											</span>
+										</label>
+										<select
+											className="model-kind-select"
+											aria-label={`模型类型：${model.id}`}
+											value={
+												savedIds.has(model.id)
+													? (mediaModels.find(
+															(item) => item.model.provider === discovery.provider && item.model.id === model.id
+														)?.kind ?? "chat")
+													: (kindOverrides[model.id] ?? model.kind ?? "chat")
+											}
 											disabled={savedIds.has(model.id)}
-											checked={savedIds.has(model.id) || selectedIds.includes(model.id)}
-											onChange={() => toggleModel(model.id)}
-										/>
-										<span>
-											<strong>{model.name}</strong>
-											{model.name !== model.id && <small>{model.id}</small>}
-										</span>
+											onChange={(event) =>
+												setKindOverrides((current) => ({
+													...current,
+													[model.id]: event.target.value as CustomModelKind,
+												}))
+											}
+										>
+											<option value="chat">对话</option>
+											<option value="image">生图</option>
+											<option value="video">视频</option>
+										</select>
 										{savedIds.has(model.id) && <small className="model-added-label">{t("alreadyAdded")}</small>}
-									</label>
+									</div>
 								))
 							) : (
 								<div className="model-picker-empty">{t("noModelMatches")}</div>
@@ -1031,20 +1174,28 @@ function CustomModelSettings({
 	);
 }
 
-function formatRunDuration(run: RunSummary): string {
+function formatRunDuration(run: RunSummary, t: Translate = createTranslator("zh")): string {
 	return formatDuration(
 		run.startedAt,
 		run.finishedAt ?? (run.status === "running" ? Date.now() : run.updatedAt),
-		run.status === "queued" ? "排队中" : "暂无耗时"
+		run.status === "queued" ? t("statusQueued") : t("elapsedUnavailable"),
+		t
 	);
 }
 
-function formatDuration(startedAt: number | undefined, end: number, unavailable = "暂无耗时"): string {
-	if (startedAt === undefined) return unavailable;
+function formatDuration(
+	startedAt: number | undefined,
+	end: number,
+	unavailable?: string,
+	t: Translate = createTranslator("zh")
+): string {
+	if (startedAt === undefined) return unavailable ?? t("elapsedUnavailable");
 	const milliseconds = Math.max(0, end - startedAt);
 	if (milliseconds < 1000) return `${milliseconds}ms`;
 	const seconds = Math.round(milliseconds / 1000);
-	return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+	return seconds < 60
+		? t("seconds", { seconds })
+		: t("minutesSeconds", { minutes: Math.floor(seconds / 60), seconds: seconds % 60 });
 }
 
 function formatRunTime(timestamp: number): string {
@@ -1061,63 +1212,64 @@ function formatDelay(milliseconds: number): string {
 		: `${(milliseconds / 1000).toFixed(milliseconds % 1000 === 0 ? 0 : 1)}s`;
 }
 
-const FAILURE_KIND_LABELS: Record<string, string> = {
-	provider: "模型服务错误",
-	provider_auth: "模型认证失败",
-	provider_rate_limit: "模型服务限流",
-	provider_timeout: "模型响应超时",
-	provider_network: "模型网络故障",
-	tool: "工具执行失败",
-	user_abort: "用户已停止",
-	runtime_restart: "服务重启中断",
-	budget: "用量超出限额",
-	unknown: "运行未完成",
+const FAILURE_KIND_LABELS: Record<string, LocaleKey> = {
+	provider: "providerError",
+	provider_auth: "providerAuth",
+	provider_rate_limit: "providerRateLimit",
+	provider_timeout: "providerTimeout",
+	provider_network: "providerNetwork",
+	tool: "toolError",
+	user_abort: "userAbort",
+	runtime_restart: "runtimeRestart",
+	budget: "budgetExceeded",
+	unknown: "runUnfinished",
 };
 
-const HOOK_POINT_LABELS: Record<string, string> = {
-	"operation.before_execute": "执行前",
-	"operation.after_execute": "执行后",
-	"operation.on_error": "错误处理",
+const HOOK_POINT_LABELS: Record<string, LocaleKey> = {
+	"operation.before_execute": "hookBefore",
+	"operation.after_execute": "hookAfter",
+	"operation.on_error": "hookError",
 };
 
-const HOOK_OUTCOME_LABELS: Record<string, string> = {
-	completed: "通过",
-	denied: "已阻止",
-	denial_ignored: "建议已忽略",
-	failed: "失败",
-	timed_out: "超时",
+const HOOK_OUTCOME_LABELS: Record<string, LocaleKey> = {
+	completed: "passed",
+	denied: "blocked",
+	denial_ignored: "suggestionIgnored",
+	failed: "statusFailed",
+	timed_out: "timedOut",
 };
 
-const CONTEXT_KIND_LABELS: Record<string, string> = {
-	system: "系统",
-	policy: "策略",
-	skill: "技能",
-	workspace: "工作区",
-	memory: "记忆",
+const CONTEXT_KIND_LABELS: Record<string, LocaleKey> = {
+	system: "contextSystem",
+	policy: "contextPolicy",
+	skill: "contextSkill",
+	workspace: "workspace",
+	memory: "contextMemory",
 };
 
-const CONTEXT_CACHE_LABELS: Record<string, string> = {
-	stable: "稳定缓存",
-	session: "会话缓存",
-	turn: "单轮",
+const CONTEXT_CACHE_LABELS: Record<string, LocaleKey> = {
+	stable: "cacheStable",
+	session: "cacheSession",
+	turn: "cacheTurn",
 };
 
-const TRAJECTORY_CRITERION_LABELS: Record<string, string> = {
-	integrity: "完整性",
-	completion: "完成状态",
-	reliability: "可靠性",
-	policy: "策略执行",
-	observability: "可观测性",
+const TRAJECTORY_CRITERION_LABELS: Record<string, LocaleKey> = {
+	integrity: "integrity",
+	completion: "completion",
+	reliability: "reliability",
+	policy: "policyExecution",
+	observability: "observability",
 };
 
-const MEMORY_REASON_LABELS: Record<MemoryRecord["memory"]["reason"], string> = {
-	manual: "手动整理",
-	threshold: "阈值整理",
-	overflow: "溢出恢复",
+const MEMORY_REASON_LABELS: Record<MemoryRecord["memory"]["reason"], LocaleKey> = {
+	manual: "memoryManual",
+	threshold: "memoryThreshold",
+	overflow: "memoryOverflow",
 };
 
-function failureKindLabel(value: string): string {
-	return FAILURE_KIND_LABELS[value] ?? value;
+function failureKindLabel(value: string, t: Translate = createTranslator("zh")): string {
+	const key = FAILURE_KIND_LABELS[value];
+	return key ? t(key) : value;
 }
 
 function redactDiagnostic(value: string): string {
@@ -1172,12 +1324,13 @@ async function writeClipboardText(value: string): Promise<void> {
 }
 
 function RunDiagnosticButton({ run, onOpen }: { run: RunSummary; onOpen: (run: RunSummary) => void }) {
+	const t = useT();
 	return (
 		<button
 			className="run-diagnostic-button"
 			type="button"
-			title="打开运行评测与诊断"
-			aria-label="打开运行评测与诊断"
+			title={t("openRunDiagnostics")}
+			aria-label={t("openRunDiagnostics")}
 			onClick={() => onOpen(run)}
 		>
 			<Activity size={12} />
@@ -1189,20 +1342,20 @@ function formatToolName(tool: UsageToolSummary): string {
 	return tool.mcpServerId && tool.mcpToolName ? `${tool.mcpServerId}/${tool.mcpToolName}` : tool.toolName;
 }
 
-function formatToolOutcome(tool: UsageToolSummary): string | undefined {
+function formatToolOutcome(tool: UsageToolSummary, t: Translate = createTranslator("zh")): string | undefined {
 	const parts = [
-		tool.succeededCount ? `${tool.succeededCount} 成功` : undefined,
-		tool.failedCount ? `${tool.failedCount} 失败` : undefined,
-		tool.abortedCount ? `${tool.abortedCount} 已中止` : undefined,
+		tool.succeededCount ? t("toolSuccessCount", { count: tool.succeededCount }) : undefined,
+		tool.failedCount ? t("toolFailureCount", { count: tool.failedCount }) : undefined,
+		tool.abortedCount ? t("toolAbortCount", { count: tool.abortedCount }) : undefined,
 	].filter((value): value is string => value !== undefined);
 	return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
-function formatToolObservation(tool: UsageToolSummary): string {
+function formatToolObservation(tool: UsageToolSummary, t: Translate = createTranslator("zh")): string {
 	return [
 		`${formatToolName(tool)} x${tool.callCount}`,
 		tool.durationMs === undefined ? undefined : formatDelay(tool.durationMs),
-		formatToolOutcome(tool),
+		formatToolOutcome(tool, t),
 	]
 		.filter((value): value is string => value !== undefined)
 		.join(" · ");
@@ -1322,6 +1475,7 @@ interface MessageActionState {
 
 interface FailureActionState {
 	run?: RunSummary | undefined;
+	resumeDesktop?: boolean;
 	busy: boolean;
 	disabled: boolean;
 	disabledTitle: string;
@@ -1337,6 +1491,8 @@ function imageInputUnsupported(error: string): boolean {
 }
 
 function failureTitle(error: string, kind: RunSummary["failureKind"]): string {
+	if (/Mutation contains an invalid (event|snapshot)/i.test(error)) return "任务状态保存失败";
+	if (connectionFailure(error)) return "模型连接中断";
 	if (imageInputUnsupported(error)) return "当前模型不支持图片理解";
 	if (/browser_open|url parameter|Stream ended without finish_reason/i.test(error)) {
 		return "浏览器步骤未完成";
@@ -1349,6 +1505,10 @@ function failureTitle(error: string, kind: RunSummary["failureKind"]): string {
 }
 
 function failureAdvice(error: string, kind: RunSummary["failureKind"]): string {
+	if (/Mutation contains an invalid (event|snapshot)/i.test(error))
+		return "项目内部保存任务状态时出错，并非桌面权限不足。已返回的工具结果仍在对话中；恢复前应先检查当前状态，避免重复操作。";
+	if (connectionFailure(error))
+		return "连接模型服务时中断，暂时不能确定是网络、代理还是接口服务的问题。已返回的工具结果已保留；继续桌面任务时会要求先检查当前状态。";
 	if (imageInputUnsupported(error)) {
 		return "图片已上传并保留。请切换到支持视觉的模型后重新执行，无需重新上传图片。";
 	}
@@ -1394,7 +1554,8 @@ function hasToolFailureInTurn(transcript: TranscriptItem[], itemId: string): boo
 
 function FailureNotice({ error, actions }: { error: string; actions: FailureActionState }) {
 	const kind = actions.run?.failureKind;
-	const retries = actions.run?.retryHistory?.length ?? 0;
+	const retries = retrySummary(actions.run);
+	const previousError = actions.run?.retryHistory?.at(-1)?.error;
 	const title = failureTitle(error, kind);
 	const action =
 		kind === "provider_auth" ? "settings" : kind === "budget" ? "usage" : kind === "user_abort" ? undefined : "retry";
@@ -1405,14 +1566,14 @@ function FailureNotice({ error, actions }: { error: string; actions: FailureActi
 				<strong>{title}</strong>
 			</div>
 			<p>{failureAdvice(error, kind)}</p>
-			{retries > 0 && (
-				<div className="failure-retry-summary">
-					已自动重试 {retries} 次，共尝试 {Math.max(actions.run?.attempt ?? 1, retries + 1)} 次
-				</div>
-			)}
+			{retries && <div className="failure-retry-summary">{retries}</div>}
 			<details className="failure-details">
 				<summary>技术详情</summary>
-				<pre>{redactDiagnostic(error)}</pre>
+				<pre>
+					{redactDiagnostic(
+						previousError && previousError !== error ? `${error}\n触发重试的错误：${previousError}` : error
+					)}
+				</pre>
 			</details>
 			{action && (
 				<div className="failure-actions">
@@ -1420,11 +1581,23 @@ function FailureNotice({ error, actions }: { error: string; actions: FailureActi
 						<button
 							type="button"
 							disabled={actions.busy || actions.disabled}
-							title={actions.disabled ? actions.disabledTitle : "重新执行上一条请求"}
+							title={
+								actions.disabled
+									? actions.disabledTitle
+									: actions.resumeDesktop
+										? "检查当前状态后继续桌面任务"
+										: "重新执行上一条请求"
+							}
 							onClick={actions.onRetry}
 						>
 							<RefreshCw size={14} />
-							{actions.busy ? "正在重新执行..." : "重新执行"}
+							{actions.resumeDesktop
+								? actions.busy
+									? "正在继续..."
+									: "继续任务"
+								: actions.busy
+									? "正在重新执行..."
+									: "重新执行"}
 						</button>
 					)}
 					{action === "settings" && (
@@ -1466,6 +1639,7 @@ function TranscriptItemView({
 	transcript: TranscriptItem[];
 	onOpenSubagent?: (() => void) | undefined;
 }) {
+	const t = useT();
 	if (item.type === "tool") {
 		const media = item.content.filter((part) => part.type === "artifact" && isPreviewableMediaArtifact(part.artifact));
 		return (
@@ -1476,6 +1650,10 @@ function TranscriptItemView({
 					status={item.status as ToolStatusValue}
 					onOpenSession={onOpenSubagent}
 					webEvidence={item.webEvidence}
+					receiptText={item.content
+						.filter((part) => part.type === "text")
+						.map((part) => part.text)
+						.join("\n")}
 				>
 					<ToolResult
 						parts={item.content.filter((part) => !media.includes(part))}
@@ -1500,12 +1678,19 @@ function TranscriptItemView({
 	if (item.type === "assistant" && !item.error && !hasVisibleContent(item.content, renderedToolCalls)) {
 		return null;
 	}
+	if (
+		item.type === "assistant" &&
+		item.error &&
+		!hasVisibleContent(item.content, renderedToolCalls) &&
+		supersededFailure(transcript, item.id)
+	)
+		return null;
 	const toolFailureInTurn = item.type === "assistant" && item.error ? hasToolFailureInTurn(transcript, item.id) : false;
 	if (toolFailureInTurn && !hasVisibleContent(item.content, renderedToolCalls)) return null;
 
 	const text = messageText(item.content);
 	return (
-		<div className={`message-row ${item.type}`}>
+		<div className={`message-row ${item.type}`} data-message-id={item.id} tabIndex={-1}>
 			{item.type !== "user" && (
 				<div className="message-avatar" aria-hidden="true">
 					<Sparkles size={16} />
@@ -1513,8 +1698,8 @@ function TranscriptItemView({
 			)}
 			<div className="message-body">
 				<div className="message-meta">
-					<strong>{item.type === "user" ? "你" : "Pi-Wm"}</strong>
-					{item.type === "assistant" && item.status !== "complete" && <span>{statusLabel(item.status)}</span>}
+					<strong>{item.type === "user" ? t("you") : "Pi-Wm"}</strong>
+					{item.type === "assistant" && item.status !== "complete" && <span>{statusLabel(item.status, t)}</span>}
 					<time
 						className="message-time"
 						dateTime={new Date(item.createdAt).toISOString()}
@@ -1634,6 +1819,7 @@ function LiveToolView({
 				status={awaitingApproval ? "awaiting_approval" : tool.status}
 				onOpenSession={onOpenSubagent}
 				webEvidence={tool.webEvidence}
+				receiptText={tool.preview}
 			>
 				{tool.preview ? (
 					<pre className="tool-output">
@@ -1822,10 +2008,14 @@ function Composer({
 			const actions = commandItems(commands, trigger.query);
 			const matches = skillItems(skills, trigger.query);
 			if (trigger.query || matches.length === 0) return [...actions, ...matches];
-			return [...actions.slice(0, 4), ...matches, ...actions.slice(4).map((item) => ({ ...item, group: "更多命令" }))];
+			return [
+				...actions.slice(0, 4),
+				...matches,
+				...actions.slice(4).map((item) => ({ ...item, group: t("moreCommands") })),
+			];
 		}
 		return fileItems(files);
-	}, [commands, dismissed, files, skills, trigger]);
+	}, [commands, dismissed, files, skills, trigger, t]);
 	// Keyed on contents, not identity, so an unrelated re-render never drops the
 	// highlight back to the first row mid-selection.
 	const itemsKey = items.map((item) => item.id).join("\u0000");
@@ -1921,13 +2111,13 @@ function Composer({
 	const uploadFiles = async (incoming: File[]) => {
 		if (disabled || incoming.length === 0) return;
 		if (uploadInFlight.current || sending) {
-			setUploadError("请等待当前上传或发送完成后，再添加附件");
+			setUploadError(t("waitForUpload"));
 			return;
 		}
 		const remaining = Math.max(0, 8 - attachments.length);
 		const selected = incoming.slice(0, remaining);
 		if (selected.length === 0) {
-			setUploadError("每条消息最多添加 8 个附件");
+			setUploadError(t("attachmentLimit"));
 			return;
 		}
 		uploadInFlight.current = true;
@@ -1950,7 +2140,7 @@ function Composer({
 			const uploaded = results.flatMap((result) => (result.ok ? [result.artifact] : []));
 			const errors = results.flatMap((result) => (result.ok ? [] : [`${result.file.name}：${result.error}`]));
 			if (uploaded.length > 0) setAttachments((current) => [...current, ...uploaded].slice(0, 8));
-			if (incoming.length > selected.length) errors.push("每条消息最多添加 8 个附件");
+			if (incoming.length > selected.length) errors.push(t("attachmentLimit"));
 			setUploadError(errors.length > 0 ? errors.join("；") : undefined);
 		} finally {
 			uploadInFlight.current = false;
@@ -1990,8 +2180,8 @@ function Composer({
 			{draggingFiles && (
 				<div className="composer-drop-zone" role="status">
 					<Upload size={22} />
-					<strong>松开即可添加文件</strong>
-					<span>支持任意文件，可一次添加多个</span>
+					<strong>{t("dropFiles")}</strong>
+					<span>{t("multipleFilesHint")}</span>
 				</div>
 			)}
 			{menuOpen && trigger && (
@@ -2009,7 +2199,7 @@ function Composer({
 				className="visually-hidden"
 				ref={fileInput}
 				type="file"
-				aria-label="选择附件"
+				aria-label={t("chooseAttachments")}
 				multiple
 				onChange={(event) => {
 					const files = [...(event.target.files ?? [])];
@@ -2022,8 +2212,8 @@ function Composer({
 					<button
 						type="button"
 						className="composer-project-remove"
-						aria-label="不在项目中工作"
-						data-tooltip="不在项目中工作"
+						aria-label={t("detachProject")}
+						data-tooltip={t("detachProject")}
 						onClick={onDetachDraftProject}
 					>
 						<Folder className="composer-project-folder" size={15} />
@@ -2050,8 +2240,8 @@ function Composer({
 							<button
 								type="button"
 								className="attachment-remove"
-								aria-label={`移除 ${artifact.name}`}
-								title={`移除 ${artifact.name}`}
+								aria-label={t("removeArtifact", { name: artifact.name })}
+								title={t("removeArtifact", { name: artifact.name })}
 								onClick={() => setAttachments((current) => current.filter((item) => item.id !== artifact.id))}
 							>
 								<X size={13} />
@@ -2073,7 +2263,7 @@ function Composer({
 				</div>
 			)}
 			<textarea
-				aria-label="消息"
+				aria-label={t("message")}
 				ref={input}
 				placeholder={active ? t("activeTaskInstruction") : t("sendTaskPlaceholder")}
 				value={text}
@@ -2149,8 +2339,8 @@ function Composer({
 						<button
 							type="button"
 							className="icon-button"
-							title="取消编辑"
-							aria-label="取消编辑"
+							title={t("cancelEdit")}
+							aria-label={t("cancelEdit")}
 							disabled={sending || uploading}
 							onClick={cancelEdit}
 						>
@@ -2160,7 +2350,7 @@ function Composer({
 					<button
 						type="button"
 						className="icon-button"
-						title="添加附件"
+						title={t("addAttachments")}
 						disabled={disabled || uploading || attachments.length >= 8}
 						onClick={() => fileInput.current?.click()}
 					>
@@ -2170,32 +2360,32 @@ function Composer({
 						<PermissionPicker value={permission} disabled={permissionDisabled} onChange={onSelectPermission} />
 					)}
 					{goalDraft && (
-						<span className="composer-goal-target" role="status" title="发送后在当前对话中运行目标">
+						<span className="composer-goal-target" role="status" title={t("goalTargetHint")}>
 							<Target size={15} />
-							<span>目标</span>
+							<span>{t("goal")}</span>
 						</span>
 					)}
 					{uploading && (
 						<span className="uploading-label" role="status">
-							正在上传...
+							{t("uploading")}
 						</span>
 					)}
 					{!uploading && contextUsage && <ContextPill usage={contextUsage} />}
 					{active && (
-						<div className="segmented" aria-label="排队方式">
+						<div className="segmented" aria-label={t("queueMode")}>
 							<button
 								type="button"
 								className={queueMode === "steer" ? "active" : ""}
 								onClick={() => setQueueMode("steer")}
 							>
-								立即补充
+								{t("steerNow")}
 							</button>
 							<button
 								type="button"
 								className={queueMode === "follow_up" ? "active" : ""}
 								onClick={() => setQueueMode("follow_up")}
 							>
-								后续任务
+								{t("followUp")}
 							</button>
 						</div>
 					)}
@@ -2216,7 +2406,7 @@ function Composer({
 						<button
 							className="stop-button"
 							type="button"
-							title="停止任务"
+							title={t("stopTask")}
 							disabled={stopping}
 							onClick={() => {
 								setStopping(true);
@@ -2229,8 +2419,8 @@ function Composer({
 					<button
 						className="send-button"
 						type="submit"
-						aria-label="发送"
-						title={sendDisabled && !localActionDraft ? (sendDisabledReason ?? "Model unavailable") : "发送"}
+						aria-label={t("send")}
+						title={sendDisabled && !localActionDraft ? (sendDisabledReason ?? "Model unavailable") : t("send")}
 						disabled={
 							disabled ||
 							(sendDisabled && !localActionDraft) ||
@@ -3572,6 +3762,7 @@ function BudgetEditor({
 		budgetWarningThreshold?: number;
 	}) => Promise<void>;
 }) {
+	const t = useT();
 	const [editing, setEditing] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string>();
@@ -3592,10 +3783,9 @@ function BudgetEditor({
 		const cost = costDraft.trim() === "" ? null : Number(costDraft);
 		const tokens = tokenDraft.trim() === "" ? null : Number(tokenDraft);
 		const threshold = Number(thresholdDraft);
-		if (cost !== null && (!Number.isFinite(cost) || cost <= 0)) return setError("费用限额必须大于 0");
-		if (tokens !== null && (!Number.isSafeInteger(tokens) || tokens <= 0)) return setError("Token 限额必须是正整数");
-		if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 100)
-			return setError("预警阈值必须在 1 到 100 之间");
+		if (cost !== null && (!Number.isFinite(cost) || cost <= 0)) return setError(t("costLimitInvalid"));
+		if (tokens !== null && (!Number.isSafeInteger(tokens) || tokens <= 0)) return setError(t("tokenLimitInvalid"));
+		if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 100) return setError(t("warningThresholdInvalid"));
 		setSaving(true);
 		setError(undefined);
 		try {
@@ -3617,12 +3807,12 @@ function BudgetEditor({
 	return (
 		<>
 			<div className="rail-section-heading">
-				<h2>用量</h2>
+				<h2>{t("usage")}</h2>
 				{!editing && (
 					<button
 						className="rail-icon-button"
 						type="button"
-						title="编辑会话限额"
+						title={t("editBudget")}
 						disabled={!canEdit}
 						onClick={() => {
 							setError(undefined);
@@ -3635,23 +3825,23 @@ function BudgetEditor({
 			</div>
 			<div className="usage-periods">
 				<div>
-					<span>今天</span>
+					<span>{t("usageToday")}</span>
 					<strong>{overview ? formatTokens(overview.today.totalTokens) : "--"}</strong>
-					<small>{overview ? formatMoney(overview.today.costUsd) : "正在统计"}</small>
+					<small>{overview ? formatMoney(overview.today.costUsd) : t("usageLoading")}</small>
 				</div>
 				<div>
-					<span>本月</span>
+					<span>{t("usageMonth")}</span>
 					<strong>{overview ? formatTokens(overview.month.totalTokens) : "--"}</strong>
-					<small>{overview ? formatMoney(overview.month.costUsd) : "正在统计"}</small>
+					<small>{overview ? formatMoney(overview.month.costUsd) : t("usageLoading")}</small>
 				</div>
 			</div>
 			{overview && (
 				<div className="usage-trend">
 					<div className="usage-trend-heading">
-						<span>近 7 天</span>
+						<span>{t("usageWeek")}</span>
 						<span>Token</span>
 					</div>
-					<div className="usage-chart" role="img" aria-label="最近 7 天 Token 用量">
+					<div className="usage-chart" role="img" aria-label={t("usageWeekAria")}>
 						{overview.daily.map((entry, index) => (
 							<div
 								className="usage-day"
@@ -3667,27 +3857,29 @@ function BudgetEditor({
 										}
 									/>
 								</div>
-								<small>{index === overview.daily.length - 1 ? "今天" : entry.date.slice(5).replace("-", "/")}</small>
+								<small>
+									{index === overview.daily.length - 1 ? t("usageToday") : entry.date.slice(5).replace("-", "/")}
+								</small>
 							</div>
 						))}
 					</div>
 				</div>
 			)}
 			<div className="usage-session">
-				<span>本次会话</span>
+				<span>{t("thisSession")}</span>
 				<strong>
 					{formatTokens(snapshot.usage.totalTokens)} <small>· {formatMoney(snapshot.usage.costUsd)}</small>
 				</strong>
 			</div>
 			{snapshot.costBudgetUsd !== undefined && (
 				<div className="kv">
-					<span>剩余费用</span>
+					<span>{t("remainingCost")}</span>
 					<strong>{formatMoney(Math.max(0, snapshot.costBudgetUsd - snapshot.usage.costUsd))}</strong>
 				</div>
 			)}
 			{snapshot.tokenBudget !== undefined && (
 				<div className="kv">
-					<span>剩余 Token</span>
+					<span>{t("remainingTokens")}</span>
 					<strong>{formatTokens(Math.max(0, snapshot.tokenBudget - snapshot.usage.totalTokens))}</strong>
 				</div>
 			)}
@@ -3697,41 +3889,44 @@ function BudgetEditor({
 					snapshot.usage.totalTokens / snapshot.tokenBudget >= (snapshot.budgetWarningThreshold ?? 0.8))) && (
 				<div className="budget-warning">
 					<CircleAlert size={13} />
-					用量预警
+					{t("usageWarning")}
 				</div>
 			)}
 			{snapshot.budgetWarnings?.map((warning) => (
 				<div className="budget-warning" key={warning.id}>
 					<CircleAlert size={13} />
-					{warning.kind === "tokens" ? "Token" : "费用"}用量已超过 {Math.round(warning.threshold * 100)}%
+					{t("usageExceeded", {
+						kind: warning.kind === "tokens" ? "Token" : t("cost"),
+						percent: Math.round(warning.threshold * 100),
+					})}
 				</div>
 			))}
 			{editing && (
 				<form className="budget-form" onSubmit={(event) => void submit(event)}>
 					<label>
-						<span>费用限额（USD）</span>
+						<span>{t("costLimit")}</span>
 						<input
 							type="number"
 							min="0.0001"
 							step="0.0001"
-							placeholder="不限"
+							placeholder={t("unlimited")}
 							value={costDraft}
 							onChange={(event) => setCostDraft(event.target.value)}
 						/>
 					</label>
 					<label>
-						<span>Token 限额</span>
+						<span>{t("tokenLimit")}</span>
 						<input
 							type="number"
 							min="1"
 							step="1"
-							placeholder="不限"
+							placeholder={t("unlimited")}
 							value={tokenDraft}
 							onChange={(event) => setTokenDraft(event.target.value)}
 						/>
 					</label>
 					<label>
-						<span>预警阈值</span>
+						<span>{t("warningThreshold")}</span>
 						<div className="budget-percent">
 							<input
 								type="number"
@@ -3746,10 +3941,10 @@ function BudgetEditor({
 					</label>
 					{error && <div className="budget-form-error">{error}</div>}
 					<div className="budget-form-actions">
-						<button type="button" title="取消修改" disabled={saving} onClick={() => setEditing(false)}>
+						<button type="button" title={t("cancelChanges")} disabled={saving} onClick={() => setEditing(false)}>
 							<X size={14} />
 						</button>
-						<button type="submit" title="保存会话限额" disabled={saving}>
+						<button type="submit" title={t("saveBudget")} disabled={saving}>
 							<Check size={14} />
 						</button>
 					</div>
@@ -3784,6 +3979,7 @@ function RightRail({
 	onOpenEvaluation: (run: RunSummary) => void;
 	onClose: () => void;
 }) {
+	const t = useT();
 	const [memoryBusy, setMemoryBusy] = useState<string>();
 	const memoryDisabled = !snapshot || snapshot.session.archivedAt !== undefined || snapshot.session.phase !== "idle";
 	const manageMemory = async (memoryId: string, action: MemoryAction) => {
@@ -3796,33 +3992,39 @@ function RightRail({
 	};
 	return (
 		<aside className="right-rail">
+			{snapshot && <RunDiagnostics snapshot={snapshot} runs={runs} />}
 			<div className="rail-section">
 				<div className="rail-section-heading">
-					<h2>运行</h2>
-					<button className="rail-icon-button rail-mobile-close" type="button" title="关闭运行面板" onClick={onClose}>
+					<h2>{t("run")}</h2>
+					<button
+						className="rail-icon-button rail-mobile-close"
+						type="button"
+						title={t("closeRunPanel")}
+						onClick={onClose}
+					>
 						<X size={14} />
 					</button>
 				</div>
 				<div className="kv">
-					<span>状态</span>
+					<span>{t("status")}</span>
 					<strong className={`phase phase-${snapshot?.session.phase ?? "idle"}`}>
-						{statusLabel(snapshot?.session.phase ?? "idle")}
+						{statusLabel(snapshot?.session.phase ?? "idle", t)}
 					</strong>
 				</div>
 				<div className="kv">
-					<span>沙箱</span>
-					<strong>{sandboxLabel(snapshot?.sandboxMode)}</strong>
+					<span>{t("sandbox")}</span>
+					<strong>{sandboxLabel(snapshot?.sandboxMode, t)}</strong>
 				</div>
 				<div className="kv">
-					<span>批准策略</span>
-					<strong>{approvalPolicyLabel(snapshot?.approvalPolicy)}</strong>
+					<span>{t("approvalPolicy")}</span>
+					<strong>{approvalPolicyLabel(snapshot?.approvalPolicy, t)}</strong>
 				</div>
 				<div className="kv">
-					<span>即时补充队列</span>
+					<span>{t("steerQueue")}</span>
 					<strong>{snapshot?.queuedSteerCount ?? 0}</strong>
 				</div>
 				<div className="kv">
-					<span>后续任务队列</span>
+					<span>{t("followUpQueue")}</span>
 					<strong>{snapshot?.queuedFollowUpCount ?? 0}</strong>
 				</div>
 			</div>
@@ -3832,30 +4034,34 @@ function RightRail({
 					<BudgetEditor snapshot={snapshot} overview={usageOverview} onSave={onSetBudget} />
 				) : (
 					<>
-						<h2>用量</h2>
-						<div className="run-empty">未选择会话</div>
+						<h2>{t("usage")}</h2>
+						<div className="run-empty">{t("noSession")}</div>
 					</>
 				)}
 			</div>
 			<div className="rail-section">
-				<h2>最近运行</h2>
+				<h2>{t("recentRuns")}</h2>
 				<div className="run-history">
-					{runs.length === 0 && <div className="run-empty">暂无运行记录</div>}
+					{runs.length === 0 && <div className="run-empty">{t("noRuns")}</div>}
 					{runs.slice(0, 3).map((run) => (
 						<div className="run-row" key={run.id} title={run.error}>
 							<div className="run-row-heading">
 								<span className={`run-dot run-${run.status}`} />
-								<strong>{run.mode === "prompt" ? "提问" : run.mode === "steer" ? "即时补充" : "后续任务"}</strong>
+								<strong>
+									{run.mode === "prompt" ? t("prompt") : run.mode === "steer" ? t("steer") : t("followUp")}
+								</strong>
 								<div className="run-row-actions">
-									<span>{statusLabel(run.status)}</span>
+									<span>{statusLabel(run.status, t)}</span>
 									<RunDiagnosticButton run={run} onOpen={onOpenEvaluation} />
 								</div>
 							</div>
 							<div className="run-meta">
 								<span>{formatRunTime(run.createdAt)}</span>
-								<span>{formatRunDuration(run)}</span>
-								{run.attempt > 1 && <span>第 {run.attempt} 次尝试</span>}
-								{run.retryHistory && run.retryHistory.length > 0 && <span>已重试 {run.retryHistory.length} 次</span>}
+								<span>{formatRunDuration(run, t)}</span>
+								{run.attempt > 1 && <span>{t("attemptCount", { count: run.attempt })}</span>}
+								{run.retryHistory && run.retryHistory.length > 0 && (
+									<span>{t("retryCount", { count: run.retryHistory.length })}</span>
+								)}
 								{run.usage && (
 									<span>
 										{formatTokens(run.usage.totalTokens)} · {formatMoney(run.usage.costUsd)}
@@ -3866,41 +4072,54 @@ function RightRail({
 										{run.model.provider}/{run.model.id}
 									</span>
 								)}
-								{run.tools && run.tools.length > 0 && <span>{run.tools.map(formatToolObservation).join("; ")}</span>}
+								{run.tools && run.tools.length > 0 && (
+									<span>{run.tools.map((tool) => formatToolObservation(tool, t)).join("; ")}</span>
+								)}
 								{run.traceId && <span title={run.traceId}>Trace {run.traceId.slice(0, 8)}</span>}
-								{run.failureKind && <span>{failureKindLabel(run.failureKind)}</span>}
+								{run.failureKind && <span>{failureKindLabel(run.failureKind, t)}</span>}
 								{run.capabilityPlan && (
-									<span title={run.capabilityPlan.digest}>能力 {run.capabilityPlan.capabilityCount}</span>
+									<span title={run.capabilityPlan.digest}>
+										{t("capabilityCount", { count: run.capabilityPlan.capabilityCount })}
+									</span>
 								)}
 								{run.contextPlan && (
 									<span title={run.contextPlan.digest}>
-										上下文 {formatTokens(run.contextPlan.estimatedSystemTokens)}/
-										{formatTokens(run.contextPlan.availableSystemTokens)} · {run.contextPlan.fragmentCount} 片段
+										{t("contextPlanSummary", {
+											used: formatTokens(run.contextPlan.estimatedSystemTokens),
+											total: formatTokens(run.contextPlan.availableSystemTokens),
+											count: run.contextPlan.fragmentCount,
+										})}
 									</span>
 								)}
 								{run.hookEvents && run.hookEvents.length > 0 && <span>Hook {run.hookEvents.length}</span>}
 								{run.trajectory && (
-									<span title="结构性评测，不判断回答的语义正确性">
-										轨迹 {run.trajectory.evaluation.score} · {run.trajectory.eventCount}
+									<span title={t("structuralEvaluationHint")}>
+										{t("trajectorySummary", {
+											score: run.trajectory.evaluation.score,
+											count: run.trajectory.eventCount,
+										})}
 									</span>
 								)}
-								{run.memoryCount && <span title="本次运行产生的持久化压缩记忆">记忆 {run.memoryCount}</span>}
-								{run.abortRequested && <span>已请求停止</span>}
+								{run.memoryCount && (
+									<span title={t("runMemoryHint")}>{t("memoryCount", { count: run.memoryCount })}</span>
+								)}
+								{run.abortRequested && <span>{t("stopRequested")}</span>}
 							</div>
 							{run.error && <div className="run-error">{run.error}</div>}
 							{run.retryHistory && run.retryHistory.length > 0 && (
 								<details className="run-retries">
 									<summary>
-										重试 {run.retryHistory.at(-1)?.attempt}/{run.retryHistory.at(-1)?.maxAttempts}
+										{t("retryAttempt", {
+											attempt: run.retryHistory.at(-1)?.attempt ?? 0,
+											max: run.retryHistory.at(-1)?.maxAttempts ?? 0,
+										})}
 									</summary>
 									{run.retryHistory.map((retry, index) => (
 										<div className="retry-entry" key={`${retry.timestamp}-${index}`}>
 											<div>
-												<strong>
-													重试 {retry.attempt}/{retry.maxAttempts}
-												</strong>
+												<strong>{t("retryAttempt", { attempt: retry.attempt, max: retry.maxAttempts })}</strong>
 												<span>
-													{formatRunTime(retry.timestamp)} · 等待 {formatDelay(retry.delayMs)}
+													{formatRunTime(retry.timestamp)} · {t("waitDelay", { delay: formatDelay(retry.delayMs) })}
 												</span>
 											</div>
 											<p>{retry.error}</p>
@@ -3910,16 +4129,18 @@ function RightRail({
 							)}
 							{run.hookEvents && run.hookEvents.length > 0 && (
 								<details className="run-hooks">
-									<summary>Hook 明细</summary>
+									<summary>{t("hookDetails")}</summary>
 									{run.hookEvents.map((event, index) => (
 										<div className="hook-entry" key={`${event.hookId}-${event.point}-${event.startedAt}-${index}`}>
 											<div>
 												<strong>{event.hookId}</strong>
-												<span>{HOOK_OUTCOME_LABELS[event.outcome] ?? event.outcome}</span>
+												<span>
+													{HOOK_OUTCOME_LABELS[event.outcome] ? t(HOOK_OUTCOME_LABELS[event.outcome]!) : event.outcome}
+												</span>
 											</div>
 											<p>
-												{HOOK_POINT_LABELS[event.point] ?? event.point} · {event.mode === "enforce" ? "强制" : "观察"} ·{" "}
-												{formatDelay(event.durationMs)}
+												{HOOK_POINT_LABELS[event.point] ? t(HOOK_POINT_LABELS[event.point]!) : event.point} ·{" "}
+												{event.mode === "enforce" ? t("enforce") : t("observe")} · {formatDelay(event.durationMs)}
 												{event.code ? ` · ${event.code}` : ""}
 											</p>
 										</div>
@@ -3929,8 +4150,8 @@ function RightRail({
 							{run.contextPlan && (
 								<details className="run-context">
 									<summary>
-										上下文明细
-										{run.contextPlan.omittedCount > 0 ? ` · 省略 ${run.contextPlan.omittedCount}` : ""}
+										{t("contextDetails")}
+										{run.contextPlan.omittedCount > 0 ? t("omittedCount", { count: run.contextPlan.omittedCount }) : ""}
 									</summary>
 									{run.contextPlan.fragments.map((fragment) => (
 										<div className="context-entry" key={fragment.id}>
@@ -3939,9 +4160,12 @@ function RightRail({
 												<span>{formatTokens(fragment.renderedTokens)}</span>
 											</div>
 											<p>
-												{CONTEXT_KIND_LABELS[fragment.kind] ?? fragment.kind} ·{" "}
-												{CONTEXT_CACHE_LABELS[fragment.cacheScope] ?? fragment.cacheScope} · {fragment.source}
-												{fragment.truncated ? " · 已截断" : ""}
+												{CONTEXT_KIND_LABELS[fragment.kind] ? t(CONTEXT_KIND_LABELS[fragment.kind]!) : fragment.kind} ·{" "}
+												{CONTEXT_CACHE_LABELS[fragment.cacheScope]
+													? t(CONTEXT_CACHE_LABELS[fragment.cacheScope]!)
+													: fragment.cacheScope}{" "}
+												· {fragment.source}
+												{fragment.truncated ? t("truncatedSuffix") : ""}
 											</p>
 										</div>
 									))}
@@ -3950,13 +4174,20 @@ function RightRail({
 							{run.trajectory && (
 								<details className="run-trajectory">
 									<summary>
-										结构评测 {run.trajectory.evaluation.score}/100 · {run.trajectory.integrity ? "链完整" : "链异常"}
+										{t("structureScore", {
+											score: run.trajectory.evaluation.score,
+											integrity: t(run.trajectory.integrity ? "chainIntact" : "chainBroken"),
+										})}
 									</summary>
-									<p className="trajectory-note">仅评估执行结构与证据完整性，不判断回答语义正确性。</p>
+									<p className="trajectory-note">{t("structureNote")}</p>
 									{run.trajectory.evaluation.criteria.map((criterion) => (
 										<div className="trajectory-entry" key={criterion.id}>
 											<div>
-												<strong>{TRAJECTORY_CRITERION_LABELS[criterion.id] ?? criterion.id}</strong>
+												<strong>
+													{TRAJECTORY_CRITERION_LABELS[criterion.id]
+														? t(TRAJECTORY_CRITERION_LABELS[criterion.id]!)
+														: criterion.id}
+												</strong>
 												<span>{criterion.score}</span>
 											</div>
 											<p>{criterion.evidence}</p>
@@ -3969,17 +4200,17 @@ function RightRail({
 				</div>
 			</div>
 			<div className="rail-section">
-				<h2>会话记忆</h2>
+				<h2>{t("sessionMemory")}</h2>
 				<div className="memory-history">
-					{memories.length === 0 && <div className="run-empty">暂无压缩记忆</div>}
+					{memories.length === 0 && <div className="run-empty">{t("noMemory")}</div>}
 					{memories.slice(0, 5).map((record) => {
 						const memory = record.memory;
 						return (
 							<details className="memory-row" key={memory.id}>
 								<summary>
 									<span>
-										{MEMORY_REASON_LABELS[memory.reason]}
-										{record.retention === "retained" ? " · 已保留" : ""}
+										{t(MEMORY_REASON_LABELS[memory.reason])}
+										{record.retention === "retained" ? t("retainedSuffix") : ""}
 									</span>
 									<time>{formatRunTime(memory.createdAt)}</time>
 								</summary>
@@ -3987,7 +4218,9 @@ function RightRail({
 									{memory.tokensBefore !== undefined && (
 										<span>
 											{formatTokens(memory.tokensBefore)} →{" "}
-											{memory.estimatedTokensAfter === undefined ? "未知" : formatTokens(memory.estimatedTokensAfter)}
+											{memory.estimatedTokensAfter === undefined
+												? t("unknown")
+												: formatTokens(memory.estimatedTokensAfter)}
 										</span>
 									)}
 									<span>Revision {memory.source.revision}</span>
@@ -3997,14 +4230,14 @@ function RightRail({
 									className="memory-source"
 									title={`${memory.source.fromItemId ?? "?"} → ${memory.source.throughItemId ?? "?"}`}
 								>
-									来源 {memory.source.fromItemId?.slice(0, 8) ?? "?"} →{" "}
+									{t("source")} {memory.source.fromItemId?.slice(0, 8) ?? "?"} →{" "}
 									{memory.source.throughItemId?.slice(0, 8) ?? "?"}
 								</div>
 								<div className="memory-actions">
 									<button
 										type="button"
 										aria-pressed={record.retention === "retained"}
-										title={record.retention === "retained" ? "取消保留" : "保留此记忆"}
+										title={record.retention === "retained" ? t("releaseMemory") : t("retainMemory")}
 										disabled={memoryDisabled || memoryBusy === memory.id}
 										onClick={() =>
 											void manageMemory(memory.id, record.retention === "retained" ? "release" : "promote")
@@ -4014,7 +4247,7 @@ function RightRail({
 									</button>
 									<button
 										type="button"
-										title="忘记此记忆"
+										title={t("forgetMemory")}
 										disabled={memoryDisabled || memoryBusy === memory.id}
 										onClick={() => void manageMemory(memory.id, "forget")}
 									>
@@ -4027,14 +4260,14 @@ function RightRail({
 				</div>
 			</div>
 			<div className="rail-section">
-				<h2>工作区</h2>
+				<h2>{t("workspace")}</h2>
 				<div className="rail-item">
 					<ShieldCheck size={16} />
-					<span>隔离执行</span>
+					<span>{t("isolatedExecution")}</span>
 				</div>
 				<div className="rail-item">
 					<FileCode2 size={16} />
-					<span>{snapshot?.transcript.length ?? 0} 条对话记录</span>
+					<span>{t("transcriptCount", { count: snapshot?.transcript.length ?? 0 })}</span>
 				</div>
 			</div>
 		</aside>
@@ -4050,6 +4283,8 @@ function SessionNavigation({
 	onSelect,
 	onRename,
 	onArchive,
+	onSearch,
+	onOpenMatch,
 }: {
 	sessions: SessionSummary[];
 	selectedSessionId?: string;
@@ -4059,7 +4294,10 @@ function SessionNavigation({
 	onSelect: (sessionId: string) => void;
 	onRename: (sessionId: string, name: string) => Promise<void>;
 	onArchive: (sessionId: string, archived: boolean) => Promise<void>;
+	onSearch: SearchSessions;
+	onOpenMatch: (sessionId: string, messageId: string) => Promise<void>;
 }) {
+	const t = useT();
 	const [archived, setArchived] = useState(false);
 	const [renamingId, setRenamingId] = useState<string>();
 	const [nameDraft, setNameDraft] = useState("");
@@ -4110,44 +4348,51 @@ function SessionNavigation({
 
 	return (
 		<div className="session-browser">
+			<SessionSearch
+				{...(workspaceId ? { workspaceId } : {})}
+				archived={archived}
+				disabled={disabled}
+				search={onSearch}
+				onOpen={onOpenMatch}
+			/>
 			{archived && (
 				<div className="session-view-label">
 					<Archive size={12} />
-					<span>归档聊天</span>
+					<span>{t("archivedChats")}</span>
 				</div>
 			)}
-			<nav className="session-nav" aria-label="会话">
+			<nav className="session-nav" aria-label={t("sessions")}>
 				{sessions.map((session) => (
 					<div className={`session-entry ${selectedSessionId === session.id ? "selected" : ""}`} key={session.id}>
 						{!archived && renamingId === session.id ? (
 							<form className="session-rename" onSubmit={(event) => void submitRename(event)}>
 								<input
-									aria-label="会话名称"
+									aria-label={t("sessionName")}
 									autoFocus
 									maxLength={500}
-									placeholder="输入会话标题"
+									placeholder={t("sessionTitlePlaceholder")}
 									value={nameDraft}
 									onChange={(event) => setNameDraft(event.target.value)}
 								/>
-								<button type="submit" title="保存名称" disabled={!nameDraft.trim() || busyId === session.id}>
+								<button type="submit" title={t("saveName")} disabled={!nameDraft.trim() || busyId === session.id}>
 									<Check size={13} />
 								</button>
-								<button type="button" title="取消重命名" onClick={() => setRenamingId(undefined)}>
+								<button type="button" title={t("cancelRename")} onClick={() => setRenamingId(undefined)}>
 									<X size={13} />
 								</button>
 							</form>
 						) : (
 							<>
 								<button className="session-open" type="button" onClick={() => onSelect(session.id)}>
-									<span>{session.name || DEFAULT_SESSION_TITLE}</span>
+									<span>{session.name || t("newChat")}</span>
 									<i className={`session-phase dot-${session.phase}`} />
 								</button>
 								<div className={`session-actions ${archived ? "restore-only" : ""}`}>
 									{archived ? (
 										<button
 											type="button"
-											title="恢复聊天"
-											aria-label="恢复聊天"
+											title={t("restoreChat")}
+											aria-label={t("restoreChat")}
 											disabled={session.phase !== "idle" || busyId === session.id}
 											onClick={() => {
 												setBusyId(session.id);
@@ -4163,7 +4408,7 @@ function SessionNavigation({
 										<>
 											<button
 												type="button"
-												title="重命名会话"
+												title={t("renameSession")}
 												disabled={session.phase !== "idle" || busyId === session.id}
 												onClick={() => {
 													setRenamingId(session.id);
@@ -4174,8 +4419,8 @@ function SessionNavigation({
 											</button>
 											<button
 												type="button"
-												title="归档聊天"
-												aria-label="归档聊天"
+												title={t("archiveChat")}
+												aria-label={t("archiveChat")}
 												disabled={session.phase !== "idle" || busyId === session.id}
 												onClick={() => {
 													setBusyId(session.id);
@@ -4194,7 +4439,9 @@ function SessionNavigation({
 						)}
 					</div>
 				))}
-				{sessions.length === 0 && <div className="session-list-empty">{archived ? "暂无归档聊天" : "暂无聊天"}</div>}
+				{sessions.length === 0 && (
+					<div className="session-list-empty">{archived ? t("noArchivedChats") : t("noChats")}</div>
+				)}
 			</nav>
 			<button
 				className="session-archive-switch"
@@ -4209,7 +4456,7 @@ function SessionNavigation({
 				) : (
 					<Archive size={12} />
 				)}
-				<span>{archived ? "返回聊天" : "查看归档聊天"}</span>
+				<span>{archived ? t("backToChats") : t("viewArchivedChats")}</span>
 			</button>
 			{error && (
 				<div className="session-list-error">
@@ -4478,10 +4725,23 @@ function ProjectNavigationItem({
 
 export function App() {
 	const client = useWumingClient();
+	const computer = useComputerUse(
+		client.token,
+		client.connection === "connected",
+		client.executionEnvironment?.placement === "local_device"
+	);
 	const [workbenchView, setWorkbenchView] = useState<
-		"chat" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp"
+		"chat" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp" | "teams" | "subtasks"
 	>("chat");
+	const [terminalVisited, setTerminalVisited] = useState(false);
+	useEffect(() => {
+		if (workbenchView === "terminal") setTerminalVisited(true);
+	}, [workbenchView]);
 	const [childMenuOpen, setChildMenuOpen] = useState(false);
+	const [browserOwner, setBrowserOwner] = useState<string>();
+	const [browserTarget, setBrowserTarget] = useState<{ owner: string; url: string; sequence: number }>();
+	const previewSeen = useRef(new Set<string>());
+	const previewOwner = useRef("");
 	const [skillManagerOpen, setSkillManagerOpen] = useState(false);
 	const [mobileNav, setMobileNav] = useState(false);
 	const [newChatBusy, setNewChatBusy] = useState(false);
@@ -4541,6 +4801,7 @@ export function App() {
 	// The transcript follows new output only while the reader is at the tail.
 	// Scrolling up to re-read something has to survive the next delta.
 	const [following, setFollowing] = useState(true);
+	const [searchTarget, setSearchTarget] = useState<{ sessionId: string; messageId: string }>();
 	const [pendingTail, setPendingTail] = useState(false);
 	const seenTailRef = useRef(0);
 	const pinnedAtRef = useRef<number | undefined>(undefined);
@@ -4636,6 +4897,69 @@ export function App() {
 	);
 	const selectedWorkspace =
 		client.workspaces.find((workspace) => workspace.id === client.selectedWorkspaceId) ?? client.workspaces[0];
+	const browserSessionId = client.snapshot?.session.id ?? "workspace";
+	const browserWorkspaceId = client.snapshot?.session.workspaceId ?? selectedWorkspace?.id;
+	const browserKey = JSON.stringify([browserWorkspaceId, browserSessionId]);
+	const browserOpen = browserOwner === browserKey && Boolean(browserWorkspaceId);
+	useEffect(() => {
+		if (browserOpen && showRight) setBrowserOwner(undefined);
+	}, [browserOpen, showRight]);
+	useEffect(() => {
+		const open = (event: Event) => {
+			const url = (event as CustomEvent<{ url: string }>).detail?.url;
+			if (!window.wumingDesktop?.browser || typeof url !== "string") return;
+			setBrowserOwner(browserKey);
+			setShowRight(false);
+			setBrowserTarget({ owner: browserKey, url, sequence: Date.now() });
+		};
+		window.addEventListener(OPEN_BROWSER_EVENT, open);
+		const openLocalLink = (event: MouseEvent) => {
+			if (
+				!window.wumingDesktop?.browser ||
+				event.defaultPrevented ||
+				event.button !== 0 ||
+				event.ctrlKey ||
+				event.metaKey ||
+				event.shiftKey ||
+				event.altKey
+			)
+				return;
+			const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+			if (!(anchor instanceof HTMLAnchorElement) || anchor.hasAttribute("download")) return;
+			const url = previewUrl("preview_start", { url: anchor.href });
+			if (!url) return;
+			event.preventDefault();
+			open(new CustomEvent(OPEN_BROWSER_EVENT, { detail: { url } }));
+		};
+		document.addEventListener("click", openLocalLink);
+		return () => {
+			window.removeEventListener(OPEN_BROWSER_EVENT, open);
+			document.removeEventListener("click", openLocalLink);
+		};
+	}, [browserKey]);
+	useEffect(() => {
+		if (!window.wumingDesktop?.browser) return;
+		const completed = (client.snapshot?.transcript ?? []).flatMap((item) =>
+			item.type === "tool" && !item.isError && item.status === "complete" ? [item] : []
+		);
+		if (previewOwner.current !== browserKey) {
+			previewOwner.current = browserKey;
+			previewSeen.current = new Set(completed.map((tool) => browserKey + tool.toolCallId));
+		}
+		for (const tool of [...completed, ...Object.values(client.liveTools)]) {
+			const key = browserKey + tool.toolCallId;
+			const url = tool.status === "complete" ? previewUrl(tool.toolName, tool.input) : undefined;
+			if (!url || previewSeen.current.has(key)) continue;
+			previewSeen.current.add(key);
+			setBrowserOwner(browserKey);
+			setShowRight(false);
+			setBrowserTarget({ owner: browserKey, url, sequence: Date.now() });
+		}
+	}, [client.liveTools, client.snapshot?.transcript, browserKey]);
+	useEffect(() => {
+		if (client.connection === "connected" && selectedWorkspace && computer.state)
+			void client.refreshSkills(selectedWorkspace.id).catch(() => {});
+	}, [client.connection, selectedWorkspace?.id, computer.state?.enabled, client.refreshSkills]);
 	const implicitWorkspace = useMemo(
 		() => client.workspaces.find((workspace) => isImplicitWorkspace(workspace)),
 		[client.workspaces]
@@ -4710,7 +5034,8 @@ export function App() {
 		(model) => model.model.provider === client.snapshot?.model.provider && model.model.id === client.snapshot.model.id
 	);
 	const contextUsage = estimateContext(client.snapshot, sessionModel?.contextWindow);
-	const openConversation = async (sessionId: string) => {
+	const openConversation = async (sessionId: string, messageId?: string) => {
+		setSearchTarget(messageId ? { sessionId, messageId } : undefined);
 		try {
 			await client.attachSession(sessionId);
 			setShowRight(false);
@@ -4724,6 +5049,38 @@ export function App() {
 			return false;
 		}
 	};
+	const openSearchMatch = async (sessionId: string, messageId: string) => {
+		setFollowing(false);
+		if (!(await openConversation(sessionId, messageId))) setSearchTarget(undefined);
+	};
+	useEffect(
+		() =>
+			window.wumingDesktop?.notifications?.onOpen(({ sessionId }) => {
+				void client
+					.attachSession(sessionId)
+					.then(() => {
+						setWorkbenchView("chat");
+						setMobileNav(false);
+						setSettingsOpen(false);
+						setSearchTarget(undefined);
+					})
+					.catch((error) => setNewChatError(error instanceof Error ? error.message : String(error)));
+			}),
+		[client.attachSession]
+	);
+	useLayoutEffect(() => {
+		if (!searchTarget || client.snapshot?.session.id !== searchTarget.sessionId || workbenchView !== "chat") return;
+		const element = [...(transcriptRef.current?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])].find(
+			(node) => node.dataset.messageId === searchTarget.messageId
+		);
+		if (!element) return;
+		setFollowing(false);
+		element.classList.add("search-target");
+		element.scrollIntoView({ block: "center" });
+		element.focus({ preventScroll: true });
+		return () => element.classList.remove("search-target");
+	}, [searchTarget, client.snapshot?.session.id, workbenchView]);
+
 	const openToolSubagent = (toolCallId: string, input: unknown): (() => void) | undefined => {
 		const child = findToolSubagent(client.subagents, toolCallId, input);
 		return child
@@ -4858,7 +5215,11 @@ export function App() {
 				)
 				.map((part) => part.artifact);
 			jumpToLatest();
-			await client.sendPrompt(messageText(previousUser.content), artifacts);
+			const original = messageText(previousUser.content);
+			const text = desktopContinuation(items, item.id)
+				? `继续上一条未完成的桌面任务，不要从头重做。先检查当前应用和窗口，结合之前的工具结果，仅执行剩余步骤；结果不明确的点击、输入、提交或启动不能直接重复。原任务：\n${original}`
+				: original;
+			await client.sendPrompt(text, artifacts);
 		});
 	const messageActions = (item: TranscriptItem): MessageActionState => ({
 		busy: messageBusyId !== undefined,
@@ -4975,7 +5336,7 @@ export function App() {
 	useEffect(() => {
 		setComposerEdit(undefined);
 		setMessageError(undefined);
-		setFollowing(true);
+		setFollowing(searchTarget?.sessionId !== client.snapshot?.session.id);
 		pinnedAtRef.current = undefined;
 	}, [client.snapshot?.session.id]);
 
@@ -4989,7 +5350,8 @@ export function App() {
 			name: string,
 			title: string,
 			hint: string,
-			view: "chat" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp",
+			view:
+				"chat" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp" | "teams" | "subtasks",
 			icon: ReactNode
 		): ComposerCommand => ({
 			name,
@@ -5032,7 +5394,7 @@ export function App() {
 				argumentHint: "<名称>",
 				icon: <Pencil size={14} />,
 				run: async (argument) => {
-					if (!sessionId) throw new Error("未选择会话");
+					if (!sessionId) throw new Error(t("noSession"));
 					if (!argument) throw new Error("请提供新的会话名称，例如 /rename 需求梳理");
 					await client.renameSession(sessionId, argument);
 				},
@@ -5044,7 +5406,7 @@ export function App() {
 				kind: "action",
 				icon: <Archive size={14} />,
 				run: async () => {
-					if (!sessionId) throw new Error("未选择会话");
+					if (!sessionId) throw new Error(t("noSession"));
 					await client.archiveSession(sessionId, true);
 				},
 			},
@@ -5078,10 +5440,11 @@ export function App() {
 			panel("changes", "打开更改面板", "更改 diff 变更", "changes", <GitCompareArrows size={14} />),
 			panel("terminal", "打开终端", "终端 命令行", "terminal", <TerminalSquare size={14} />),
 			panel("tools", "查看工具清单", "工具", "tools", <Wrench size={14} />),
-			panel("skills", "查看技能", "技能", "skills", <BookOpen size={14} />),
+			panel("skills", "查看技能", t("contextSkill"), "skills", <BookOpen size={14} />),
 			panel("mcp", "查看 MCP 服务", "mcp 服务", "mcp", <Plug size={14} />),
 			...(client.snapshot && client.capabilities.includes("subagents")
 				? [
+						panel("teams", "Agent Teams 协作工作台", "团队 成员 通信 依赖 teams", "teams", <Users size={14} />),
 						{
 							name: "agents",
 							title: "查看子对话",
@@ -5093,6 +5456,18 @@ export function App() {
 					]
 				: []),
 			panel("automations", "查看自动化", "自动化 定时 计划", "automations", <CalendarClock size={14} />),
+			...(client.capabilities.includes("agent.teams")
+				? [
+						{
+							name: "team",
+							title: "启动 Agent Team",
+							hint: "团队 协作",
+							kind: "prompt" as const,
+							argumentHint: "<目标>",
+							icon: <Users size={14} />,
+						},
+					]
+				: []),
 			panel("chat", "回到对话", "对话 聊天", "chat", <MessageSquareCode size={14} />),
 		];
 		if (demoRuntime) {
@@ -5108,7 +5483,7 @@ export function App() {
 			}
 		}
 		return commands;
-	}, [canCompact, client, demoRuntime, sessionId, thinkingLevel, startNewChat]);
+	}, [canCompact, client, demoRuntime, sessionId, thinkingLevel, startNewChat, t]);
 
 	// The palette is the mouse-and-keyboard twin of the slash registry: the same
 	// commands, plus the navigation that has no place in a prompt.
@@ -5130,7 +5505,7 @@ export function App() {
 		for (const item of skillItems(client.skills, "")) {
 			entries.push({
 				id: item.id,
-				group: "技能",
+				group: t("contextSkill"),
 				label: item.label,
 				detail: item.detail,
 				badge: item.badge,
@@ -5141,9 +5516,7 @@ export function App() {
 					const selected = await client.getSkill(selectedWorkspace.id, item.skillId!);
 					if (!selected) return;
 					setWorkbenchView("chat");
-					requestAnimationFrame(() =>
-						document.querySelector<HTMLTextAreaElement>('textarea[aria-label="消息"]')?.focus()
-					);
+					requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus());
 				},
 			});
 		}
@@ -5151,9 +5524,9 @@ export function App() {
 			if (session.id === sessionId) continue;
 			entries.push({
 				id: `session:${session.id}`,
-				group: "会话",
+				group: t("sessions"),
 				label: session.name || DEFAULT_SESSION_TITLE,
-				detail: statusLabel(session.phase),
+				detail: statusLabel(session.phase, t),
 				badge: session.archivedAt === undefined ? undefined : "已归档",
 				icon: <MessageSquareCode size={14} />,
 				keywords: [session.id],
@@ -5165,7 +5538,7 @@ export function App() {
 				if (workspace.id === selectedWorkspace?.id) continue;
 				entries.push({
 					id: `workspace:${workspace.id}`,
-					group: "工作区",
+					group: t("workspace"),
 					label: workspaceName(workspace.name),
 					detail: "切换工作区",
 					icon: <Folder size={14} />,
@@ -5177,7 +5550,7 @@ export function App() {
 			{
 				id: "shell:sidebar",
 				group: "外壳",
-				label: sidebarCollapsed ? "展开侧边栏" : "收起侧边栏",
+				label: sidebarCollapsed ? t("expandSidebar") : t("collapseSidebar"),
 				detail: `${modifierLabel()} B`,
 				icon: sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />,
 				keywords: ["左侧栏 sidebar"],
@@ -5241,13 +5614,14 @@ export function App() {
 		sidebarCollapsed,
 		theme,
 		toggleSidebar,
+		t,
 	]);
 
 	useEffect(() => {
 		const onKeyDown = (event: KeyboardEvent) => {
 			// A component that already handled the chord marks it, so the composer's
 			// own Escape and Enter bindings keep priority over the shell's.
-			if (event.defaultPrevented) return;
+			if (event.defaultPrevented || event.isComposing || typeof event.key !== "string") return;
 			const chord = event.metaKey || event.ctrlKey;
 			const key = event.key.toLowerCase();
 			if (chord && event.altKey && !event.shiftKey && key === "n") {
@@ -5306,27 +5680,7 @@ export function App() {
 		toggleSidebar,
 	]);
 
-	const themeSetting = (
-		<div className="theme-setting">
-			<div>
-				<span className="settings-section-title">{t("appearance")}</span>
-				<p className="settings-hint">{t("appearanceHint")}</p>
-			</div>
-			<div className="segmented" role="group" aria-label={t("theme")}>
-				{(["system", "light", "dark"] as ThemeChoice[]).map((choice) => (
-					<button
-						key={choice}
-						type="button"
-						className={theme.choice === choice ? "active" : ""}
-						aria-pressed={theme.choice === choice}
-						onClick={() => theme.setChoice(choice)}
-					>
-						{themeLabel(choice, locale)}
-					</button>
-				))}
-			</div>
-		</div>
-	);
+	const themeSetting = <ThemeSettings theme={theme} locale={locale} />;
 	const languageSetting = (
 		<div className="language-setting">
 			<div>
@@ -5378,6 +5732,8 @@ export function App() {
 	const customModelSettings = client.capabilities.includes("model.custom") ? (
 		<CustomModelSettings
 			models={client.models}
+			onListMedia={client.listCustomMediaModels}
+			revision={client.modelSettingsRevision}
 			onDiscover={client.discoverCustomModels}
 			onListServices={client.listCustomModelServices}
 			onRefreshService={client.refreshCustomModelService}
@@ -5438,6 +5794,16 @@ export function App() {
 		icon: ReactNode;
 		count?: number;
 	}> = [
+		...(client.capabilities.includes("agent.teams")
+			? [
+					{
+						id: "agents" as const,
+						label: "Agents",
+						hint: locale === "en" ? "Reusable roles" : "角色模板",
+						icon: <Users size={17} />,
+					},
+				]
+			: []),
 		{
 			id: "general",
 			label: t("generalSettings"),
@@ -5451,11 +5817,27 @@ export function App() {
 			icon: <Bot size={17} />,
 			count: client.models.filter((model) => model.custom).length,
 		},
+		...(client.capabilities.includes("model.official")
+			? [
+					{
+						id: "official" as const,
+						label: t("officialAccountSettings"),
+						hint: t("officialAccountSettingsHint"),
+						icon: <UserRound size={17} />,
+					},
+				]
+			: []),
 		{
 			id: "usage",
 			label: t("usageSettings"),
 			hint: t("usageSettingsHint"),
 			icon: <BarChart3 size={17} />,
+		},
+		{
+			id: "computer",
+			label: "Computer Use",
+			hint: locale === "en" ? "Desktop control" : "桌面控制",
+			icon: <Command size={17} />,
 		},
 		{
 			id: "connection",
@@ -5477,45 +5859,45 @@ export function App() {
 
 	return (
 		<div
-			className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${resizingSidebar ? "resizing-sidebar" : ""} ${showRight && workbenchView === "chat" && client.snapshot ? "with-right" : ""}`}
+			className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${resizingSidebar ? "resizing-sidebar" : ""} ${browserOpen ? "with-browser" : ""} ${!browserOpen && showRight && workbenchView === "chat" && client.snapshot ? "with-right" : ""}`}
 			style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
 		>
 			<aside className={`sidebar ${mobileNav ? "mobile-open" : ""}`}>
 				<div className="brand-row">
-					<div className="brand-mark">P</div>
+					<img className="brand-mark" src={clover} alt="" width={32} height={32} />
 					<strong>Pi-Wm</strong>
 					<button
 						className="icon-button desktop-sidebar-toggle"
 						type="button"
-						title={`收起侧边栏（${modifierLabel()} B）`}
-						aria-label="收起侧边栏"
+						title={`${t("collapseSidebar")} (${modifierLabel()} B)`}
+						aria-label={t("collapseSidebar")}
 						onClick={toggleSidebar}
 					>
 						<PanelLeftClose size={18} />
 					</button>
-					<button className="icon-button mobile-close" title="关闭导航" onClick={() => setMobileNav(false)}>
+					<button className="icon-button mobile-close" title={t("closeNavigation")} onClick={() => setMobileNav(false)}>
 						<X size={18} />
 					</button>
 				</div>
 				<button
 					className="new-chat-button sidebar-new-chat"
 					type="button"
-					aria-label="新对话"
-					title={`开始新对话（${modifierLabel()} Alt N）`}
+					aria-label={t("newChat")}
+					title={`${t("startNewChat")} (${modifierLabel()} Alt N)`}
 					onClick={() => void startNewChat()}
 					disabled={!canCreateChat || newChatBusy}
 					aria-busy={newChatBusy}
 				>
 					{newChatBusy ? <RefreshCw className="spin" size={18} /> : <SquarePen size={18} />}
-					<span>{newChatBusy ? "正在新建…" : "新对话"}</span>
+					<span>{newChatBusy ? t("newChatBusy") : t("newChat")}</span>
 				</button>
 				<section className="project-section">
 					<div className="project-section-heading">
-						<span className="nav-label">项目</span>
+						<span className="nav-label">{t("projects")}</span>
 						<div className="project-heading-actions">
 							<button
 								type="button"
-								title="打开项目"
+								title={t("openProject")}
 								disabled={client.connection !== "connected"}
 								onClick={() => setProjectDialogOpen(true)}
 							>
@@ -5559,6 +5941,8 @@ export function App() {
 												workspaceId={workspace.id}
 												disabled={client.connection !== "connected"}
 												onBrowse={client.browseSessions}
+												onSearch={client.searchSessions}
+												onOpenMatch={openSearchMatch}
 												onSelect={(sessionId) => void openConversation(sessionId)}
 												onRename={client.renameSession}
 												onArchive={client.archiveSession}
@@ -5584,6 +5968,8 @@ export function App() {
 										workspaceId={implicitWorkspace.id}
 										disabled={client.connection !== "connected"}
 										onBrowse={client.browseSessions}
+										onSearch={client.searchSessions}
+										onOpenMatch={openSearchMatch}
 										onSelect={(sessionId) => void openConversation(sessionId)}
 										onRename={client.renameSession}
 										onArchive={client.archiveSession}
@@ -5605,7 +5991,7 @@ export function App() {
 					</button>
 					<div className={`connection ${client.connection}`}>
 						<i />
-						{client.connection === "connected" ? t("connected") : statusLabel(client.connection)}
+						{client.connection === "connected" ? t("connected") : statusLabel(client.connection, t)}
 					</div>
 				</div>
 			</aside>
@@ -5613,7 +5999,7 @@ export function App() {
 				<div
 					className="sidebar-resizer"
 					role="separator"
-					aria-label="调整侧边栏宽度"
+					aria-label={t("resizeSidebar")}
 					aria-orientation="vertical"
 					aria-valuemin={MIN_SIDEBAR_WIDTH}
 					aria-valuemax={MAX_SIDEBAR_WIDTH}
@@ -5635,8 +6021,8 @@ export function App() {
 							<button
 								className="icon-button desktop-sidebar-toggle sidebar-open-button"
 								type="button"
-								title={`展开侧边栏（${modifierLabel()} B）`}
-								aria-label="展开侧边栏"
+								title={`${t("expandSidebar")} (${modifierLabel()} B)`}
+								aria-label={t("expandSidebar")}
 								onClick={toggleSidebar}
 							>
 								<PanelLeftOpen size={18} />
@@ -5646,7 +6032,7 @@ export function App() {
 							className="new-chat-button topbar-new-chat"
 							type="button"
 							aria-label={t("newChat")}
-							title={`开始新对话（${modifierLabel()} Alt N）`}
+							title={`${t("startNewChat")} (${modifierLabel()} Alt N)`}
 							onClick={() => void startNewChat()}
 							disabled={!canCreateChat || newChatBusy}
 							aria-busy={newChatBusy}
@@ -5654,40 +6040,44 @@ export function App() {
 							{newChatBusy ? <RefreshCw className="spin" size={16} /> : <SquarePen size={16} />}
 							{newChatBusy ? t("newChatBusy") : t("newChat")}
 						</button>
-						{client.snapshot?.session.parentSessionId && (
+						{workbenchView !== "teams" && client.snapshot?.session.parentSessionId && (
 							<button
 								className="icon-button subagent-back"
 								type="button"
-								title="返回上级对话"
-								aria-label="返回上级对话"
+								title={t("parentConversation")}
+								aria-label={t("parentConversation")}
 								onClick={() => void openConversation(client.snapshot!.session.parentSessionId!)}
 							>
 								<ArrowLeft size={18} />
 							</button>
 						)}
 						<div>
-							<h1>{client.snapshot?.session.name || DEFAULT_SESSION_TITLE}</h1>
-							{(!client.snapshot ||
-								client.snapshot.session.archivedAt ||
-								selectedProject ||
-								client.snapshot.session.parentSessionId) && (
-								<span>
-									{!client.snapshot
-										? selectedProject
-											? workspaceName(selectedProject.name)
-											: t("noProject")
-										: client.snapshot.session.parentSessionId
-											? t("agentConversation")
-											: client.snapshot.session.archivedAt
-												? t("archived")
-												: ""}
-									{client.snapshot &&
-									(client.snapshot.session.parentSessionId || client.snapshot.session.archivedAt) &&
-									selectedProject
-										? " · "
-										: ""}
-									{client.snapshot && selectedProject ? workspaceName(selectedProject.name) : ""}
-								</span>
+							{workbenchView === "teams" && <h1>Agent Teams</h1>}
+							{workbenchView === "teams" ? (
+								<span>{selectedWorkspace ? workspaceName(selectedWorkspace.name) : t("noProject")}</span>
+							) : (
+								(!client.snapshot ||
+									client.snapshot.session.archivedAt ||
+									selectedProject ||
+									client.snapshot.session.parentSessionId) && (
+									<span>
+										{!client.snapshot
+											? selectedProject
+												? workspaceName(selectedProject.name)
+												: t("noProject")
+											: client.snapshot.session.parentSessionId
+												? t("agentConversation")
+												: client.snapshot.session.archivedAt
+													? t("archived")
+													: ""}
+										{client.snapshot &&
+										(client.snapshot.session.parentSessionId || client.snapshot.session.archivedAt) &&
+										selectedProject
+											? " · "
+											: ""}
+										{client.snapshot && selectedProject ? workspaceName(selectedProject.name) : ""}
+									</span>
+								)
 							)}
 						</div>
 					</div>
@@ -5712,6 +6102,32 @@ export function App() {
 							<Folder size={15} />
 							<span>{t("files")}</span>
 						</button>
+						{(client.capabilities.includes("agent.teams") || client.capabilities.includes("subagents")) && (
+							<button
+								role="tab"
+								aria-selected={workbenchView === "teams"}
+								className={workbenchView === "teams" ? "active" : ""}
+								title="Agent Teams"
+								aria-label="Agent Teams"
+								onClick={() => setWorkbenchView("teams")}
+							>
+								<Users size={15} />
+								<span>{locale === "en" ? "Teams" : "团队"}</span>
+							</button>
+						)}
+						{client.capabilities.includes("subagents") && (
+							<button
+								role="tab"
+								aria-selected={workbenchView === "subtasks"}
+								className={workbenchView === "subtasks" ? "active" : ""}
+								title={locale === "en" ? "Subtasks" : "子任务"}
+								aria-label={locale === "en" ? "Subtasks" : "子任务"}
+								onClick={() => setWorkbenchView("subtasks")}
+							>
+								<GitBranch size={15} />
+								<span>{locale === "en" ? "Subtasks" : "子任务"}</span>
+							</button>
+						)}
 						<button
 							role="tab"
 							aria-selected={workbenchView === "changes"}
@@ -5766,6 +6182,22 @@ export function App() {
 						</button>
 					</div>
 					<div className="topbar-actions">
+						{window.wumingDesktop?.browser && browserWorkspaceId && (
+							<button
+								type="button"
+								className={"icon-button" + (browserOpen ? " pressed" : "")}
+								title={locale === "en" ? "Browser preview" : "浏览器预览"}
+								aria-label={locale === "en" ? "Browser preview" : "浏览器预览"}
+								aria-pressed={browserOpen}
+								onClick={() => {
+									setBrowserOwner(browserOpen ? undefined : browserKey);
+									setBrowserTarget(undefined);
+									setShowRight(false);
+								}}
+							>
+								<Globe size={17} />
+							</button>
+						)}
 						{client.snapshot && client.capabilities.includes("subagents") && (
 							<ChildConversationMenu
 								key={client.snapshot.session.id}
@@ -5791,7 +6223,7 @@ export function App() {
 						{workbenchView === "chat" && client.snapshot && client.capabilities.includes("session.compaction") && (
 							<button
 								className="icon-button"
-								title="整理上下文"
+								title={t("statusCompaction")}
 								disabled={
 									client.connection !== "connected" || active || client.snapshot.session.archivedAt !== undefined
 								}
@@ -5803,7 +6235,7 @@ export function App() {
 						{workbenchView === "chat" && client.snapshot && (
 							<button
 								className="icon-button"
-								title="派生会话"
+								title={t("forkConversation")}
 								disabled={
 									client.connection !== "connected" || active || client.snapshot.session.archivedAt !== undefined
 								}
@@ -5840,7 +6272,7 @@ export function App() {
 						<button
 							className="icon-button"
 							type="button"
-							aria-label="关闭新建对话错误"
+							aria-label={t("closeNewChatError")}
 							onClick={() => setNewChatError(undefined)}
 						>
 							<X size={14} />
@@ -5960,6 +6392,7 @@ export function App() {
 													item.type === "assistant" && item.error
 														? {
 																run: failureRun,
+																resumeDesktop: desktopContinuation(client.snapshot?.transcript ?? [], item.id),
 																busy: messageBusyId === item.id,
 																disabled: branchDisabled,
 																disabledTitle: branchTitle,
@@ -6009,6 +6442,13 @@ export function App() {
 							)}
 						</div>
 						<div className="composer-wrap">
+							<TeamLaunchNotice
+								transcript={client.snapshot?.transcript ?? []}
+								onOpen={(teamId) => {
+									if (selectedWorkspace) localStorage.setItem(`wuming.teamId.${selectedWorkspace.id}`, teamId);
+									setWorkbenchView("teams");
+								}}
+							/>
 							{client.selectedSkill && (
 								<div
 									className={client.selectedSkill.truncated ? "workbench-error" : "composer-selected-skill"}
@@ -6016,14 +6456,14 @@ export function App() {
 								>
 									<BookOpen size={14} />
 									<span>
-										{client.selectedSkill.truncated ? "技能内容已截断，无法执行：" : "当前技能："}
+										{client.selectedSkill.truncated ? t("skillTruncated") : t("currentSkill")}
 										{client.selectedSkill.name}
 									</span>
 									<button
 										className="icon-button"
 										type="button"
-										aria-label="取消技能"
-										title="取消技能"
+										aria-label={t("cancelSkill")}
+										title={t("cancelSkill")}
 										onClick={client.clearSelectedSkill}
 									>
 										<X size={13} />
@@ -6035,10 +6475,10 @@ export function App() {
 									className={`jump-latest${pendingTail ? " live" : ""}`}
 									type="button"
 									onClick={jumpToLatest}
-									aria-label={pendingTail ? "回到底部，有新内容" : "回到底部"}
+									aria-label={pendingTail ? t("scrollToBottomNew") : t("scrollToBottom")}
 								>
 									{pendingTail ? <span className="jump-dot" aria-hidden="true" /> : <ArrowDown size={14} />}
-									{pendingTail ? "有新内容" : "回到底部"}
+									{pendingTail ? t("newContent") : t("scrollToBottom")}
 								</button>
 							)}
 							<Composer
@@ -6101,6 +6541,8 @@ export function App() {
 									setDraftThinking(level);
 								}}
 								onSend={async (text, artifacts, queueMode) => {
+									if (/^\/team\s*$/.test(text.trim()) || (client.selectedSkill?.id === "team" && !text.trim()))
+										throw new Error("请提供团队任务目标，例如 /team 帮我做一个图书管理系统");
 									if (client.selectedSkill?.truncated)
 										throw new Error("所选技能内容已截断，无法执行。请先精简技能文件或取消技能。");
 									// Sending is an explicit request to watch the answer arrive.
@@ -6159,6 +6601,62 @@ export function App() {
 						</div>
 					</section>
 				)}
+				{workbenchView === "teams" &&
+					(selectedWorkspace ? (
+						<PersistentAgentTeams
+							key={selectedWorkspace.id}
+							workspaceId={selectedWorkspace.id}
+							connected={client.connection === "connected"}
+							available={client.capabilities.includes("agent.teams")}
+							listTeams={client.listTeams}
+							command={client.teamCommand}
+							onOpen={openConversation}
+							onChat={() => setWorkbenchView("chat")}
+						/>
+					) : (
+						<section className="teams-workbench" aria-label="Agent Teams">
+							<div className="teams-empty">
+								<Users size={32} />
+								<h3>{locale === "en" ? "No project selected" : "尚未选择项目"}</h3>
+								<button type="button" onClick={() => setWorkbenchView("chat")}>
+									{t("chat")}
+								</button>
+							</div>
+						</section>
+					))}
+				{workbenchView === "subtasks" &&
+					(client.snapshot ? (
+						<AgentTeamsWorkbench
+							key={client.snapshot.session.id}
+							snapshot={client.snapshot}
+							subagents={client.subagents}
+							goals={client.goals}
+							connected={client.connection === "connected"}
+							canCreate={client.canCreateSubagent}
+							canPlan={client.capabilities.includes("goals")}
+							onCreateMember={client.createSubagent}
+							onCreatePlan={client.createGoal}
+							onStartPlan={client.startGoal}
+							onStopPlan={client.cancelGoal}
+							onStopMember={client.cancelSubagent}
+							onOpen={openConversation}
+							onApprove={client.respondApproval}
+							onRefresh={() =>
+								Promise.all([
+									client.refreshSubagents(client.snapshot!.session.id),
+									...(client.capabilities.includes("goals") ? [client.refreshGoals(client.snapshot!.session.id)] : []),
+								])
+							}
+						/>
+					) : (
+						<section className="teams-workbench">
+							<div className="teams-empty">
+								<button type="button" onClick={() => setWorkbenchView("chat")}>
+									{t("chat")}
+								</button>
+							</div>
+						</section>
+					))}
 				{workbenchView === "automations" && (
 					<AutomationsView
 						automations={client.automations}
@@ -6187,9 +6685,14 @@ export function App() {
 				{workbenchView === "changes" && selectedWorkspace && (
 					<WorkspaceChangesView token={client.token} workspaceId={selectedWorkspace.id} />
 				)}
-				{workbenchView === "terminal" && selectedWorkspace && (
-					<Suspense fallback={<div className="workbench-empty">正在加载终端...</div>}>
-						<TerminalView token={client.token} workspaceId={selectedWorkspace.id} />
+				{terminalVisited && client.token && (
+					<Suspense fallback={<div className="workbench-empty">{t("loadingTerminal")}</div>}>
+						<TerminalWorkbench
+							key={client.token}
+							token={client.token}
+							{...(selectedWorkspace ? { workspaceId: selectedWorkspace.id } : {})}
+							active={workbenchView === "terminal"}
+						/>
 					</Suspense>
 				)}
 				{workbenchView === "tools" && selectedWorkspace && (
@@ -6232,7 +6735,19 @@ export function App() {
 				)}
 			</main>
 
-			{showRight && workbenchView === "chat" && client.snapshot && (
+			{browserOpen && browserWorkspaceId && (
+				<BrowserPanel
+					key={browserKey}
+					workspaceId={browserWorkspaceId}
+					sessionId={browserSessionId}
+					initialUrl={browserTarget?.owner === browserKey ? browserTarget : undefined}
+					onClose={() => {
+						setBrowserOwner(undefined);
+						setBrowserTarget(undefined);
+					}}
+				/>
+			)}
+			{!browserOpen && showRight && workbenchView === "chat" && client.snapshot && (
 				<RightRail
 					snapshot={client.snapshot}
 					usageOverview={client.usageOverview}
@@ -6245,10 +6760,12 @@ export function App() {
 					onClose={() => setShowRight(false)}
 				/>
 			)}
-			{showRight && workbenchView === "chat" && client.snapshot && (
-				<button className="right-rail-scrim" aria-label="关闭运行面板" onClick={() => setShowRight(false)} />
+			{!browserOpen && showRight && workbenchView === "chat" && client.snapshot && (
+				<button className="right-rail-scrim" aria-label={t("closeRunPanel")} onClick={() => setShowRight(false)} />
 			)}
-			{mobileNav && <button className="mobile-scrim" aria-label="关闭导航" onClick={() => setMobileNav(false)} />}
+			{mobileNav && (
+				<button className="mobile-scrim" aria-label={t("closeNavigation")} onClick={() => setMobileNav(false)} />
+			)}
 			{paletteOpen && <CommandPalette entries={paletteEntries} onClose={() => setPaletteOpen(false)} />}
 			{shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
 			{projectDialogOpen && (
@@ -6407,8 +6924,36 @@ export function App() {
 											<div className="settings-list">
 												{themeSetting}
 												{languageSetting}
+												<TaskNotificationSettings />
 											</div>
 										</section>
+										{client.capabilities.includes("model.official") && (
+											<section
+												id="settings-panel-official"
+												className="settings-pane"
+												hidden={settingsSection !== "official"}
+											>
+												<div className="settings-page-header">
+													<h3>{t("officialAccountSettings")}</h3>
+												</div>
+												<OfficialAccountSettings
+													request={client.officialAccounts}
+													onModelsChanged={client.refreshModels}
+												/>
+											</section>
+										)}
+										{settingsSection === "agents" && selectedWorkspace && (
+											<section id="settings-panel-agents" className="settings-pane">
+												<AgentTemplateSettings
+													key={selectedWorkspace.id}
+													workspaceId={selectedWorkspace.id}
+													connected={client.connection === "connected"}
+													models={client.models}
+													tools={client.tools}
+													request={client.agentTemplates}
+												/>
+											</section>
+										)}
 										<section id="settings-panel-models" className="settings-pane" hidden={settingsSection !== "models"}>
 											<div className="settings-page-header">
 												<h3>{t("modelSettings")}</h3>
@@ -6417,6 +6962,14 @@ export function App() {
 											{customModelSettings}
 											{client.capabilities.includes("model.media") && (
 												<MediaModelSettings
+													onSetDefaultVideo={client.setDefaultVideoModel}
+													onRemoveVideo={client.removeVideoModel}
+													onSetDefaultImage={client.setDefaultImageModel}
+													onRemoveImage={client.removeImageModel}
+													revision={client.modelSettingsRevision}
+													onListCatalog={client.listCustomMediaModels}
+													onRemoveCatalog={client.removeCustomModel}
+													onConfigureCatalog={client.configureCustomModels}
 													connected={client.connection === "connected"}
 													onList={client.listMediaModels}
 													onSave={client.setMediaModel}
@@ -6424,6 +6977,13 @@ export function App() {
 													onDiscover={client.discoverMediaModels}
 												/>
 											)}
+										</section>
+										<section
+											id="settings-panel-computer"
+											className="settings-pane"
+											hidden={settingsSection !== "computer"}
+										>
+											<ComputerUseSettings model={computer} />
 										</section>
 										<section
 											id="settings-panel-usage"
@@ -6470,7 +7030,7 @@ export function App() {
 													</div>
 													<span className={`settings-connection-status connection ${client.connection}`}>
 														<i />
-														{client.connection === "connected" ? t("connected") : statusLabel(client.connection)}
+														{client.connection === "connected" ? t("connected") : statusLabel(client.connection, t)}
 													</span>
 												</div>
 												{gatewayPasswordForm}

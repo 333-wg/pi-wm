@@ -99,6 +99,33 @@ Generation requires a writable session and follows its approval policy for
 network and secret use. There are no automatic billable POST retries. Fees
 charged by media providers are not included in conversational token accounting.
 
+## Image Result Recovery
+
+URL image results are persisted in `media_image_jobs` before downloading. A failed
+download/save returns `retrieval_pending` and a session-scoped `jobId`, not a claim
+that the provider failed to generate an image. Use `get_generated_image` to retry
+only retrieval; omitting the ID retrieves the latest result in that session.
+Recovery works across host restarts and does not require the original provider
+credentials. Identical generation requests with a pending result reuse that
+result instead of issuing another billable POST. Completed jobs reuse their
+attachment and clear the saved signed URL. Old failures from before this feature
+cannot be recovered unless their original result URL was retained elsewhere.
+
+Media downloads remain subject to public-IP validation, DNS pinning, redirect
+checks and size/time limits. When an HTTP destination resolves only to public
+or synthetic proxy addresses (198.18.0.0/15), the media downloader resolves A and
+AAAA records through authenticated Cloudflare DNS-over-HTTPS, validates every
+returned address, then pins the public addresses for the original request.
+Only the hostname is sent to the DNS resolver, never prompts, signed URL paths
+or API credentials. Private/mixed-private answers, invalid TLS, and failed DNS
+recovery remain blocked. Ordinary web fetches do not opt in to this fallback.
+No protocol rewriting or disabling of proxy software/security checks is needed.
+
+Generation results may still be unavailable if the provider deletes a file or
+its signed URL expires. Recovery never silently submits a replacement image;
+after one unsuccessful recovery, explain the retrieval problem and wait for
+user direction.
+
 ## Video Adapters and References
 
 Video settings default to automatic protocol selection. The registry in

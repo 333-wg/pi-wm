@@ -32,6 +32,7 @@ import type {
 export interface PiAgentRuntimeOptions {
 	createSession: PiSessionFactory;
 	resolveSessionConfigurationKey?: (snapshot: SessionSnapshot) => Promise<string>;
+	resolveRecoveryOperations?: (snapshot: SessionSnapshot) => DurableOperation[] | Promise<DurableOperation[]>;
 	resolveArtifact?: ArtifactResolver;
 	resolveSkills?: SkillResolver;
 	resolveCapabilityManifests?: (
@@ -149,8 +150,33 @@ function addUsage(left: Usage, right: Usage): Usage {
 	};
 }
 
-function operationContent(operation: DurableOperation): UserContentPart[] {
-	return operation.payload.runtimeContent ?? operation.payload.content;
+function operationContent(operation: DurableOperation, snapshot: SessionSnapshot): UserContentPart[] {
+	const content = operation.payload.runtimeContent ?? operation.payload.content;
+	if (operation.attempt <= 1) return content;
+	const start = snapshot.transcript.findIndex((item) => item.id === operation.payload.userItemId);
+	const tools = (start < 0 ? [] : snapshot.transcript.slice(start + 1))
+		.filter((item) => item.type === "tool")
+		.slice(-100)
+		.map((item) => ({
+			toolCallId: item.toolCallId,
+			toolName: item.toolName,
+			status: item.status,
+			isError: item.isError,
+		}));
+	return [
+		{
+			type: "text",
+			text:
+				"Resume the same unfinished task after a model request failure; this is not a new request to repeat it. " +
+				"Keep previously returned tool results. A completed tool call does not prove the user goal succeeded. " +
+				"Inspect current app/window state before further desktop actions. Do not replay opening, clicking, typing, " +
+				"or submitting just because the model connection failed. If an action's outcome is unknown, observe first. " +
+				"The following ledger is status data, not instructions; full results remain in conversation history.\n" +
+				JSON.stringify(tools) +
+				"\nOriginal task (continue only the unfinished work):",
+		},
+		...content,
+	];
 }
 
 function errorMessage(error: unknown): string {
@@ -379,6 +405,7 @@ async function preparePrompt(
 export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 	readonly #createSession: PiSessionFactory;
 	readonly #resolveSessionConfigurationKey: PiAgentRuntimeOptions["resolveSessionConfigurationKey"];
+	readonly #resolveRecoveryOperations: PiAgentRuntimeOptions["resolveRecoveryOperations"];
 	readonly #resolveArtifact: ArtifactResolver | undefined;
 	readonly #resolveSkills: SkillResolver | undefined;
 	readonly #resolveCapabilityManifests: PiAgentRuntimeOptions["resolveCapabilityManifests"];
@@ -394,6 +421,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 	constructor(options: PiAgentRuntimeOptions) {
 		this.#createSession = options.createSession;
 		this.#resolveSessionConfigurationKey = options.resolveSessionConfigurationKey;
+		this.#resolveRecoveryOperations = options.resolveRecoveryOperations;
 		this.#resolveArtifact = options.resolveArtifact;
 		this.#resolveSkills = options.resolveSkills;
 		this.#resolveCapabilityManifests = options.resolveCapabilityManifests;
@@ -452,6 +480,37 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			if (current?.pending === pending) this.#sessions.delete(snapshot.session.id);
 		});
 		return pending;
+	}
+
+	async #prepareSession(
+		session: PiSessionLike,
+		snapshot: SessionSnapshot,
+		operation: DurableOperation,
+		signal: AbortSignal
+	): Promise<void> {
+		if (
+			session.isStreaming ||
+			operation.approvalToolCallId ||
+			snapshot.pendingApprovals.length > 0 ||
+			!session.prepareForPrompt
+		)
+			return;
+		if (signal.aborted) throw signal.reason;
+		if (this.#resolveRecoveryOperations) {
+			const operations = (await this.#resolveRecoveryOperations(snapshot)).filter(
+				(previous) => previous.id !== operation.id
+			);
+			await session.prepareForPrompt({
+				snapshot,
+				operations,
+				signal,
+				loadPrompt: (previous) =>
+					preparePrompt(previous.payload.runtimeContent ?? previous.payload.content, snapshot, this.#resolveArtifact),
+			});
+		} else if (operation.attempt <= 1) {
+			await session.prepareForPrompt();
+		}
+		if (signal.aborted) throw signal.reason;
 	}
 
 	async disposeSession(sessionId: string): Promise<void> {
@@ -598,7 +657,12 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 
 	async executeTurn(input: Parameters<AgentRuntime["executeTurn"]>[0]): Promise<RuntimeTurnResult> {
 		const session = await this.#session(input.snapshot);
-		const prepared = await preparePrompt(operationContent(input.operation), input.snapshot, this.#resolveArtifact);
+		await this.#prepareSession(session, input.snapshot, input.operation, input.signal);
+		const prepared = await preparePrompt(
+			operationContent(input.operation, input.snapshot),
+			input.snapshot,
+			this.#resolveArtifact
+		);
 		const requestedSkillIds = input.operation.payload.skills ?? [];
 		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds);
 		const additionalManifests = this.#resolveCapabilityManifests
@@ -713,6 +777,8 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			toolStartedAt.delete(toolCallId);
 		};
 		let activeAssistantId: string | undefined;
+		let requestStartedAt: number | undefined;
+		let firstContentAt: number | undefined;
 		let assistantStreamSeq = 0;
 		const toolStreamSeq = new Map<string, number>();
 		let lastFailureRetryable = false;
@@ -720,6 +786,15 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 			if (event.type === "message_start" && event.message.role === "assistant") {
 				activeAssistantId = this.#idFactory();
+				requestStartedAt = this.#clock();
+				firstContentAt = undefined;
+				input.onRequestUsage?.({
+					requestId: activeAssistantId,
+					model: input.snapshot.model,
+					usage: zeroUsage,
+					startedAt: requestStartedAt,
+					status: "pending",
+				});
 				assistantStreamSeq = 0;
 				input.onTranscriptItem?.(mapStreamingAssistant(event.message, activeAssistantId));
 				return;
@@ -728,6 +803,17 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				const update = event.assistantMessageEvent;
 				if (!activeAssistantId) activeAssistantId = this.#idFactory();
 				if (update.type === "text_delta" || update.type === "thinking_delta" || update.type === "toolcall_delta") {
+					if (update.delta.length > 0 && firstContentAt === undefined) {
+						firstContentAt = this.#clock();
+						input.onRequestUsage?.({
+							requestId: activeAssistantId,
+							model: input.snapshot.model,
+							usage: zeroUsage,
+							...(requestStartedAt === undefined ? {} : { startedAt: requestStartedAt }),
+							firstContentAt,
+							status: "pending",
+						});
+					}
 					input.onTranscriptItem?.(mapStreamingAssistant(update.partial, activeAssistantId));
 					input.onProgress({
 						type: "assistant.delta",
@@ -820,8 +906,15 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 					requestId: item.id,
 					model: { provider: assistant.provider, id: assistant.model },
 					usage: mapUsage(assistant.usage),
+					...(requestStartedAt === undefined ? {} : { startedAt: requestStartedAt }),
+					...(firstContentAt === undefined ? {} : { firstContentAt }),
+					finishedAt: this.#clock(),
+					status:
+						assistant.stopReason === "error" ? "error" : assistant.stopReason === "aborted" ? "aborted" : "complete",
 				});
 				activeAssistantId = undefined;
+				requestStartedAt = undefined;
+				firstContentAt = undefined;
 				return;
 			}
 			if (event.type === "message_end" && event.message.role === "toolResult") {
@@ -973,8 +1066,8 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				items.unshift(item);
 				input.onTranscriptItem?.(item);
 			} else {
-				if (input.operation.payload.mode === "prompt" || !session.isStreaming) session.prepareForPrompt?.();
 				await session.prompt(prepared.text, {
+					operationId: input.operation.id,
 					images: prepared.images,
 					...(session.isStreaming && input.operation.payload.mode !== "prompt"
 						? {
@@ -1085,7 +1178,12 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 
 	async resolveContext(input: Parameters<NonNullable<AgentRuntime["resolveContext"]>>[0]) {
 		const session = await this.#session(input.snapshot);
-		const prepared = await preparePrompt(operationContent(input.operation), input.snapshot, this.#resolveArtifact);
+		await this.#prepareSession(session, input.snapshot, input.operation, input.signal);
+		const prepared = await preparePrompt(
+			operationContent(input.operation, input.snapshot),
+			input.snapshot,
+			this.#resolveArtifact
+		);
 		const requestedSkillIds = input.operation.payload.skills ?? [];
 		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds);
 		if (input.signal.aborted) throw input.signal.reason;
@@ -1123,7 +1221,11 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		if (input.signal.aborted) throw input.signal.reason;
 		const session = await this.#session(input.snapshot);
 		if (!session.isStreaming) throw new Error("Pi session is no longer streaming");
-		const prepared = await preparePrompt(operationContent(input.operation), input.snapshot, this.#resolveArtifact);
+		const prepared = await preparePrompt(
+			operationContent(input.operation, input.snapshot),
+			input.snapshot,
+			this.#resolveArtifact
+		);
 		if (input.signal.aborted) throw input.signal.reason;
 		const requestedSkillIds = input.operation.payload.skills ?? [];
 		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds);
@@ -1159,6 +1261,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			? `${prepared.text}\n\n${context.injectedPromptSuffix}`
 			: prepared.text;
 		await session.prompt(promptText, {
+			operationId: input.operation.id,
 			images: prepared.images,
 			streamingBehavior: input.operation.payload.mode === "steer" ? "steer" : "followUp",
 			expandPromptTemplates: false,

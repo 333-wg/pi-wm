@@ -1,9 +1,62 @@
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderLocalized as renderToStaticMarkup } from "./render-localized.js";
 import { describe, expect, it } from "vitest";
 import { ToolCard, describeTool, isPreviewableImageArtifact, resultEchoesCard } from "../src/components/ToolCard.js";
 
 describe("describeTool", () => {
+	it("distinguishes returned image results awaiting retrieval from completed or failed generation", () => {
+		for (const toolName of ["generate_image", "get_generated_image"]) {
+			const receiptText = JSON.stringify({
+				jobId: "saved-job",
+				status: "retrieval_pending",
+				generationStatus: "result_received",
+			});
+			const html = renderToStaticMarkup(
+				createElement(ToolCard, { toolName, input: {}, status: "complete", receiptText })
+			);
+			expect(html).toContain("结果已返回，待取回");
+			expect(html).not.toContain('class="tool-state complete"');
+			expect(html).not.toContain("失败");
+			for (const text of ["partial JSON", JSON.stringify({ status: "retrieval_pending" }), undefined]) {
+				const completed = renderToStaticMarkup(
+					createElement(ToolCard, { toolName, input: {}, status: "complete", receiptText: text })
+				);
+				expect(completed).toContain('class="tool-state complete"');
+			}
+		}
+		expect(describeTool("get_generated_image", { jobId: "saved-job" })).toMatchObject({
+			verb: "取回图片",
+			target: "saved-job",
+		});
+	});
+	it.each([
+		[false, "not_started", "未执行"],
+		[null, "unknown", "结果待核对"],
+	])("does not show a green success for desktop receipt %s/%s", (performed, outcome, label) => {
+		const html = renderToStaticMarkup(
+			createElement(ToolCard, {
+				toolName: "computer_action",
+				input: {},
+				status: "complete",
+				receiptText: JSON.stringify({ performed, outcome }),
+			})
+		);
+		expect(html).toContain(label);
+		expect(html).not.toContain("已完成");
+		expect(html).not.toContain("tool-state complete");
+	});
+	it("labels desktop tools without exposing typed text in the summary", () => {
+		expect(describeTool("computer_screenshot", { monitor: 2 })).toMatchObject({ verb: "桌面截图", meta: "显示器 2" });
+		expect(describeTool("computer_action", { action: { kind: "type", text: "private text" } })).toMatchObject({
+			verb: "桌面 · 输入",
+		});
+		expect(describeTool("computer_action", { action: { kind: "type", text: "private text" } }).target).toBeUndefined();
+		expect(describeTool("computer_release", {})).toMatchObject({ verb: "释放桌面控制" });
+		expect(describeTool("computer_control", { minutes: 3 })).toMatchObject({
+			verb: "授权连续桌面操作",
+			meta: "最长 3 分钟",
+		});
+	});
 	it("separates successful execution from evidence and preserves legacy tool rendering", () => {
 		for (const [level, label] of Object.entries({
 			candidate_links: "候选链接",

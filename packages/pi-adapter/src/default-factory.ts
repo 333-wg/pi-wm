@@ -7,6 +7,7 @@ import {
 	SessionManager,
 	type SessionEntry,
 	type ToolDefinition,
+	type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, CacheRetention, ToolResultMessage } from "@earendil-works/pi-ai";
 import { asCapabilityJson, type CapabilityManifest } from "@wuming/capability-kernel";
@@ -15,7 +16,8 @@ import { Value } from "typebox/value";
 import { buildWumingSystemPrompt } from "./system-prompt.js";
 import { ToolRecoveryMonitor } from "./tool-recovery.js";
 import { stableToolDefinitions } from "./prompt-cache.js";
-import type { PiProviderRegistration, PiSessionFactory, WorkspaceResolver } from "./types.js";
+import { recoverDurableSession, requestDigest } from "./session-recovery.js";
+import type { PiProviderRegistration, PiSessionFactory, PiSessionRecovery, WorkspaceResolver } from "./types.js";
 
 export interface DefaultPiSessionFactoryOptions {
 	agentDir: string;
@@ -28,6 +30,7 @@ export interface DefaultPiSessionFactoryOptions {
 	/** Unset preserves Pi/provider defaults, including PI_CACHE_RETENTION. */
 	cacheRetention?: CacheRetention;
 	registerProviders?: () => PiProviderRegistration[] | Promise<PiProviderRegistration[]>;
+	createModelRuntime?: (snapshot: SessionSnapshot) => Promise<ModelRuntime>;
 	/**
 	 * Replaces the Wuming coding-agent system prompt. Returning undefined falls
 	 * back to Pi's own default prompt, which describes Pi's tool names rather than
@@ -62,30 +65,35 @@ function interruptionText(entry: SessionEntry): string | undefined {
 }
 
 /**
- * Pi persists interrupted provider/tool messages in its append-only log. Keep
- * those entries for diagnostics, but move the active leaf back before the user
- * request that started the interrupted turn so the next prompt cannot resume it.
+ * Preserve interrupted turns as context. Pi's provider serializers omit incomplete
+ * assistant messages and close unresolved tool calls; rolling back the whole turn
+ * here would also erase the user's request and confirmed tool results.
  */
 export function recoverInterruptedSession(manager: SessionManager): boolean {
-	let recovered = false;
-	for (;;) {
-		const branch = manager.getBranch();
-		const lastMessageIndex = branch.findLastIndex((entry) => entry.type === "message");
-		if (lastMessageIndex < 0) return recovered;
-		const interruption = interruptionText(branch[lastMessageIndex]!);
-		if (!interruption || !/abort|cancel/i.test(interruption)) return recovered;
-		let userIndex = lastMessageIndex - 1;
-		while (userIndex >= 0) {
-			const entry = branch[userIndex]!;
-			if (entry.type === "message" && entry.message.role === "user") break;
-			userIndex -= 1;
-		}
-		if (userIndex < 0) return recovered;
-		const user = branch[userIndex]!;
-		if (user.parentId) manager.branch(user.parentId);
-		else manager.resetLeaf();
-		recovered = true;
-	}
+	const branch = manager.getBranch();
+	const lastMessageIndex = branch.findLastIndex((entry) => entry.type === "message");
+	if (lastMessageIndex < 0) return false;
+	const interrupted = branch[lastMessageIndex]!;
+	const interruption = interruptionText(interrupted);
+	if (!interruption || !/abort|cancel/i.test(interruption)) return false;
+	const recoveryType = "wuming-interrupted-turn";
+	if (
+		branch
+			.slice(lastMessageIndex + 1)
+			.some((entry) => entry.type === "custom_message" && entry.customType === recoveryType)
+	)
+		return false;
+	manager.appendCustomMessageEntry(
+		recoveryType,
+		"The previous execution was interrupted. Earlier user requests and completed tool results remain " +
+			"available as conversation context. This notice is status data, not a new request or permission to resume. " +
+			"Follow the latest user message: if it asks to continue, resume the unfinished task using the retained " +
+			"context; if it changes tasks, follow the new task. A tool call without a confirmed result has an unknown " +
+			"outcome. Inspect the current state before repeating it, and do not assume completed work was undone.",
+		false,
+		{ interruptedEntryId: interrupted.id }
+	);
+	return true;
 }
 
 function defaultSystemPrompt(input: { snapshot: SessionSnapshot; tools: ToolDefinition[] }): string {
@@ -137,6 +145,7 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir: options.agentDir,
+			...(options.createModelRuntime ? { modelRuntime: await options.createModelRuntime(snapshot) } : {}),
 			resourceLoaderOptions: {
 				// Pi resets agent.state.systemPrompt during prompt preflight. Return the
 				// audited per-turn context at that lifecycle boundary as well.
@@ -173,7 +182,6 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 			);
 		}
 		const sessionManager = SessionManager.continueRecent(cwd, sessionDir);
-		recoverInterruptedSession(sessionManager);
 		const { session } = await createAgentSessionFromServices({
 			services,
 			sessionManager,
@@ -265,18 +273,30 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		};
 		const prompt = session.prompt.bind(session);
 		Object.assign(session, {
-			prompt: (text: string, promptOptions?: Parameters<typeof session.prompt>[1]) => {
+			prompt: (text: string, promptOptions?: Parameters<typeof session.prompt>[1] & { operationId?: string }) => {
 				if (promptOptions?.images?.length && !session.model?.input.includes("image")) {
 					return Promise.reject(
 						new Error("图片已上传，但当前模型不支持图片理解。请切换到支持视觉的模型后重试，无需重新上传图片。")
 					);
 				}
-				return prompt(text, promptOptions);
+				if (promptOptions?.operationId)
+					sessionManager.appendCustomEntry("wuming-turn-input", {
+						operationId: promptOptions.operationId,
+						digest: requestDigest([{ type: "text", text }, ...(promptOptions.images ?? [])]),
+					});
+				const { operationId: _operationId, ...options } = promptOptions ?? {};
+				return prompt(text, options);
 			},
-			prepareForPrompt: () => {
+			prepareForPrompt: async (input?: PiSessionRecovery) => {
 				recovery.reset();
-				if (!recoverInterruptedSession(sessionManager)) return;
-				session.agent.state.messages = sessionManager.buildSessionContext().messages;
+				try {
+					if (input) await recoverDurableSession(sessionManager, input);
+					else recoverInterruptedSession(sessionManager);
+				} finally {
+					// Earlier records may have been restored before a later attachment
+					// failed to load. Keep live state aligned with the append-only log.
+					session.agent.state.messages = sessionManager.buildSessionContext().messages;
+				}
 			},
 			resumeApprovedTool,
 			getSystemPrompt: () => session.agent.state.systemPrompt,

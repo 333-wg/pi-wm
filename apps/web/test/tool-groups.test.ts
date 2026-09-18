@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderLocalized as renderToStaticMarkup } from "./render-localized.js";
 import { describe, expect, it } from "vitest";
 import { groupConsecutiveTools, type GroupableTool } from "../src/lib/tool-groups.js";
 import { ToolGroup } from "../src/components/ToolGroup.js";

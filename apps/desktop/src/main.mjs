@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from "electron";
+import { app, BrowserWindow, WebContentsView, session, dialog, globalShortcut, ipcMain, Menu, Notification, protocol, shell } from "electron";
 import { appendFileSync, mkdirSync, renameSync, statSync, existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,8 @@ import { APP_URL, createAppProtocol, isAppUrl } from "./app-protocol.mjs";
 import electronUpdater from "electron-updater";
 import { DesktopUpdates, readUpdatePreferences, saveUpdatePreferences } from "./updates.mjs";
 import { installDesktopUpdate } from "./install-update.mjs";
+import { TaskNotifications } from "./notifications.mjs";
+import { BrowserPreview } from "./browser-preview.mjs";
 
 protocol.registerSchemesAsPrivileged([
 	{
@@ -99,6 +101,14 @@ async function boot() {
 	if (!host.options.nodeExecutable) throw new Error("Start development with npm run desktop");
 	connection = await host.start();
 	if (quitting) return;
+	const stopShortcut = globalShortcut.register("CommandOrControl+Alt+F12", () => {
+		void fetch(`${connection.baseUrl}/api/computer-use/stop`, {
+			method: "POST", headers: { Authorization: `Bearer ${connection.token}` },
+			signal: AbortSignal.timeout(3000),
+		}).then((response) => { if (!response.ok) log(`Computer Use stop failed: ${response.status}\n`); })
+			.catch((error) => log(`Computer Use stop failed: ${error.message}\n`));
+	});
+	if (!stopShortcut) log("Computer Use: Ctrl+Alt+F12 could not be registered; use the stop button.\n");
 	protocol.handle("wuming", await createAppProtocol({ webRoot: join(runtimeRoot, "apps", "web", "dist"), connection }));
 	ipcMain.handle("desktop:connect", (event) => {
 		if (
@@ -117,6 +127,7 @@ async function boot() {
 		minHeight: 600,
 		show: false,
 		title: "Pi-Wm",
+		icon: join(here, "../resources", process.platform === "win32" ? "icon.ico" : "icon.png"),
 		...(process.platform === "win32"
 			? {
 					titleBarStyle: "hidden",
@@ -134,6 +145,12 @@ async function boot() {
 			webviewTag: false,
 			spellcheck: false,
 		},
+	});
+	const browserPreview = new BrowserPreview({ window, WebContentsView, session, shell });
+	ipcMain.handle("desktop:browser", (event, request) => {
+		if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !isAppUrl(event.senderFrame.url))
+			throw new Error("Forbidden");
+		return browserPreview.dispatch(request);
 	});
 	const preferencesPath = join(profile, "desktop-updates.json");
 	const repository = manifest.desktopUpdateRepository;
@@ -226,6 +243,19 @@ async function boot() {
 			});
 		else throw new Error("Invalid window action");
 	});
+	const notifications = new TaskNotifications({
+		Notification,
+		foreground: () => !window || window.isDestroyed() || window.isFocused(),
+		onOpen: (target) => {
+			focusWindow();
+			if (window && !window.isDestroyed()) window.webContents.send("desktop:open-task", target);
+		},
+	});
+	ipcMain.handle("desktop:notify-task", (event, value) => {
+		if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !isAppUrl(event.senderFrame.url))
+			throw new Error("Forbidden");
+		return notifications.show(value);
+	});
 	window.webContents.session.setPermissionRequestHandler((_contents, permission, callback) =>
 		callback(permission === "clipboard-sanitized-write")
 	);
@@ -291,6 +321,7 @@ if (!app.requestSingleInstanceLock()) {
 	app.on("activate", focusWindow);
 	app.on("window-all-closed", () => app.quit());
 	app.on("before-quit", (event) => {
+		globalShortcut.unregisterAll();
 		updates?.dispose();
 		if (allowQuit) return;
 		event.preventDefault();

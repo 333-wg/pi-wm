@@ -1,4 +1,4 @@
-import { build, Platform } from "electron-builder";
+import { Arch, build, Platform } from "electron-builder";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { githubPublishConfig } from "../apps/desktop/src/updates.mjs";
@@ -10,8 +10,7 @@ const publish = githubPublishConfig(repository);
 // Never publish implicitly, even when a developer has GH_TOKEN set in their shell.
 await build({
 	projectDir: root,
-	targets: Platform.WINDOWS.createTarget(process.argv.includes("--dir") ? "dir" : "nsis"),
-	x64: true,
+	targets: Platform.WINDOWS.createTarget(process.argv.includes("--dir") ? "dir" : "nsis", Arch.x64),
 	publish: "never",
 	config: { ...base, publish, extraMetadata: { desktopUpdateRepository: repository ?? null } },
 });

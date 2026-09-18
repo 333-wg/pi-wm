@@ -12,6 +12,7 @@ must not silently substitute its own host Shell for the user's computer.
 See:
 
 - `docs/architecture.md` for service boundaries and ownership.
+- `docs/task-observability.md` for request diagnostics, chat content search, and desktop notifications.
 - `docs/protocol-v1.md` for ordering, replay, and command semantics.
 - `docs/artifacts.md` for authenticated attachments and validation limits.
 - `docs/media-generation.md` for default image/video models, official/relay compatibility, and inline media.
@@ -115,11 +116,15 @@ summaries and live status, allows stopping active children, and opens each
 child's full conversation for inspection or follow-up. Reloading restores the
 selected child conversation. Delegation can continue recursively to a hard limit of three agent
 levels; cancelling an ancestor first cancels its active descendants.
-The Goals tab creates durable objectives without starting model work
-immediately. Starting a goal runs one independent child session in the
-background; its status, approvals, usage, result, and cancellation state remain
-available after navigation or restart. Multi-step plans remain deferred beyond
-this increment.
+The Agent Teams tab (or `/teams`) runs persistent collaboration: give the lead
+an objective, and it can create retained teammates, assign shared tasks and
+exchange durable peer messages. Idle, activated members claim further eligible
+tasks in their existing sessions. The workbench shows real members, dependency
+lanes, mail delivery, task results and explicit lead acceptance. SQLite-backed
+history survives reloads and gateway restarts. The earlier subagent/goal view
+remains available under Subtasks. Autonomous planning requires the Pi runtime;
+the Demo runtime does not simulate model decisions.
+See [Agent Teams](docs/agent-teams.md) for scope, upstream attribution and tests.
 Goals can optionally include `successCriteria` and a bounded `maxRounds` value.
 The backend then runs independent reviewer sessions, records per-criterion
 pass/fail evidence and the reviewer's actual tool trace, and starts a corrected
@@ -194,8 +199,10 @@ tools already installed on a user's computer, run the local-device host there.
 
 ## Skills
 
-Every workspace has seven bundled workflows: code-change, code-review, debug,
-research, run-app, verify-app and skill-authoring. The model receives bounded
+Every workspace has bundled workflows including code-change, code-review, debug,
+research, run-app, verify-app, skill-authoring and team. Explicitly requesting the
+team skill starts persistent Agent Teams in the current project; the Teams view
+lists project teams independently of the selected conversation. The model receives bounded
 descriptions and can load applicable instructions or references on demand with
 skill_load, including after a tool failure. Selection is model-driven, not a
 guarantee that every model will choose the expected procedure.

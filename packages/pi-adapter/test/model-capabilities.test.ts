@@ -3,11 +3,16 @@ import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { streamSimple as messages } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { streamSimple as completions } from "@earendil-works/pi-ai/api/openai-completions";
 import { streamSimple as responses } from "@earendil-works/pi-ai/api/openai-responses";
-import type { CustomModelApi, ThinkingLevel } from "@wuming/protocol";
+import type { CustomModelApi, CustomModelThinkingOverride, ThinkingLevel } from "@wuming/protocol";
 import { resolveCustomModelCapabilities } from "../src/model-capabilities.js";
 
-async function capture(id: string, api: CustomModelApi, reasoning: ThinkingLevel) {
-	const capabilities = resolveCustomModelCapabilities(id, api);
+async function capture(
+	id: string,
+	api: CustomModelApi,
+	reasoning: ThinkingLevel,
+	override?: CustomModelThinkingOverride
+) {
+	const capabilities = resolveCustomModelCapabilities(id, api, undefined, undefined, override);
 	const model = {
 		id,
 		name: id,
@@ -49,6 +54,58 @@ async function capture(id: string, api: CustomModelApi, reasoning: ThinkingLevel
 }
 
 describe("custom reasoning wire format", () => {
+	it("inherits extended GPT effort and Claude adaptive wire format for future versions", async () => {
+		expect(await capture("gpt-7-future", "openai-completions", "max")).toMatchObject({ reasoning_effort: "max" });
+		expect(await capture("claude-opus-6", "anthropic-messages", "max")).toMatchObject({
+			thinking: { type: "adaptive" },
+			output_config: { effort: "max" },
+		});
+		expect(await capture("claude-sonnet-6", "openai-completions", "xhigh")).toMatchObject({
+			reasoning_effort: "xhigh",
+		});
+		expect(await capture("claude-haiku-6", "anthropic-messages", "high")).toMatchObject({
+			thinking: { type: "enabled", budget_tokens: expect.any(Number) },
+		});
+	});
+
+	it("uses each domestic provider's real wire control", async () => {
+		expect(await capture("kimi-k3", "openai-completions", "max")).toMatchObject({ reasoning_effort: "max" });
+		expect(await capture("glm-5.3", "openai-completions", "low")).toMatchObject({
+			thinking: { type: "enabled" },
+			reasoning_effort: "low",
+		});
+		expect(await capture("deepseek-flash", "openai-completions", "low")).toMatchObject({
+			thinking: { type: "enabled" },
+			reasoning_effort: "low",
+		});
+		const qwen = await capture("qwen3.7-plus", "openai-completions", "high");
+		expect(qwen).toMatchObject({ enable_thinking: true });
+		expect(qwen).not.toHaveProperty("reasoning_effort");
+		expect(await capture("qwen3.8-max", "openai-completions", "xhigh")).toMatchObject({
+			enable_thinking: true,
+			reasoning_effort: "xhigh",
+		});
+	});
+	it("sends inferred GPT family effort through both OpenAI APIs", async () => {
+		expect(await capture("gpt-6-astra", "openai-completions", "high")).toMatchObject({ reasoning_effort: "high" });
+		expect(await capture("gpt-6-astra", "openai-responses", "high")).toMatchObject({ reasoning: { effort: "high" } });
+	});
+
+	it("sends manually declared extended efforts for unknown aliases", async () => {
+		expect(await capture("relay-alias", "openai-completions", "max", { levels: ["low", "high", "max"] })).toMatchObject(
+			{ reasoning_effort: "max" }
+		);
+		expect(await capture("relay-alias", "openai-responses", "xhigh", { levels: ["high", "xhigh"] })).toMatchObject({
+			reasoning: { effort: "xhigh" },
+		});
+	});
+
+	it("omits reasoning parameters when manually disabled", async () => {
+		expect(await capture("gpt-6-astra", "openai-completions", "high", "disabled")).not.toHaveProperty(
+			"reasoning_effort"
+		);
+		expect(await capture("gpt-6-astra", "openai-responses", "high", "disabled")).not.toHaveProperty("reasoning");
+	});
 	it("sends a thinking token budget for Claude 4.5 Messages", async () => {
 		const payload = await capture("claude-opus-4-5", "anthropic-messages", "high");
 		expect(payload).toMatchObject({ thinking: { type: "enabled", budget_tokens: expect.any(Number) } });

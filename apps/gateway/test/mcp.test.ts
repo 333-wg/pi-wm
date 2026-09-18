@@ -140,6 +140,75 @@ afterEach(async () => {
 });
 
 describe("FileMcpCatalog", () => {
+	it("preserves exact local trust across disable, restart and re-enable", async () => {
+		const { root } = await fixtureWorkspace();
+		const first = createCatalog({ resolveWorkspace: () => root, isTrusted: () => false });
+		await first.trustServer("workspace-1", root, "fixture");
+		const before = await first.configurationKey("workspace-1", root);
+		await expect(first.setEnabled("workspace-1", root, "fixture", false)).resolves.toMatchObject({
+			trusted: true,
+			discoveryStatus: "disabled",
+			tools: [],
+		});
+		expect(await first.configurationKey("workspace-1", root)).not.toBe(before);
+		await first[Symbol.asyncDispose]();
+		const second = createCatalog({ resolveWorkspace: () => root, isTrusted: () => false });
+		await expect(second.get("workspace-1", root, "fixture")).resolves.toMatchObject({
+			trusted: true,
+			discoveryStatus: "disabled",
+		});
+		await expect(second.setEnabled("workspace-1", root, "fixture", true)).resolves.toMatchObject({
+			trusted: true,
+			discoveryStatus: "ready",
+			toolCount: 1,
+		});
+		expect(await second.configurationKey("workspace-1", root)).toBe(before);
+	});
+
+	it("never grants trust by enabling or after editing a disabled server", async () => {
+		const { root } = await fixtureWorkspace();
+		const catalog = createCatalog({ resolveWorkspace: () => root, isTrusted: () => false });
+		await catalog.configureServer("workspace-1", root, {
+			id: "untrusted-toggle",
+			command: "missing-toggle-canary",
+			enabled: false,
+		});
+		await expect(catalog.setEnabled("workspace-1", root, "untrusted-toggle", true)).resolves.toMatchObject({
+			trusted: false,
+			discoveryStatus: "untrusted",
+			tools: [],
+		});
+		await catalog.trustServer("workspace-1", root, "fixture");
+		await catalog.setEnabled("workspace-1", root, "fixture", false);
+		const config = await catalog.getConfiguration(root, "fixture");
+		await catalog.configureServer("workspace-1", root, { ...config, command: "edited-untrusted-canary" });
+		await expect(catalog.setEnabled("workspace-1", root, "fixture", true)).resolves.toMatchObject({
+			trusted: false,
+			discoveryStatus: "untrusted",
+		});
+		await expect(catalog.setEnabled("workspace-1", root, "missing", true)).rejects.toMatchObject({
+			protocolCode: "not_found",
+		});
+	});
+
+	it("returns the persisted enabled state when tool discovery fails", async () => {
+		const { root } = await fixtureWorkspace();
+		const catalog = createCatalog({ resolveWorkspace: () => root, isTrusted: () => false });
+		await catalog.trustServer("workspace-1", root, "fixture");
+		await catalog.setEnabled("workspace-1", root, "fixture", false);
+		await writeFile(join(root, "catalog-pages.json"), JSON.stringify({ $first: { invalid: true } }));
+		await expect(catalog.setEnabled("workspace-1", root, "fixture", true)).resolves.toMatchObject({
+			trusted: true,
+			discoveryStatus: "failed",
+			tools: [],
+		});
+		expect((await catalog.getConfiguration(root, "fixture")).enabled).toBe(true);
+		await expect(catalog.setEnabled("workspace-1", root, "fixture", false)).resolves.toMatchObject({
+			trusted: true,
+			discoveryStatus: "disabled",
+		});
+	});
+
 	it("redacts, preserves, replaces and removes stored credentials during edits", async () => {
 		const { root, script } = await fixtureWorkspace();
 		const catalog = new FileMcpCatalog({ resolveWorkspace: () => root });

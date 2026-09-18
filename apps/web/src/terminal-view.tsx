@@ -1,234 +1,254 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { Eraser, Play, RotateCcw, Square, Unplug, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ServerMessage, TerminalServerMessage } from "@wuming/protocol";
 import { terminalTheme } from "./lib/terminal-theme.js";
+import { TerminalSession, type TerminalState } from "./lib/terminal-session.js";
+import "./terminal.css";
 
-function id(): string {
-	return crypto.randomUUID();
+const labels = {
+	connecting: "连接中",
+	reconnecting: "重新连接中",
+	ready: "就绪",
+	closing: "正在关闭",
+	closed: "已关闭",
+	error: "错误",
+};
+
+function preferredShell(): string {
+	try {
+		return localStorage.getItem("wuming.terminal.shell") ?? "";
+	} catch {
+		return "";
+	}
 }
 
-function bearerProtocol(token: string): string {
-	const bytes = new TextEncoder().encode(token);
-	let binary = "";
-	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return `wuming.bearer.${btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}`;
+export function TerminalWorkbench({
+	token,
+	workspaceId,
+	active,
+}: {
+	token: string;
+	workspaceId?: string;
+	active: boolean;
+}) {
+	const [workspaces, setWorkspaces] = useState<string[]>([]);
+	useEffect(() => {
+		if (active && workspaceId)
+			setWorkspaces((current) => (current.includes(workspaceId) ? current : [...current, workspaceId]));
+	}, [workspaceId, active]);
+	return (
+		<>
+			{workspaces.map((workspace) => (
+				<TerminalView
+					key={workspace}
+					token={token}
+					workspaceId={workspace}
+					active={active && workspaceId === workspace}
+				/>
+			))}
+		</>
+	);
 }
 
-export function TerminalView({ token, workspaceId }: { token: string; workspaceId: string }) {
+export function TerminalView({
+	token,
+	workspaceId,
+	active = true,
+}: {
+	token: string;
+	workspaceId: string;
+	active?: boolean;
+}) {
 	const containerRef = useRef<HTMLDivElement>(null);
-	const readyRef = useRef(false);
-	const [status, setStatus] = useState<"connecting" | "reconnecting" | "ready" | "closed" | "error">("connecting");
-	const [error, setError] = useState<string>();
+	const sessionRef = useRef<TerminalSession | undefined>(undefined);
+	const termRef = useRef<Terminal | undefined>(undefined);
+	const resizeRef = useRef<(() => void) | undefined>(undefined);
+	const activeRef = useRef(active);
+	activeRef.current = active;
+	const [state, setState] = useState<TerminalState>({
+		status: "connecting",
+		error: undefined,
+		shells: [],
+		shellId: "",
+		shell: "",
+		cwd: "",
+		hasProcess: false,
+	});
+	const [shellId, setShellId] = useState(preferredShell);
 
 	useEffect(() => {
-		let disposed = false;
-		const terminalId = id();
-		let socket: WebSocket | undefined;
-		let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-		let reconnectAttempt = 0;
-		let reconnectEnabled = true;
-		let terminalExists = false;
-		let announcedReady = false;
-		let lastSeq = 0;
-		let handshake: { requestId: string; mode: "create" | "attach" } | undefined;
 		const container = containerRef.current;
 		if (!container) return;
-		// Read off the element that hosts the terminal, so a scoped override counts.
 		const readTheme = () => terminalTheme((name) => getComputedStyle(container).getPropertyValue(name));
 		const term = new Terminal({
-			allowProposedApi: false,
 			convertEol: true,
 			cursorBlink: true,
+			disableStdin: true,
 			fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
 			fontSize: 12,
 			lineHeight: 1.25,
 			theme: readTheme(),
+			scrollback: 5000,
 		});
 		const fit = new FitAddon();
 		term.loadAddon(fit);
 		term.open(container);
-		fit.fit();
-		term.writeln("Pi-Wm 终端");
-		term.writeln("正在连接工作区...");
-		const scheme = location.protocol === "https:" ? "wss" : "ws";
-		const send = (message: object) => {
-			if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
-		};
+		termRef.current = term;
+		const session = new TerminalSession({
+			token,
+			workspaceId,
+			preferredShell: preferredShell(),
+			onState: (next) => {
+				setState(next);
+				setShellId((current) => (next.shells.some((shell) => shell.id === current) ? current : next.shellId));
+				term.options.disableStdin = next.status !== "ready";
+			},
+			onOutput: (data, reset) => {
+				if (reset) term.reset();
+				if (data) term.write(data);
+			},
+		});
+		sessionRef.current = session;
 		const resize = () => {
+			// Hidden panels have no usable dimensions; retain the last PTY size.
+			if (!activeRef.current || !container.clientWidth || !container.clientHeight) return;
 			fit.fit();
-			if (readyRef.current) send({ type: "terminal.resize", terminalId, cols: term.cols, rows: term.rows });
+			session.resize(term.cols, term.rows);
 		};
+		resizeRef.current = resize;
+		resize();
 		const observer = new ResizeObserver(resize);
 		observer.observe(container);
-		// xterm keeps the colours it was constructed with, and the token block behind
-		// them is swapped by `data-theme`. Watching the attribute instead of taking
-		// the theme as a prop keeps this correct whoever owns the preference, and
-		// re-theming in place leaves the scrollback and the running process alone.
 		const themeObserver = new MutationObserver(() => {
 			term.options.theme = readTheme();
 		});
 		themeObserver.observe(document.documentElement, { attributeFilter: ["data-theme"] });
-		const dataDisposable = term.onData((data) => {
-			if (readyRef.current) send({ type: "terminal.input", terminalId, data });
-		});
-		const startHandshake = (mode: "create" | "attach") => {
-			fit.fit();
-			const requestId = id();
-			handshake = { requestId, mode };
-			if (mode === "create") {
-				terminalExists = true;
-				send({
-					type: "terminal.create",
-					requestId,
-					terminalId,
-					workspaceId,
-					cols: term.cols,
-					rows: term.rows,
-				});
-			} else {
-				send({
-					type: "terminal.attach",
-					requestId,
-					terminalId,
-					sinceSeq: lastSeq,
-					cols: term.cols,
-					rows: term.rows,
-				});
-			}
-		};
-		const connect = () => {
-			if (disposed) return;
-			setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
-			const current = new WebSocket(`${scheme}://${location.host}/api/ws`, ["wuming.v1", bearerProtocol(token)]);
-			socket = current;
-			current.addEventListener("open", () => {
-				if (disposed || socket !== current) return;
-				send({ type: "hello", protocolVersion: 1, clientId: id(), capabilities: ["terminal"] });
-			});
-			current.addEventListener("message", (raw) => {
-				if (disposed || socket !== current) return;
-				let message: ServerMessage | TerminalServerMessage;
-				try {
-					message = JSON.parse(String(raw.data)) as ServerMessage | TerminalServerMessage;
-				} catch {
-					return;
-				}
-				if (message.type === "hello") {
-					if (!message.capabilities.includes("terminal")) {
-						reconnectEnabled = false;
-						setStatus("error");
-						setError("当前网关未启用终端功能");
-						term.writeln("\r\n当前网关未启用终端功能。");
-						return;
-					}
-					startHandshake(terminalExists ? "attach" : "create");
-					return;
-				}
-				if (!(message.type as string).startsWith("terminal.")) return;
-				if (message.type === "terminal.ready" && message.terminalId === terminalId) {
-					terminalExists = true;
-					lastSeq = Math.max(lastSeq, message.seq);
-					readyRef.current = true;
-					reconnectAttempt = 0;
-					handshake = undefined;
-					setStatus("ready");
-					setError(undefined);
-					if (!announcedReady) {
-						announcedReady = true;
-						term.writeln(`\r\n${message.shell}`);
-					}
-					resize();
-				} else if (message.type === "terminal.output" && message.terminalId === terminalId) {
-					if (message.seq <= lastSeq) return;
-					lastSeq = message.seq;
-					term.write(message.data);
-				} else if (message.type === "terminal.reset" && message.terminalId === terminalId) {
-					lastSeq = message.seq;
-					term.clear();
-					term.write(message.data);
-				} else if (message.type === "terminal.exit" && message.terminalId === terminalId) {
-					reconnectEnabled = false;
-					terminalExists = false;
-					readyRef.current = false;
-					setStatus("closed");
-					term.writeln(`\r\n[进程已退出：${message.exitCode ?? "未知"}]`);
-				} else if (message.type === "terminal.error" && (!message.terminalId || message.terminalId === terminalId)) {
-					const currentHandshake = handshake;
-					if (
-						currentHandshake &&
-						currentHandshake.requestId === message.requestId &&
-						currentHandshake.mode === "attach" &&
-						message.code === "not_found"
-					) {
-						terminalExists = false;
-						startHandshake("create");
-						return;
-					}
-					if (
-						currentHandshake &&
-						currentHandshake.requestId === message.requestId &&
-						currentHandshake.mode === "create" &&
-						message.code === "conflict"
-					) {
-						terminalExists = true;
-						startHandshake("attach");
-						return;
-					}
-					reconnectEnabled = false;
-					setStatus("error");
-					setError(message.message);
-					term.writeln(`\r\n[终端错误] ${message.message}`);
-				}
-			});
-			current.addEventListener("close", () => {
-				if (disposed || socket !== current || !reconnectEnabled) return;
-				readyRef.current = false;
-				reconnectAttempt += 1;
-				setStatus("reconnecting");
-				reconnectTimer = setTimeout(connect, Math.min(4000, 250 * 2 ** Math.min(reconnectAttempt, 4)));
-			});
-			current.addEventListener("error", () => {
-				if (!disposed && socket === current) setError("终端连接已中断");
-			});
-		};
-		connect();
+		const input = term.onData((data) => session.input(data));
+		session.connect();
 		return () => {
-			disposed = true;
-			reconnectEnabled = false;
-			readyRef.current = false;
-			if (reconnectTimer) clearTimeout(reconnectTimer);
-			if (socket?.readyState === WebSocket.OPEN && terminalExists)
-				send({ type: "terminal.close", requestId: id(), terminalId });
-			socket?.close();
+			// Only the owning workbench/authentication teardown disposes this view.
+			session.dispose();
 			observer.disconnect();
 			themeObserver.disconnect();
-			dataDisposable.dispose();
+			input.dispose();
 			term.dispose();
+			sessionRef.current = undefined;
+			termRef.current = undefined;
+			resizeRef.current = undefined;
 		};
 	}, [token, workspaceId]);
 
+	useEffect(() => {
+		if (!active) return;
+		const frame = requestAnimationFrame(() => {
+			resizeRef.current?.();
+			termRef.current?.focus();
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [active]);
+
+	const selectShell = (value: string) => {
+		setShellId(value);
+		try {
+			localStorage.setItem("wuming.terminal.shell", value);
+		} catch {
+			/* Storage is optional. */
+		}
+	};
+	const close = (restart: boolean) => {
+		if (
+			!window.confirm(
+				restart ? "重启会结束当前终端及其中运行的命令，是否继续？" : "关闭会结束当前终端及其中运行的命令，是否继续？"
+			)
+		)
+			return;
+		sessionRef.current?.close(restart ? shellId : undefined);
+	};
+	const busy = ["connecting", "reconnecting", "closing"].includes(state.status);
+
 	return (
-		<section className="terminal-workbench" aria-label="终端">
+		<section className="terminal-workbench" aria-label="终端" hidden={!active} data-workspace-id={workspaceId}>
 			<header className="terminal-heading">
 				<strong>终端</strong>
-				<span className={`terminal-status terminal-${status}`}>
-					{
-						(
-							{
-								connecting: "连接中",
-								reconnecting: "重新连接中",
-								ready: "就绪",
-								closed: "已关闭",
-								error: "错误",
-							} as const
-						)[status]
-					}
+				<span className={`terminal-status terminal-${state.status}`} role="status">
+					{labels[state.status]}
 				</span>
+				<div className="terminal-actions">
+					<select
+						aria-label="新终端 Shell"
+						title="新终端 Shell"
+						value={shellId}
+						onChange={(event) => selectShell(event.target.value)}
+						disabled={!state.shells.length || busy}
+					>
+						{!state.shells.length && <option value="">Shell</option>}
+						{state.shells.map((shell) => (
+							<option key={shell.id} value={shell.id}>
+								{shell.label}
+							</option>
+						))}
+					</select>
+					{state.status === "error" && (state.hasProcess || !state.shells.length) && (
+						<button type="button" title="重新连接" aria-label="重新连接" onClick={() => sessionRef.current?.retry()}>
+							<Unplug size={15} />
+						</button>
+					)}
+					{!state.hasProcess && !busy && (
+						<button
+							type="button"
+							title="新建终端"
+							aria-label="新建终端"
+							onClick={() => sessionRef.current?.start(shellId)}
+						>
+							<Play size={15} />
+						</button>
+					)}
+					<button type="button" title="清屏" aria-label="清屏" onClick={() => termRef.current?.clear()}>
+						<Eraser size={15} />
+					</button>
+					<button
+						type="button"
+						title="中断当前命令"
+						aria-label="中断当前命令"
+						disabled={state.status !== "ready"}
+						onClick={() => sessionRef.current?.input("\x03")}
+					>
+						<Square size={14} />
+					</button>
+					<button
+						type="button"
+						title="重启终端"
+						aria-label="重启终端"
+						disabled={!state.hasProcess || busy}
+						onClick={() => close(true)}
+					>
+						<RotateCcw size={15} />
+					</button>
+					<button
+						type="button"
+						title="关闭终端"
+						aria-label="关闭终端"
+						disabled={!state.hasProcess || busy}
+						onClick={() => close(false)}
+					>
+						<X size={16} />
+					</button>
+				</div>
 			</header>
+			{state.cwd && (
+				<div className="terminal-location">
+					<span>{state.shell}</span>
+					<span title={`初始目录：${state.cwd}`}>初始目录：{state.cwd}</span>
+				</div>
+			)}
 			<div className="terminal-surface" ref={containerRef} />
-			{error && <div className="terminal-error">{error}</div>}
+			{state.error && (
+				<div className="terminal-error" role="alert">
+					{state.error}
+				</div>
+			)}
 		</section>
 	);
 }

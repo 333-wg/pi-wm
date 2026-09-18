@@ -89,9 +89,15 @@ test.beforeAll(async ({ browser }) => {
 			if (request.url === "/v1/images/generations") {
 				const body = JSON.parse(Buffer.concat(chunks).toString());
 				expect(body.model).toBe("configured-image");
-				response
-					.writeHead(200, { "Content-Type": "application/json" })
-					.end(JSON.stringify({ data: [{ b64_json: image.toString("base64") }] }));
+				response.writeHead(200, { "Content-Type": "application/json" }).end(
+					JSON.stringify({
+						data: [
+							String(body.prompt).includes("IMAGE_RECOVERY_E2E")
+								? { url: "http://127.0.0.1/private-image.png?signature=must-not-leak" }
+								: { b64_json: image.toString("base64") },
+						],
+					})
+				);
 				return;
 			}
 			if (request.url === "/v1/videos" && request.method === "POST") {
@@ -120,6 +126,7 @@ test.beforeAll(async ({ browser }) => {
 			const lastUser = messages.findLastIndex((message) => message.role === "user");
 			const results = messages.slice(lastUser + 1).filter((message) => message.role === "tool");
 			const implicitSkill = wireText(messages[lastUser]?.content).includes("FAVORITE_MEDIA_AUTO");
+			const imageRecovery = wireText(messages[lastUser]?.content).includes("IMAGE_RECOVERY_E2E");
 			const explicitSkill = wireText(messages[lastUser]?.content).includes("FAVORITE_MEDIA_MANUAL");
 			const generationStep = results.length - (implicitSkill ? 1 : 0);
 			let call: { name: string; arguments: string } | undefined;
@@ -169,12 +176,26 @@ test.beforeAll(async ({ browser }) => {
 					call = { name: "get_generated_video", arguments: JSON.stringify({ jobId }) };
 				}
 			}
+			if (imageRecovery) {
+				call =
+					results.length === 0
+						? { name: "generate_image", arguments: JSON.stringify({ prompt: "IMAGE_RECOVERY_E2E" }) }
+						: results.length === 1
+							? {
+									name: "get_generated_image",
+									arguments: JSON.stringify({ jobId: JSON.parse(wireText(results[0]?.content)).jobId }),
+								}
+							: undefined;
+			}
 			const delta = call
 				? {
 						role: "assistant",
 						tool_calls: [{ index: 0, id: `media_call_${results.length}`, type: "function", function: call }],
 					}
-				: { role: "assistant", content: "媒体生成完成。" };
+				: {
+						role: "assistant",
+						content: imageRecovery ? "图片结果已返回，但下载受阻，已保留结果，未重新生成。" : "媒体生成完成。",
+					};
 			if (!body.stream) {
 				response.writeHead(200, { "Content-Type": "application/json" }).end(
 					JSON.stringify({
@@ -308,23 +329,31 @@ test("persists default media settings without returning keys", async ({ page }, 
 	await page.getByRole("button", { name: "设置", exact: true }).click();
 	await page.locator(".settings-navigation button").filter({ hasText: "模型" }).click();
 	const settings = page.getByRole("region", { name: "图片与视频生成模型" });
-	const form = settings.locator("form").filter({ hasText: "默认生图模型" });
-	await expect(form.getByLabel("模型 ID")).toHaveValue("configured-image");
+	await settings.locator("summary").filter({ hasText: "手动添加生图服务" }).click();
+	const form = settings.locator("form").filter({ hasText: "添加生图服务" });
+	await expect(form.getByLabel("模型 ID")).toHaveValue("");
 	await expect(form.getByLabel("API Key")).toHaveValue("");
 	await expect(settings.getByRole("button", { name: "检查连接" })).toHaveCount(0);
+	await form.getByLabel("Base URL").fill(providerUrl);
+	await form.getByLabel("API Key").fill("fixture-only-key");
 	await form.getByLabel("模型 ID").fill("configured-image-edited");
 	await form.getByRole("button", { name: "保存", exact: true }).click();
-	await expect(form.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+	await expect(form).toHaveCount(0);
+	await expect(settings.getByRole("button", { name: "启用默认模型：configured-image", exact: true })).toBeDisabled();
+	await settings.getByRole("button", { name: "启用默认模型：configured-image-edited", exact: true }).click();
 	await page.reload();
 	await page.getByRole("button", { name: "设置", exact: true }).click();
 	await page.locator(".settings-navigation button").filter({ hasText: "模型" }).click();
-	await expect(form.getByLabel("模型 ID")).toHaveValue("configured-image-edited");
-	await form.getByLabel("模型 ID").fill("configured-image");
-	await form.getByRole("checkbox", { name: "configured-image-edited", exact: true }).uncheck();
-	await form.getByRole("button", { name: "保存", exact: true }).click();
-	await expect(form.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+	await expect(
+		settings.getByRole("button", { name: "启用默认模型：configured-image-edited", exact: true })
+	).toBeDisabled();
+	await settings.getByRole("button", { name: "启用默认模型：configured-image", exact: true }).click();
+	page.once("dialog", (dialog) => dialog.accept());
+	await settings.getByRole("button", { name: "移除模型：configured-image-edited", exact: true }).click();
+	await expect(settings.getByRole("button", { name: "移除模型：configured-image-edited", exact: true })).toHaveCount(0);
 	await settings.scrollIntoViewIfNeeded();
-	const videoForm = settings.locator("form").filter({ hasText: "默认生视频模型" });
+	await settings.getByRole("button", { name: "配置视频模型：configured-video", exact: true }).click();
+	const videoForm = settings.locator("form").filter({ hasText: "视频模型配置" });
 	await videoForm.getByLabel("接口协议").selectOption("openai-json");
 	await videoForm.getByRole("checkbox", { name: "参考图使用 Base64 Data URL" }).check();
 	await videoForm.getByRole("button", { name: "保存", exact: true }).click();
@@ -332,6 +361,7 @@ test("persists default media settings without returning keys", async ({ page }, 
 	await page.reload();
 	await page.getByRole("button", { name: "设置", exact: true }).click();
 	await page.locator(".settings-navigation button").filter({ hasText: "模型" }).click();
+	await settings.getByRole("button", { name: "配置视频模型：configured-video", exact: true }).click();
 	await expect(videoForm.getByLabel("接口协议")).toHaveValue("openai-json");
 	await expect(videoForm.getByRole("checkbox", { name: "参考图使用 Base64 Data URL" })).toBeChecked();
 	await expect(videoForm.getByLabel("API Key")).toHaveValue("");
@@ -360,8 +390,11 @@ test("fetches only matching media candidates using saved or unsaved connections"
 	await page.getByRole("button", { name: "设置", exact: true }).click();
 	await page.locator(".settings-navigation button").filter({ hasText: "模型" }).click();
 	const settings = page.getByRole("region", { name: "图片与视频生成模型" });
-	const imageForm = settings.locator("form").filter({ hasText: "默认生图模型" });
-	const videoForm = settings.locator("form").filter({ hasText: "默认生视频模型" });
+	await settings.locator("summary").filter({ hasText: "手动添加生图服务" }).click();
+	const imageForm = settings.locator("form").filter({ hasText: "添加生图服务" });
+	const videoForm = settings.locator("form").filter({ hasText: "添加视频服务" });
+	await imageForm.getByLabel("Base URL").fill(providerUrl);
+	await imageForm.getByLabel("API Key").fill("fixture-only-key");
 	await imageForm.getByRole("button", { name: "获取模型" }).click();
 	const imageOptions = imageForm.getByRole("group", { name: "生图模型多选" });
 	await expect(imageOptions.getByRole("checkbox")).toHaveCount(3);
@@ -369,21 +402,22 @@ test("fetches only matching media candidates using saved or unsaved connections"
 	await imageOptions.getByRole("button", { name: "设为默认：gpt-image-1", exact: true }).click();
 	await expect(imageForm.getByLabel("模型 ID")).toHaveValue("gpt-image-1");
 	await imageForm.getByRole("button", { name: "保存", exact: true }).click();
-	await expect(imageForm.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+	await expect(imageForm).toHaveCount(0);
+	await settings.getByRole("button", { name: "启用默认模型：gpt-image-1", exact: true }).click();
 	await page.reload();
 	await page.getByRole("button", { name: "设置", exact: true }).click();
 	await page.locator(".settings-navigation button").filter({ hasText: "模型" }).click();
-	await expect(imageOptions.getByRole("checkbox", { name: "configured-image", exact: true })).toBeChecked();
-	await expect(imageOptions.getByRole("checkbox", { name: "gpt-image-1", exact: true })).toBeChecked();
-	await expect(imageOptions.getByRole("button", { name: "设为默认：gpt-image-1", exact: true })).toHaveAttribute(
+	await expect(settings.getByRole("button", { name: "启用默认模型：gpt-image-1", exact: true })).toHaveAttribute(
 		"aria-pressed",
 		"true"
 	);
-	// Removing the default promotes the remaining selection.
-	await imageOptions.getByRole("checkbox", { name: "gpt-image-1", exact: true }).uncheck();
-	await expect(imageForm.getByLabel("模型 ID")).toHaveValue("configured-image");
-	await imageForm.getByRole("button", { name: "保存", exact: true }).click();
-	await expect(imageForm.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+	// Removing the default promotes another available model, without removing its service.
+	page.once("dialog", (dialog) => dialog.accept());
+	await settings.getByRole("button", { name: "移除模型：gpt-image-1", exact: true }).click();
+	await expect(settings.getByRole("button", { name: "启用默认模型：configured-image", exact: true })).toBeDisabled();
+	await settings.locator("summary").filter({ hasText: "手动添加视频服务" }).click();
+	await videoForm.getByLabel("Base URL").fill(providerUrl);
+	await videoForm.getByLabel("API Key").fill("fixture-only-key");
 	await videoForm.getByRole("button", { name: "获取模型" }).click();
 	await expect(videoForm.getByLabel("已获取的生视频模型").locator("option")).toHaveText([
 		"选择模型",
@@ -405,6 +439,7 @@ test("fetches only matching media candidates using saved or unsaved connections"
 	}
 	await page.screenshot({ path: testInfo.outputPath("video-discovery-mobile.png") });
 	await page.setViewportSize({ width: 1280, height: 900 });
+	await settings.locator("summary").filter({ hasText: "手动添加生图服务" }).click();
 	await imageForm.getByLabel("Base URL").fill(new URL("/draft/v1", providerUrl).href);
 	await expect(imageForm.getByRole("button", { name: "获取模型" })).toBeDisabled();
 	await imageForm.getByLabel("API Key").fill("draft-key");
@@ -434,9 +469,8 @@ test("fetches only matching media candidates using saved or unsaved connections"
 	await page.reload();
 	await page.getByRole("button", { name: "设置", exact: true }).click();
 	await page.locator(".settings-navigation button").filter({ hasText: "模型" }).click();
-	await expect(imageForm.getByLabel("Base URL")).toHaveValue(providerUrl);
-	await expect(imageForm.getByLabel("模型 ID")).toHaveValue("configured-image");
-	await expect(imageForm.getByLabel("API Key")).toHaveValue("");
+	await expect(imageForm).toHaveCount(0);
+	await expect(settings.getByRole("button", { name: "启用默认模型：configured-image", exact: true })).toBeDisabled();
 	expect(providerErrors).toEqual([]);
 });
 
@@ -448,14 +482,13 @@ test("shows generated image and playable video outside collapsed tool traces, in
 		localStorage.setItem("wuming.permission", JSON.stringify({ sandboxMode: "unrestricted", approvalPolicy: "never" }))
 	);
 	await openApp(page, webUrl);
+	await page.locator(".session-entry").first().click();
 	await expect(page.locator(".session-entry.selected")).toHaveCount(1);
+	await page.locator(".sidebar-new-chat").click();
+	await expect(page.locator(".session-entry.selected")).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "权限模式：完全访问权限", exact: true })).toBeEnabled();
 	await page.getByRole("textbox", { name: "消息" }).fill("MEDIA_E2E 请生成图片和视频");
 	await page.getByRole("button", { name: "发送", exact: true }).click();
-	// Explicitly approve paid-model access if the application preference is still on-risk.
-	for (let index = 0; index < 3; index++) {
-		const approve = page.getByRole("button", { name: "批准", exact: true });
-		if (await approve.isVisible({ timeout: 2000 }).catch(() => false)) await approve.click();
-	}
 	const img = page.locator(".tool-row .tool-image-preview");
 	const player = page.locator(".tool-row video");
 	await expect(img).toBeVisible({ timeout: 20_000 });
@@ -468,6 +501,7 @@ test("shows generated image and playable video outside collapsed tool traces, in
 	await player.scrollIntoViewIfNeeded();
 	await page.screenshot({ path: testInfo.outputPath("media-chat-desktop.png") });
 	await page.reload();
+	await page.getByRole("button", { name: "MEDIA_E2E 请生成图片和视频", exact: true }).click();
 	await expect(img).toBeVisible();
 	await expect(player).toBeVisible();
 	await expect.poll(() => img.evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBe(480);
@@ -506,21 +540,23 @@ test("previews and downloads generated media before the assistant finishes, then
 			)
 		);
 		await openApp(page, webUrl);
+		await page.locator(".session-entry").first().click();
 		await expect(page.locator(".session-entry.selected")).toHaveCount(1);
+		await expect(page.locator(".sidebar-new-chat")).toBeEnabled();
 		await page.locator(".sidebar-new-chat").click();
 		await expect(page.locator(".session-entry.selected")).toHaveCount(0);
 		await expect(page.getByRole("button", { name: "权限模式：完全访问权限", exact: true })).toBeEnabled();
 		await page.getByRole("textbox", { name: "消息", exact: true }).fill("MEDIA_LIVE_E2E generate image and video");
 		await page.getByRole("button", { name: "发送", exact: true }).click();
-		const liveImage = page.locator(".live-tool .tool-image-preview");
-		const liveVideo = page.locator(".live-tool video");
+		const liveImage = page.locator(".tool-row .tool-image-preview");
+		const liveVideo = page.locator(".tool-row video");
 		await expect(liveImage).toBeVisible({ timeout: 20_000 });
 		await expect.poll(() => liveImage.evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBe(480);
 		await expect(liveVideo).toBeVisible({ timeout: 45_000 });
 		await expect
 			.poll(() => liveVideo.evaluate((node) => (node as HTMLVideoElement).readyState))
 			.toBeGreaterThanOrEqual(2);
-		const imageRow = page.locator(".live-tool:has(.tool-image-preview)");
+		const imageRow = page.locator(".tool-row:has(.tool-image-preview)");
 		await expect(imageRow.locator(".artifact-line")).toHaveCount(0);
 		const directDownload = page.waitForEvent("download");
 		await imageRow.getByRole("link", { name: "下载图片", exact: true }).click();
@@ -547,12 +583,14 @@ test("previews and downloads generated media before the assistant finishes, then
 		await expect(imageRow.getByRole("link", { name: "下载图片", exact: true })).toBeVisible();
 		await page.screenshot({ path: testInfo.outputPath("live-media-mobile.png") });
 		releaseReply();
-		await expect(page.locator(".live-tool")).toHaveCount(0);
+		await expect(page.getByRole("button", { name: "停止任务", exact: true })).toHaveCount(0);
 		const savedImage = page.locator(".tool-row .tool-image-preview");
 		await expect(savedImage).toHaveCount(1);
 		await expect(savedImage).toBeVisible();
 		await expect(page.locator(".tool-row video")).toHaveCount(1);
+		await page.setViewportSize({ width: 1280, height: 900 });
 		await page.reload();
+		await page.getByRole("button", { name: "MEDIA_LIVE_E2E generate image and video", exact: true }).click();
 		await expect(savedImage).toHaveCount(1);
 		await expect.poll(() => savedImage.evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBe(480);
 		await expect(page.locator(".tool-row:has(.tool-image-preview) .artifact-line")).toHaveCount(0);
@@ -577,7 +615,9 @@ for (const mode of ["auto", "manual"] as const) {
 			)
 		);
 		await openApp(page, webUrl);
+		await page.locator(".session-entry").first().click();
 		await expect(page.locator(".session-entry.selected")).toHaveCount(1);
+		await expect(page.locator(".sidebar-new-chat")).toBeEnabled();
 		await page.locator(".sidebar-new-chat").click();
 		await expect(page.locator(".session-entry.selected")).toHaveCount(0);
 		await expect(page.getByRole("button", { name: "权限模式：完全访问权限", exact: true })).toBeEnabled();
@@ -615,3 +655,35 @@ for (const mode of ["auto", "manual"] as const) {
 		await expect(page.getByRole("dialog", { name: "设置", exact: true })).toBeHidden();
 	});
 }
+
+test("keeps returned images recoverable without another generation charge and labels retrieval correctly", async ({
+	page,
+}, testInfo) => {
+	await page.addInitScript(() =>
+		localStorage.setItem("wuming.permission", JSON.stringify({ sandboxMode: "unrestricted", approvalPolicy: "never" }))
+	);
+	await openApp(page, webUrl);
+	await page.locator(".session-entry").first().click();
+	await page.locator(".sidebar-new-chat").click();
+	const before = requests.filter((value) => value === "POST /v1/images/generations").length;
+	await page.getByRole("textbox", { name: "消息", exact: true }).fill("IMAGE_RECOVERY_E2E 生成图片");
+	await page.getByRole("button", { name: "发送", exact: true }).click();
+	await expect(page.getByText("图片结果已返回，但下载受阻，已保留结果，未重新生成。", { exact: true })).toBeVisible({
+		timeout: 20_000,
+	});
+	const pending = page.locator(".tool-state").filter({ hasText: "结果已返回，待取回" });
+	await expect(pending).toHaveCount(2);
+	await expect(page.locator(".tool-verb").filter({ hasText: "取回图片" })).toBeVisible();
+	await expect(page.locator(".tool-image-preview")).toHaveCount(0);
+	expect(requests.filter((value) => value === "POST /v1/images/generations")).toHaveLength(before + 1);
+	await page.screenshot({ path: testInfo.outputPath("image-retrieval-pending-desktop.png") });
+	await page.reload();
+	await page.getByRole("button", { name: "IMAGE_RECOVERY_E2E 生成图片", exact: true }).click();
+	await expect(pending).toHaveCount(2);
+	await page.setViewportSize({ width: 390, height: 844 });
+	const closeRail = page.locator(".rail-mobile-close");
+	if (await closeRail.isVisible()) await closeRail.click();
+	await page.screenshot({ path: testInfo.outputPath("image-retrieval-pending-mobile.png") });
+	expect(providerErrors).toEqual([]);
+	expect(requests.filter((value) => value === "POST /v1/images/generations")).toHaveLength(before + 1);
+});

@@ -5,7 +5,7 @@
 //
 // The dark theme is a value swap over the same token names, so a badly pitched
 // shade cannot be caught by typechecking and is easy to miss in a screenshot.
-// This parses both token blocks and checks the pairs that actually meet on
+// This resolves every palette's inherited tokens and checks pairs that meet on
 // screen against a WCAG floor: 4.5:1 wherever the user reads something — words,
 // and digits like a diff gutter's line numbers — and 3:1 where the token only
 // fills a dot, a caret or a marker.
@@ -116,7 +116,7 @@ export const PAIRS = [
 	{ fore: "--del-text", back: "--surface-code", floor: 4.5, where: "removed lines in a fenced diff" },
 ];
 
-/** The terminal is a dark inset panel in both themes, so it has no dark override. */
+/** Terminal pairs, checked for every palette, including the light terminal variants. */
 export const LIGHT_ONLY_PAIRS = [
 	{ fore: "--term-text", back: "--term-bg", floor: 4.5, where: "terminal output" },
 	{ fore: "--term-text", back: "--term-head", floor: 4.5, where: "the terminal panel title" },
@@ -139,13 +139,16 @@ function tokenBlock(css, opener) {
 	return table;
 }
 
-/** Both token blocks, keyed by theme name, as `Map<tokenName, cssValue>`. */
+/** All inherited token tables, keyed by palette name. */
 export async function tokenTables() {
 	const css = await readFile(stylesheet, "utf8");
-	return {
-		light: tokenBlock(css, ":root {"),
-		dark: tokenBlock(css, ':root[data-theme="dark"] {'),
-	};
+	const light = tokenBlock(css, ":root {");
+	const dark = new Map([...light, ...tokenBlock(css, ':root[data-theme="dark"] {')]);
+	const tables = { light, dark };
+	for (const id of ["white", "paper", "warm-classic", "celadon", "ink-night", "ink-blue"]) {
+		tables[id] = new Map([...(id.startsWith("ink-") ? dark : light), ...tokenBlock(css, ':root[data-theme="' + id + '"] {')]);
+	}
+	return tables;
 }
 
 /** Resolves a token to rgb, following `var(...)` aliases. Returns null for gradients and rgba(). */
@@ -175,10 +178,7 @@ function contrast(fore, back) {
 
 async function main() {
 	const tables = await tokenTables();
-	const themes = [
-		{ name: "light", table: tables.light, pairs: [...PAIRS, ...LIGHT_ONLY_PAIRS] },
-		{ name: "dark", table: tables.dark, pairs: PAIRS },
-	];
+	const themes = Object.entries(tables).map(([name, table]) => ({ name, table, pairs: [...PAIRS, ...LIGHT_ONLY_PAIRS] }));
 
 	let failures = 0;
 	for (const theme of themes) {

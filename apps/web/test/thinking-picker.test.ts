@@ -31,6 +31,14 @@ describe("thinking picker options", () => {
 	it("offers every protocol level, so a new one cannot go missing from the menu", () => {
 		expect(thinkingOptions().map((option) => option.id)).toEqual([...THINKING_LEVELS]);
 	});
+	it("labels provisional and manually configured capabilities separately", () => {
+		expect(modelThinkingDescription({ ...model, thinking: { mode: "effort", source: "family" } })).toContain(
+			"家族推断，待确认"
+		);
+		expect(modelThinkingDescription({ ...model, thinking: { mode: "effort", source: "manual" } })).toContain(
+			"手动配置"
+		);
+	});
 
 	it("labels every level in Chinese rather than falling through to the raw id", () => {
 		for (const level of THINKING_LEVELS) {

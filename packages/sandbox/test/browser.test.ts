@@ -6,6 +6,32 @@ import { describe, expect, it } from "vitest";
 import { PlaywrightBrowserManager, validateBrowserNavigationUrl } from "../src/browser.js";
 
 describe("browser navigation policy", () => {
+	it("fills a form by semantic targets in a headless browser and keeps sessions isolated", async () => {
+		const server = createServer((_request, response) => {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+			response.end(
+				"<!doctype html><html><head><title>Isolated form test</title></head><body><h1>Local form fixture</h1><label>Name<input aria-label=\"Name\"></label><button onclick=\"localStorage.setItem('name',document.querySelector('input').value);document.querySelector('output').textContent='Saved: '+localStorage.getItem('name')\">Save</button><output>No saved value</output><script>document.querySelector(\"output\").textContent=localStorage.getItem(\"name\")||\"No saved value\"</script></body></html>"
+			);
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("Missing test server address");
+		const manager = new PlaywrightBrowserManager({ headless: true });
+		try {
+			const url = `http://127.0.0.1:${address.port}/`;
+			const first = manager.session("form-first");
+			await first.open(url);
+			await first.act({ action: "fill", target: { role: "textbox", name: "Name" }, value: "Verified user" });
+			const saved = await first.act({ action: "click", target: { role: "button", name: "Save" } });
+			expect(saved.text).toContain("Saved: Verified user");
+			const second = await manager.session("form-second").open(url);
+			expect(second.text).toContain("No saved value");
+			expect(second.text).not.toContain("Verified user");
+		} finally {
+			await manager[Symbol.asyncDispose]();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	}, 15_000);
 	it("allows loopback development servers on arbitrary ports", async () => {
 		await expect(validateBrowserNavigationUrl("http://127.0.0.1:5173/app")).resolves.toMatchObject({
 			hostname: "127.0.0.1",

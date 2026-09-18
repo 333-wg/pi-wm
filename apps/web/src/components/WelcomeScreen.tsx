@@ -1,6 +1,6 @@
 import { ArrowRight, Check, Eye, EyeOff, KeyRound, Leaf, LoaderCircle, LockKeyhole, Sprout } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import clover from "../assets/wuming-clover.svg";
+import clover from "../assets/wuming-clover.png";
 import "./welcome-screen.css";
 
 export function WelcomeScreen({

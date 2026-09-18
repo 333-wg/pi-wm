@@ -36,21 +36,110 @@ function assistant(stopReason: AssistantMessage["stopReason"], errorMessage?: st
 	};
 }
 
-it("branches away from an interrupted turn before accepting a new prompt", () => {
+it("retains user requests across consecutive interrupted turns", () => {
 	const manager = SessionManager.inMemory();
 	manager.appendMessage({ role: "user", content: "stable", timestamp: 1 });
 	manager.appendMessage(assistant("stop"));
-	const stableLeaf = manager.getLeafId();
 	manager.appendMessage({ role: "user", content: "old weather request", timestamp: 2 });
 	manager.appendMessage(assistant("error", "This operation was aborted"));
 	manager.appendMessage({ role: "user", content: "new document request", timestamp: 3 });
 	manager.appendMessage(assistant("aborted"));
 
 	expect(recoverInterruptedSession(manager)).toBe(true);
-	expect(manager.getLeafId()).toBe(stableLeaf);
 	expect(
-		manager.buildSessionContext().messages.map((message) => (message.role === "user" ? message.content : message.role))
-	).toEqual(["stable", "assistant"]);
+		manager
+			.buildSessionContext()
+			.messages.filter((message) => message.role === "user")
+			.map((message) => message.content)
+	).toEqual(["stable", "old weather request", "new document request"]);
+	const notice = manager.buildSessionContext().messages.at(-1);
+	expect(notice).toMatchObject({ role: "custom", customType: "wuming-interrupted-turn", display: false });
+	expect(notice && "content" in notice && notice.content).toContain("if it changes tasks, follow the new task");
+	const leaf = manager.getLeafId();
+	expect(recoverInterruptedSession(manager)).toBe(false);
+	expect(manager.getLeafId()).toBe(leaf);
+});
+
+it("retains the first request and completed work when the first turn is cancelled", () => {
+	const manager = SessionManager.inMemory();
+	manager.appendMessage({ role: "user", content: "Build a library management system", timestamp: 1 });
+	manager.appendMessage({
+		...assistant("toolUse"),
+		content: [
+			{ type: "text", text: "I will implement book search and borrowing." },
+			{ type: "toolCall", id: "write-package", name: "write", arguments: { path: "package.json" } },
+		],
+	});
+	manager.appendMessage({
+		role: "toolResult",
+		toolCallId: "write-package",
+		toolName: "write",
+		content: [{ type: "text", text: "Created package.json" }],
+		isError: false,
+		timestamp: 2,
+	});
+	manager.appendMessage(assistant("aborted"));
+	const before = manager.buildSessionContext().messages;
+	expect(recoverInterruptedSession(manager)).toBe(true);
+	expect(manager.buildSessionContext().messages.slice(0, -1)).toEqual(before);
+	manager.appendMessage({ role: "user", content: "Continue", timestamp: 3 });
+	expect(recoverInterruptedSession(manager)).toBe(false);
+	expect(manager.buildSessionContext().messages.at(-1)).toMatchObject({ role: "user", content: "Continue" });
+});
+
+it("preserves a cancelled tool result and marks uncertain side effects without replaying tools", () => {
+	const manager = SessionManager.inMemory();
+	manager.appendMessage({ role: "user", content: "Write the app", timestamp: 1 });
+	manager.appendMessage({
+		...assistant("toolUse"),
+		content: [{ type: "toolCall", id: "write-app", name: "write", arguments: { path: "app.ts" } }],
+	});
+	manager.appendMessage({
+		role: "toolResult",
+		toolCallId: "write-app",
+		toolName: "write",
+		content: [{ type: "text", text: "Operation cancelled" }],
+		isError: true,
+		timestamp: 2,
+	});
+	expect(recoverInterruptedSession(manager)).toBe(true);
+	const messages = manager.buildSessionContext().messages;
+	expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
+	const notice = messages.at(-1);
+	expect(notice && "content" in notice && notice.content).toContain("Inspect the current state before repeating it");
+	expect(recoverInterruptedSession(manager)).toBe(false);
+});
+
+it("does not change pending tool approvals or unrelated errors", () => {
+	const manager = SessionManager.inMemory();
+	manager.appendMessage({ role: "user", content: "Write the app", timestamp: 1 });
+	manager.appendMessage({
+		...assistant("toolUse"),
+		content: [{ type: "toolCall", id: "pending", name: "write", arguments: {} }],
+	});
+	const pendingLeaf = manager.getLeafId();
+	expect(recoverInterruptedSession(manager)).toBe(false);
+	expect(manager.getLeafId()).toBe(pendingLeaf);
+	manager.appendMessage(assistant("error", "Rate limit exceeded"));
+	const errorLeaf = manager.getLeafId();
+	expect(recoverInterruptedSession(manager)).toBe(false);
+	expect(manager.getLeafId()).toBe(errorLeaf);
+});
+
+it("persists recovery across restart without adding duplicate notices", async () => {
+	const root = await mkdtemp(join(tmpdir(), "wuming-interrupted-context-"));
+	directories.push(root);
+	const manager = SessionManager.create(root, root);
+	manager.appendMessage({ role: "user", content: "Build a library management system", timestamp: 1 });
+	manager.appendMessage(assistant("aborted"));
+	expect(recoverInterruptedSession(manager)).toBe(true);
+	const resumed = SessionManager.continueRecent(root, root);
+	expect(resumed.buildSessionContext().messages).toEqual(manager.buildSessionContext().messages);
+	expect(recoverInterruptedSession(resumed)).toBe(false);
+	resumed.appendMessage({ role: "user", content: "Continue", timestamp: 2 });
+	resumed.appendMessage(assistant("error", "This operation was aborted"));
+	expect(recoverInterruptedSession(resumed)).toBe(true);
+	expect(resumed.buildSessionContext().messages.filter((message) => message.role === "custom")).toHaveLength(2);
 });
 
 it("keeps a completed turn as the active context", () => {

@@ -20,6 +20,7 @@ for (const width of [1365, 390, 320]) {
 		);
 		await page.setViewportSize({ width, height: 900 });
 		await openApp(page, webUrl);
+		await expect(page.locator(".topbar h1")).toHaveCount(0);
 		const button = page.locator(width > 720 ? ".sidebar-new-chat" : ".topbar-new-chat");
 		await expect(button).toBeVisible();
 		await expect(button).toContainText("新对话");
@@ -180,6 +181,8 @@ test("inherits the current project and can detach the draft without losing text"
 	await input.fill("project-bound task");
 	await input.press("Enter");
 	await expect(page.locator(".transcript")).toContainText("Demo runtime received: project-bound task");
+	await expect(page.locator(".topbar h1")).toHaveCount(0);
+	await expect(page.locator(".topbar-title")).toContainText(project.name);
 	await expect.poll(() => creates.length).toBe(1);
 	expect(creates[0]?.workspaceId).toBe(project.id);
 

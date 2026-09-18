@@ -55,6 +55,8 @@ for (const group of ["apps", "packages"]) {
 		workspaces.push({ name: manifest.name, target });
 		if (entry.name === "desktop" && group === "apps") continue;
 		await cp(join(source, "dist"), join(target, "dist"), { recursive: true });
+		if (group === "packages" && entry.name === "sandbox")
+			await cp(join(source, "runtime"), join(target, "runtime"), { recursive: true });
 		if (group === "apps" && entry.name === "gateway")
 			await cp(join(source, "builtin-skills"), join(target, "builtin-skills"), { recursive: true });
 	}

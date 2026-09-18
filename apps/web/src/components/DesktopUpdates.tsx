@@ -2,7 +2,7 @@ import { ArrowUpCircle, Check, Download, ExternalLink, LoaderCircle, RefreshCw, 
 import { useCallback, useEffect, useState } from "react";
 import type { DesktopUpdateAction, DesktopUpdateState } from "../lib/desktop.js";
 import { useLocale } from "../lib/locale.js";
-import clover from "../assets/wuming-clover.svg";
+import clover from "../assets/wuming-clover.png";
 import { Markdown } from "./Markdown.js";
 import "./desktop-updates.css";
 

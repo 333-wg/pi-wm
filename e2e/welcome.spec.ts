@@ -82,6 +82,49 @@ test("first visit validates the password and enters the workbench directly", asy
 	await expect(page.locator(".welcome-screen")).toHaveCount(0);
 });
 
+test("new clients can sign in to a gateway without optional notification support", async ({ page }) => {
+	const hellos: string[][] = [];
+	await page.routeWebSocket("**/api/ws", (socket) => {
+		const server = socket.connectToServer();
+		socket.onMessage((raw) => {
+			const message = JSON.parse(String(raw));
+			if (message.type === "hello") {
+				hellos.push(message.capabilities);
+				if (message.capabilities.includes("task.notifications")) {
+					socket.close({ code: 1002, reason: "Invalid protocol message" });
+					server.close();
+					return;
+				}
+			}
+			server.send(raw);
+		});
+	});
+	await page.goto(webUrl);
+	await page.getByLabel("访问密码", { exact: true }).fill("wuming");
+	await page.getByRole("button", { name: "开启工作空间", exact: true }).click();
+	await expect(page.locator(".connection")).toHaveClass(/connected/);
+	await expect(page.locator(".welcome-screen")).toHaveCount(0);
+	expect(hellos).toHaveLength(2);
+	expect(hellos[0]).toContain("task.notifications");
+	expect(hellos[1]).not.toContain("task.notifications");
+	await expect.poll(() => page.evaluate(() => localStorage.getItem("wuming.token"))).toBe("wuming");
+});
+
+test("password input tolerates keyless embedded-browser events and IME composition", async ({ page }) => {
+	const errors: string[] = [];
+	page.on("pageerror", (error) => errors.push(error.message));
+	await page.goto(webUrl);
+	await page.getByLabel("访问密码", { exact: true }).fill("wuming");
+	await page.getByLabel("访问密码", { exact: true }).evaluate((input) => {
+		input.dispatchEvent(new Event("keydown", { bubbles: true }));
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, isComposing: true, bubbles: true }));
+	});
+	await page.getByLabel("访问密码", { exact: true }).press("Enter");
+	await expect(page.locator(".connection")).toHaveClass(/connected/);
+	await expect(page.locator(".welcome-screen")).toHaveCount(0);
+	expect(errors).toEqual([]);
+});
+
 test("desktop auto-connection still requires first-use password and remembers it", async ({ page }) => {
 	await page.addInitScript(() => {
 		window.wumingDesktop = {

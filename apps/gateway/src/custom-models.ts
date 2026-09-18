@@ -8,10 +8,13 @@ import type {
 	CustomModelConnection,
 	CustomModelService,
 	CustomModelSettings,
+	CustomModelKind,
+	MediaModelConfig,
 	ModelMetadata,
 	ModelRef,
 } from "@wuming/protocol";
 import type { PiProviderRegistration } from "@wuming/pi-adapter";
+import { classifyModel } from "./media-model-discovery.js";
 import {
 	parseModelThinkingDeclaration,
 	parseModelInputDeclaration,
@@ -27,6 +30,7 @@ type StoredService = Omit<CustomModelService, "authenticated" | "modelCount"> & 
 	apiKey: string;
 	thinkingDeclarations?: Record<string, ModelThinkingDeclaration>;
 	inputDeclarations?: Record<string, ModelInputDeclaration>;
+	modelKinds?: Record<string, CustomModelKind>;
 };
 
 interface StoredCatalog {
@@ -65,7 +69,8 @@ function validateBaseUrl(baseUrl: string): URL {
 
 function validateConfig(config: CustomModelConfig): void {
 	validateBaseUrl(config.baseUrl);
-	if (config.provider.startsWith("mcp__")) throw new Error("Model provider name is reserved");
+	if (config.provider.startsWith("mcp__") || config.provider.startsWith("official-"))
+		throw new Error("Model provider name is reserved");
 }
 
 function validateStoredConfig(config: StoredConfig): void {
@@ -136,6 +141,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
 
 function parseModels(payload: unknown): {
 	models: CustomModelCandidate[];
+	modelKinds: Record<string, CustomModelKind>;
 	thinkingDeclarations: Record<string, ModelThinkingDeclaration>;
 	inputDeclarations: Record<string, ModelInputDeclaration>;
 } {
@@ -144,6 +150,7 @@ function parseModels(payload: unknown): {
 	}
 	const seen = new Set<string>();
 	const models: CustomModelCandidate[] = [];
+	const modelKinds: Record<string, CustomModelKind> = Object.create(null);
 	const thinkingDeclarations: Record<string, ModelThinkingDeclaration> = Object.create(null);
 	const inputDeclarations: Record<string, ModelInputDeclaration> = Object.create(null);
 	for (const value of payload.data) {
@@ -157,7 +164,9 @@ function parseModels(payload: unknown): {
 					? value.name
 					: id;
 		seen.add(id);
-		models.push({ id, name: candidateName.trim().slice(0, 500) || id });
+		const kind = classifyModel(value, id);
+		modelKinds[id] = kind;
+		models.push({ id, name: candidateName.trim().slice(0, 500) || id, ...(kind !== "chat" ? { kind } : {}) });
 		const declaration = parseModelThinkingDeclaration(value);
 		if (declaration) thinkingDeclarations[id] = declaration;
 		const input = parseModelInputDeclaration(value);
@@ -167,6 +176,7 @@ function parseModels(payload: unknown): {
 	if (models.length === 0) throw new Error("Model endpoint returned no selectable models");
 	return {
 		models: models.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" })),
+		modelKinds,
 		thinkingDeclarations,
 		inputDeclarations,
 	};
@@ -328,7 +338,36 @@ export class CustomModelRegistry {
 	}
 
 	list(): ModelMetadata[] {
-		return [...this.#configs.values()].map((config) => metadata(config, this.#capabilities(config)));
+		return [...this.#configs.values()]
+			.filter((config) => this.#kind(config) === "chat")
+			.map((config) => metadata(config, this.#capabilities(config)));
+	}
+
+	#kind(config: StoredConfig): CustomModelKind {
+		const kinds = this.#services.get(config.provider)?.modelKinds;
+		return (
+			config.kind ??
+			(kinds && Object.hasOwn(kinds, config.id) ? kinds[config.id] : undefined) ??
+			classifyModel({}, config.id)
+		);
+	}
+
+	listMedia(): CustomModelSettings[] {
+		return [...this.#configs.values()]
+			.filter((config) => this.#kind(config) !== "chat")
+			.map((config) => this.get(config));
+	}
+
+	resolveMedia(config: MediaModelConfig): MediaModelConfig {
+		const stored = this.#configs.get(keyFor({ provider: config.provider!, id: config.model }));
+		if (!stored || this.#kind(stored) !== config.kind || stored.baseUrl !== config.baseUrl)
+			throw new Error("生成模型与已保存的服务不匹配");
+		for (const id of config.models ?? [config.model]) {
+			const candidate = this.#configs.get(keyFor({ provider: stored.provider, id }));
+			if (!candidate || this.#kind(candidate) !== config.kind) throw new Error("只能选择该服务中已添加的生成模型");
+		}
+		const { provider: _provider, ...resolved } = config;
+		return { ...resolved, provider: stored.provider, apiKey: stored.apiKey };
 	}
 
 	#capabilities(config: StoredConfig): CustomModelCapabilities {
@@ -336,7 +375,7 @@ export class CustomModelRegistry {
 		const declaration = declarations && Object.hasOwn(declarations, config.id) ? declarations[config.id] : undefined;
 		const inputs = this.#services.get(config.provider)?.inputDeclarations;
 		const input = inputs && Object.hasOwn(inputs, config.id) ? inputs[config.id] : undefined;
-		return resolveCustomModelCapabilities(config.id, config.api, declaration, input);
+		return resolveCustomModelCapabilities(config.id, config.api, declaration, input, config.thinkingOverride);
 	}
 
 	services(): CustomModelService[] {
@@ -355,10 +394,13 @@ export class CustomModelRegistry {
 		const capabilities = this.#capabilities(config);
 		return {
 			model: { provider: config.provider, id: config.id },
+			...(this.#kind(config) !== "chat" || config.kind ? { kind: this.#kind(config) } : {}),
 			name: config.name,
 			api: config.api,
 			baseUrl: config.baseUrl,
 			reasoning: capabilities.reasoning,
+			thinkingLevels: [...capabilities.thinkingLevels],
+			...(config.thinkingOverride ? { thinkingOverride: config.thinkingOverride } : {}),
 			input: [...capabilities.input],
 			contextWindow: config.contextWindow,
 			maxOutputTokens: config.maxOutputTokens,
@@ -367,8 +409,10 @@ export class CustomModelRegistry {
 
 	registrations(): PiProviderRegistration[] {
 		const providers = new Map<string, StoredConfig[]>();
-		for (const config of this.#configs.values())
+		for (const config of this.#configs.values()) {
+			if (this.#kind(config) !== "chat") continue;
 			providers.set(config.provider, [...(providers.get(config.provider) ?? []), config]);
+		}
 		return [...providers].map(([provider, configs]) => {
 			const first = configs[0]!;
 			return {
@@ -409,6 +453,7 @@ export class CustomModelRegistry {
 						? {
 								thinkingDeclarations: savedService.thinkingDeclarations ?? {},
 								inputDeclarations: savedService.inputDeclarations ?? {},
+								modelKinds: savedService.modelKinds ?? {},
 							}
 						: {}),
 				}
@@ -416,6 +461,10 @@ export class CustomModelRegistry {
 		validateStoredService(service);
 		const resolved: StoredConfig = {
 			...config,
+			...(config.kind === undefined && existing?.kind ? { kind: existing.kind } : {}),
+			...(existing?.thinkingOverride && config.thinkingOverride === undefined
+				? { thinkingOverride: existing.thinkingOverride }
+				: {}),
 			baseUrl: service.baseUrl,
 			api: service.api,
 			apiKey: service.apiKey,
@@ -446,7 +495,7 @@ export class CustomModelRegistry {
 	}
 
 	async discover(connection: CustomModelConnection): Promise<CustomModelDiscovery> {
-		const { thinkingDeclarations, inputDeclarations, ...discovery } = await this.#discover(connection);
+		const { thinkingDeclarations, inputDeclarations, modelKinds, ...discovery } = await this.#discover(connection);
 		const service: StoredService = {
 			provider: discovery.provider,
 			baseUrl: discovery.baseUrl,
@@ -454,6 +503,7 @@ export class CustomModelRegistry {
 			apiKey: connection.apiKey.trim(),
 			thinkingDeclarations,
 			inputDeclarations,
+			modelKinds,
 		};
 		validateStoredService(service);
 		this.#services.set(service.provider, service);
@@ -473,7 +523,7 @@ export class CustomModelRegistry {
 	async refreshService(provider: string): Promise<CustomModelDiscovery> {
 		const service = this.#services.get(provider);
 		if (!service) throw new Error(`Custom model service ${provider} does not exist`);
-		const { thinkingDeclarations, inputDeclarations, ...discovery } = await this.#discover({
+		const { thinkingDeclarations, inputDeclarations, modelKinds, ...discovery } = await this.#discover({
 			baseUrl: service.baseUrl,
 			apiKey: service.apiKey,
 		});
@@ -483,6 +533,7 @@ export class CustomModelRegistry {
 			api: discovery.api,
 			thinkingDeclarations,
 			inputDeclarations,
+			modelKinds,
 		};
 		this.#services.set(provider, updated);
 		for (const [key, config] of this.#configs) {
@@ -506,6 +557,7 @@ export class CustomModelRegistry {
 
 	async #discover(connection: CustomModelConnection): Promise<
 		CustomModelDiscovery & {
+			modelKinds: Record<string, CustomModelKind>;
 			thinkingDeclarations: Record<string, ModelThinkingDeclaration>;
 			inputDeclarations: Record<string, ModelInputDeclaration>;
 		}
@@ -542,7 +594,9 @@ export class CustomModelRegistry {
 							errors.push(`${family}: HTTP ${response.status}`);
 							continue;
 						}
-						const { models, thinkingDeclarations, inputDeclarations } = parseModels(await readBoundedJson(response));
+						const { models, thinkingDeclarations, inputDeclarations, modelKinds } = parseModels(
+							await readBoundedJson(response)
+						);
 						const api: CustomModelApi =
 							family === "anthropic"
 								? "anthropic-messages"
@@ -555,6 +609,7 @@ export class CustomModelRegistry {
 							baseUrl: discoveredBaseUrl,
 							api,
 							models,
+							modelKinds,
 							thinkingDeclarations,
 							inputDeclarations,
 							latencyMs: Math.max(0, Date.now() - started),
@@ -582,6 +637,7 @@ export class CustomModelRegistry {
 	async test(model: ModelRef): Promise<number> {
 		const config = this.#configs.get(keyFor(model));
 		if (!config) throw new Error(`Custom model ${model.provider}/${model.id} does not exist`);
+		if (this.#kind(config) !== "chat") throw new Error("生成模型不能通过对话接口测试");
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), MODEL_TEST_TIMEOUT_MS);
 		const started = Date.now();

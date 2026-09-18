@@ -1,4 +1,4 @@
-import type { CustomModelCandidate, MediaKind } from "@wuming/protocol";
+import type { CustomModelCandidate, CustomModelKind, MediaKind } from "@wuming/protocol";
 
 function record(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -59,6 +59,13 @@ function matches(model: Record<string, unknown>, id: string, kind: MediaKind): b
 	)
 		return false;
 	return families[kind].test(id);
+}
+
+export function classifyModel(value: unknown, id: string): CustomModelKind {
+	const model = record(value);
+	if (matches(model, id, "video")) return "video";
+	if (matches(model, id, "image")) return "image";
+	return "chat";
 }
 
 export function parseMediaModelCatalog(payload: unknown, kind: MediaKind): CustomModelCandidate[] {

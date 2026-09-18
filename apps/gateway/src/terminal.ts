@@ -1,5 +1,6 @@
 import * as pty from "node-pty";
 import type { TerminalServerMessage } from "@wuming/protocol";
+import { discoverTerminalShells, type TerminalShell } from "./terminal-shells.js";
 
 export interface TerminalOwner {
 	principalId: string;
@@ -21,7 +22,9 @@ interface TerminalRecord {
 	id: string;
 	owner: TerminalOwner;
 	pty: pty.IPty;
-	buffer: string;
+	shell: TerminalShell;
+	cwd: string;
+	chunks: Array<{ seq: number; data: string }>;
 	bufferBytes: number;
 	firstSeq: number;
 	seq: number;
@@ -47,6 +50,12 @@ function safeEnv(): Record<string, string> {
 		"COMSPEC",
 		"WINDIR",
 		"USERPROFILE",
+		"APPDATA",
+		"LOCALAPPDATA",
+		"ProgramFiles",
+		"ProgramFiles(x86)",
+		"ProgramW6432",
+		"PSModulePath",
 		"HOME",
 		"HOMEDRIVE",
 		"HOMEPATH",
@@ -72,18 +81,11 @@ function safeEnv(): Record<string, string> {
 function commandFor(
 	options: TerminalManagerOptions,
 	terminalId: string,
-	workspace: string
+	workspace: string,
+	shell: TerminalShell
 ): { file: string; args: string[]; cwd?: string; env: Record<string, string> } {
 	if (options.mode === "host") {
-		if (process.platform === "win32") {
-			return {
-				file: process.env.ComSpec ?? "cmd.exe",
-				args: ["/d"],
-				cwd: workspace,
-				env: safeEnv(),
-			};
-		}
-		return { file: process.env.SHELL ?? "/bin/sh", args: ["-l"], cwd: workspace, env: safeEnv() };
+		return { file: shell.file, args: shell.args, cwd: workspace, env: safeEnv() };
 	}
 	if (!options.dockerImage || !options.dockerImage.includes("@sha256:")) {
 		throw Object.assign(new Error("Docker terminal requires a digest-pinned image"), {
@@ -134,9 +136,14 @@ export class TerminalManager implements AsyncDisposable {
 	readonly #options: TerminalManagerOptions;
 	readonly #terminals = new Map<string, TerminalRecord>();
 	readonly #idleTimer: ReturnType<typeof setInterval>;
+	readonly #shells: TerminalShell[];
 
 	constructor(options: TerminalManagerOptions) {
 		this.#options = options;
+		this.#shells =
+			options.mode === "docker"
+				? [{ id: "container-sh", label: "Container sh", file: "/bin/sh", args: ["-l"] }]
+				: discoverTerminalShells();
 		this.#idleTimer = setInterval(() => this.#reapIdle(), Math.min(60_000, options.idleTimeoutMs ?? 15 * 60_000));
 		this.#idleTimer.unref();
 	}
@@ -147,6 +154,20 @@ export class TerminalManager implements AsyncDisposable {
 
 	get activeCount(): number {
 		return this.#terminals.size;
+	}
+
+	shells(requestId: string): TerminalServerMessage {
+		const defaultShell = this.#shells[0];
+		if (!defaultShell)
+			throw Object.assign(new Error("未检测到可用的 Shell，请安装 PowerShell 或 Bash"), {
+				code: "process_unavailable",
+			});
+		return {
+			type: "terminal.shells",
+			requestId,
+			shells: this.#shells.map(({ id, label }) => ({ id, label })),
+			defaultShellId: defaultShell.id,
+		};
 	}
 
 	workspaceFor(terminalId: string, principalId: string): string {
@@ -161,17 +182,20 @@ export class TerminalManager implements AsyncDisposable {
 		terminalId: string;
 		requestId: string;
 		owner: TerminalOwner;
+		shellId?: string;
 		cols: number;
 		rows: number;
 		connectionId: string;
 		send: TerminalSend;
 	}): TerminalServerMessage {
-		if (this.#terminals.size >= (this.#options.maxTerminals ?? 8))
-			throw Object.assign(new Error("Terminal capacity reached"), { code: "conflict" });
 		if (this.#terminals.has(input.terminalId))
 			throw Object.assign(new Error("Terminal already exists"), { code: "conflict" });
+		if (this.#terminals.size >= (this.#options.maxTerminals ?? 8))
+			throw Object.assign(new Error("终端数量已达上限，请先关闭其他工作区的终端"), { code: "capacity_reached" });
 		const workspace = this.#options.assertWorkspace(input.owner.workspaceId);
-		const command = commandFor(this.#options, input.terminalId, workspace);
+		const shell = input.shellId ? this.#shells.find((candidate) => candidate.id === input.shellId) : this.#shells[0];
+		if (!shell) throw Object.assign(new Error("所选 Shell 不可用，请重新选择"), { code: "process_unavailable" });
+		const command = commandFor(this.#options, input.terminalId, workspace, shell);
 		const child = pty.spawn(command.file, command.args, {
 			name: "xterm-256color",
 			cols: input.cols,
@@ -185,7 +209,9 @@ export class TerminalManager implements AsyncDisposable {
 			id: input.terminalId,
 			owner: input.owner,
 			pty: child,
-			buffer: "",
+			shell,
+			cwd: this.#options.mode === "docker" ? "/workspace" : workspace,
+			chunks: [],
 			bufferBytes: 0,
 			firstSeq: 1,
 			seq: 0,
@@ -210,7 +236,9 @@ export class TerminalManager implements AsyncDisposable {
 			type: "terminal.ready",
 			requestId: input.requestId,
 			terminalId: record.id,
-			shell: child.process,
+			shell: record.shell.label,
+			shellId: record.shell.id,
+			cwd: record.cwd,
 			seq: record.seq,
 		};
 	}
@@ -233,15 +261,25 @@ export class TerminalManager implements AsyncDisposable {
 		} catch {
 			/* process may exit between attach and resize */
 		}
-		if (record.seq > 0) {
-			const replay = input.sinceSeq >= record.firstSeq - 1 ? record.buffer : record.buffer;
-			input.send({ type: "terminal.reset", terminalId: record.id, seq: record.seq, data: replay });
+		if (input.sinceSeq < record.firstSeq - 1) {
+			input.send({
+				type: "terminal.reset",
+				terminalId: record.id,
+				seq: record.seq,
+				data: record.chunks.map((chunk) => chunk.data).join(""),
+			});
+		} else {
+			for (const chunk of record.chunks) {
+				if (chunk.seq > input.sinceSeq) input.send({ type: "terminal.output", terminalId: record.id, ...chunk });
+			}
 		}
 		return {
 			type: "terminal.ready",
 			requestId: input.requestId,
 			terminalId: record.id,
-			shell: record.pty.process,
+			shell: record.shell.label,
+			shellId: record.shell.id,
+			cwd: record.cwd,
 			seq: record.seq,
 		};
 	}
@@ -266,7 +304,9 @@ export class TerminalManager implements AsyncDisposable {
 	}
 
 	detachConnection(connectionId: string): void {
-		for (const record of this.#terminals.values()) record.connections.delete(connectionId);
+		for (const record of this.#terminals.values()) {
+			if (record.connections.delete(connectionId)) record.lastUsedAt = Date.now();
+		}
 	}
 
 	async [Symbol.asyncDispose](): Promise<void> {
@@ -287,16 +327,22 @@ export class TerminalManager implements AsyncDisposable {
 		if (!data) return;
 		record.seq += 1;
 		record.lastUsedAt = Date.now();
-		record.buffer += data;
+		record.chunks.push({ seq: record.seq, data });
 		record.bufferBytes += boundedSize(data);
 		const maxBytes = this.#options.maxBufferBytes ?? 256 * 1024;
-		while (record.bufferBytes > maxBytes) {
-			const excess = record.bufferBytes - maxBytes;
-			const bytes = Buffer.from(record.buffer, "utf8");
-			const cut = Math.min(excess, bytes.length);
-			record.buffer = bytes.subarray(cut).toString("utf8");
-			record.bufferBytes = boundedSize(record.buffer);
-			record.firstSeq += 1;
+		while ((record.bufferBytes > maxBytes || record.chunks.length > 4096) && record.chunks.length > 1) {
+			const removed = record.chunks.shift()!;
+			record.bufferBytes -= boundedSize(removed.data);
+			record.firstSeq = removed.seq + 1;
+		}
+		if (record.bufferBytes > maxBytes) {
+			const bytes = Buffer.from(record.chunks[0]!.data, "utf8");
+			let cut = bytes.length - maxBytes;
+			while (cut < bytes.length && (bytes[cut]! & 0xc0) === 0x80) cut++;
+			record.chunks[0]!.data = bytes.subarray(cut).toString("utf8");
+			record.bufferBytes = bytes.length - cut;
+			// A partial chunk cannot be replayed as an incremental event.
+			record.firstSeq = record.seq + 1;
 		}
 		this.#broadcast(record, { type: "terminal.output", terminalId: record.id, seq: record.seq, data }, firstSend);
 	}

@@ -18,6 +18,7 @@ import { ManagedSkillCatalog } from "../src/managed-skill-catalog.js";
 import { StaticTokenMapAuth } from "../src/auth.js";
 import { FileMcpCatalog } from "../src/mcp.js";
 import { MediaModelRegistry } from "../src/media-models.js";
+import { OfficialAccountManager, OfficialCredentialStore } from "@wuming/pi-adapter";
 
 class GatewayRuntime implements AgentRuntime {
 	calls = 0;
@@ -166,6 +167,268 @@ function send(ws: WebSocket, message: ClientMessage): void {
 }
 
 describe("GatewayServer", () => {
+	it("restricts official accounts to owners and makes authenticated models selectable without exposing tokens", async () => {
+		const root = await mkdtemp(join(tmpdir(), "official-gateway-"));
+		cleanup.push(() => rm(root, { recursive: true, force: true }));
+		const credentials = new OfficialCredentialStore(join(root, "official.enc"), Buffer.alloc(32, 8));
+		await credentials.modify("official-chatgpt", async () => ({
+			type: "oauth",
+			access: "hidden-access",
+			refresh: "hidden-refresh",
+			expires: Date.now() + 3600000,
+		}));
+		const officialAccounts = new OfficialAccountManager(credentials);
+		const store = new SqliteOrchestratorStore(":memory:");
+		cleanup.push(() => store.close());
+		const orchestrator = new SessionOrchestrator(store, new GatewayRuntime());
+		const server = new GatewayServer({
+			store,
+			orchestrator,
+			officialAccounts,
+			auth: new StaticTokenMapAuth([
+				{ token: "owner", principal: { id: "owner", role: "owner", workspaces: [workspace] } },
+				{ token: "member", principal: { id: "member", role: "member", workspaces: [workspace] } },
+			]),
+		});
+		const address = await server.listen();
+		cleanup.push(() => server.close());
+		const owner = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, "owner");
+		const member = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, "member");
+		for (const [index, client] of [owner, member].entries()) {
+			send(client.ws, { type: "hello", protocolVersion: 1, clientId: `official-${index}`, capabilities: [] });
+			await client.collector.waitFor((message) => message.type === "hello");
+			send(client.ws, {
+				type: "request",
+				requestId: "official-list",
+				idempotencyKey: "official-list",
+				command: { type: "model.official.list" },
+			});
+			const result = await client.collector.waitFor(
+				(message) => message.type === "response" && message.requestId === "official-list"
+			);
+			expect(result).toMatchObject(
+				client === owner
+					? { ok: true, result: { type: "model.official.accounts" } }
+					: { ok: false, error: { code: "forbidden" } }
+			);
+			expect(JSON.stringify(result)).not.toMatch(/hidden-access|hidden-refresh/);
+		}
+		send(member.ws, {
+			type: "request",
+			requestId: "forbidden-logout",
+			idempotencyKey: "forbidden-logout",
+			command: { type: "model.official.logout", provider: "official-chatgpt" },
+		});
+		expect(
+			await member.collector.waitFor((m) => m.type === "response" && m.requestId === "forbidden-logout")
+		).toMatchObject({ ok: false, error: { code: "forbidden" } });
+		send(owner.ws, { type: "request", requestId: "models", idempotencyKey: "models", command: { type: "model.list" } });
+		const models = await owner.collector.waitFor(
+			(m): m is Extract<ServerMessage, { type: "response" }> => m.type === "response" && m.requestId === "models"
+		);
+		if (models.type !== "response" || !models.ok || models.result.type !== "model.list")
+			throw new Error("Missing models");
+		const model = models.result.models[0]!.model;
+		expect(model.provider).toBe("official-chatgpt");
+		send(owner.ws, {
+			type: "request",
+			requestId: "create-official",
+			idempotencyKey: "create-official",
+			command: {
+				type: "session.create",
+				workspaceId: workspace.id,
+				model,
+				thinkingLevel: "low",
+				sandboxMode: "read_only",
+				approvalPolicy: "never",
+			},
+		});
+		expect(
+			await owner.collector.waitFor((m) => m.type === "response" && m.requestId === "create-official")
+		).toMatchObject({ ok: true });
+		send(owner.ws, {
+			type: "request",
+			requestId: "logout",
+			idempotencyKey: "logout",
+			command: { type: "model.official.logout", provider: "official-chatgpt" },
+		});
+		expect(await owner.collector.waitFor((m) => m.type === "response" && m.requestId === "logout")).toMatchObject({
+			ok: true,
+		});
+		expect(await credentials.read("official-chatgpt")).toBeUndefined();
+		expect(officialAccounts.list()).toEqual([]);
+	});
+
+	it("searches only authorized workspace content and sends live notifications without an attachment", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		cleanup.push(() => store.close());
+		const orchestrator = new SessionOrchestrator(store, new GatewayRuntime());
+		const server = new GatewayServer({
+			store,
+			orchestrator,
+			auth: new StaticTokenMapAuth([
+				{ token: "owner", principal: { id: "owner", role: "owner", workspaces: [workspace] } },
+				{ token: "outsider", principal: { id: "outsider", role: "member", workspaces: [] } },
+			]),
+		});
+		const address = await server.listen();
+		cleanup.push(() => server.close());
+		const owner = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, "owner");
+		const outsider = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, "outsider");
+		const legacy = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, "owner");
+		for (const [index, client] of [owner, outsider, legacy].entries()) {
+			send(client.ws, {
+				type: "hello",
+				protocolVersion: 1,
+				clientId: `notify-${index}`,
+				capabilities: client === legacy ? [] : ["task.notifications"],
+			});
+			await client.collector.waitFor((message) => message.type === "hello");
+		}
+		const { snapshot } = await orchestrator.createSession({
+			principalId: "owner",
+			idempotencyKey: "create-search",
+			workspaceId: workspace.id,
+			model: { provider: "test", id: "model" },
+			thinkingLevel: "off",
+			sandboxMode: "read_only",
+			approvalPolicy: "never",
+		});
+		await orchestrator.acceptTurn({
+			principalId: "owner",
+			idempotencyKey: "search-turn",
+			sessionId: snapshot.session.id,
+			mode: "prompt",
+			content: [{ type: "text", text: "unique-search-body" }],
+		});
+		await orchestrator.drainSession(snapshot.session.id);
+		const notification = await owner.collector.waitFor((message) => message.type === "task.notification");
+		expect(notification).toMatchObject({
+			kind: "completed",
+			sessionId: snapshot.session.id,
+			workspaceId: workspace.id,
+		});
+		expect(JSON.stringify(notification)).not.toContain("unique-search-body");
+		for (const client of [owner, outsider, legacy]) {
+			send(client.ws, {
+				type: "request",
+				requestId: "search",
+				idempotencyKey: "search",
+				command: { type: "session.search", workspaceId: workspace.id, query: "unique-search-body" },
+			});
+			const response = await client.collector.waitFor(
+				(message) => message.type === "response" && message.requestId === "search"
+			);
+			if (client === outsider) expect(response).toMatchObject({ ok: false });
+			else
+				expect(response).toMatchObject({
+					ok: true,
+					result: { type: "session.search", matches: [{ sessionId: snapshot.session.id, role: "user" }] },
+				});
+		}
+		expect(outsider.collector.messages.some((message) => message.type === "task.notification")).toBe(false);
+		expect(legacy.collector.messages.some((message) => message.type === "task.notification")).toBe(false);
+		const replay = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, "owner");
+		send(replay.ws, {
+			type: "hello",
+			protocolVersion: 1,
+			clientId: "replay",
+			capabilities: ["task.notifications"],
+			resumeCursor: "0",
+		});
+		await replay.collector.waitFor((message) => message.type === "hello");
+		send(replay.ws, {
+			type: "request",
+			requestId: "barrier",
+			idempotencyKey: "barrier",
+			command: { type: "workspace.list" },
+		});
+		await replay.collector.waitFor((message) => message.type === "response" && message.requestId === "barrier");
+		expect(replay.collector.messages.some((message) => message.type === "task.notification")).toBe(false);
+	});
+
+	it("allows only a local owner to approve desktop operations in shared sessions", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		cleanup.push(() => store.close());
+		const orchestrator = new SessionOrchestrator(store, new GatewayRuntime());
+		const created = await orchestrator.createSession({
+			principalId: "owner",
+			idempotencyKey: "desktop-session",
+			workspaceId: workspace.id,
+			model: { provider: "test", id: "vision" },
+			thinkingLevel: "off",
+			sandboxMode: "workspace_write",
+			approvalPolicy: "on_risk",
+		});
+		const approvals = new ApprovalBroker({ store });
+		const server = new GatewayServer({
+			store,
+			orchestrator,
+			approvals,
+			auth: new StaticTokenMapAuth([
+				{ token: "owner", principal: { id: "owner", role: "owner", workspaces: [workspace] } },
+				{ token: "member", principal: { id: "member", role: "member", workspaces: [workspace] } },
+			]),
+		});
+		const address = await server.listen();
+		cleanup.push(() => server.close());
+		const owner = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, "owner");
+		const member = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, "member");
+		for (const [index, client] of [owner, member].entries()) {
+			send(client.ws, { type: "hello", protocolVersion: 1, clientId: `desktop-${index}`, capabilities: ["approval"] });
+			await client.collector.waitFor((message) => message.type === "hello");
+			send(client.ws, {
+				type: "request",
+				requestId: "attach",
+				idempotencyKey: `attach-${index}`,
+				command: { type: "session.attach", sessionId: created.snapshot.session.id },
+			});
+			await client.collector.waitFor((message) => message.type === "response" && message.requestId === "attach");
+		}
+		const controller = new AbortController();
+		const authorization = approvals.authorize({
+			sessionId: created.snapshot.session.id,
+			toolCallId: "desktop-input",
+			risk: "high",
+			summary: "Desktop input",
+			requireExplicitApproval: true,
+			capabilities: [{ type: "computer.use", action: "input" }],
+			signal: controller.signal,
+		});
+		void authorization.catch(() => {});
+		try {
+			const requested = await owner.collector.waitFor(
+				(message): message is Extract<ServerMessage, { type: "event" }> =>
+					message.type === "event" && message.event.type === "approval.requested"
+			);
+			if (requested.event.type !== "approval.requested") throw new Error("Expected desktop approval");
+			const command = {
+				type: "approval.respond" as const,
+				sessionId: created.snapshot.session.id,
+				approvalId: requested.event.approval.id,
+				decision: "approve" as const,
+			};
+			send(member.ws, { type: "request", requestId: "member-decision", idempotencyKey: "member-decision", command });
+			expect(
+				await member.collector.waitFor(
+					(message) => message.type === "response" && message.requestId === "member-decision"
+				)
+			).toMatchObject({ ok: false, error: { code: "forbidden" } });
+			expect(store.loadSnapshot(created.snapshot.session.id)?.pendingApprovals).toHaveLength(1);
+			send(owner.ws, { type: "request", requestId: "owner-decision", idempotencyKey: "owner-decision", command });
+			expect(
+				await owner.collector.waitFor(
+					(message) => message.type === "response" && message.requestId === "owner-decision"
+				)
+			).toMatchObject({ ok: true });
+			const permit = await authorization;
+			expect(permit).toBeDefined();
+			approvals.completeAuthorization(permit!);
+		} finally {
+			controller.abort();
+			await authorization.catch(() => {});
+		}
+	});
 	it("protects media defaults with owner permissions and keeps API keys out of RPC responses", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wuming-media-rpc-"));
 		cleanup.push(() => rm(root, { recursive: true, force: true }));
@@ -471,6 +734,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		expect(await call(viewer, { type: "mcp.list", workspaceId: workspace.id })).toMatchObject({ ok: true });
 		expect(await call(viewer, configureCommand)).toMatchObject({ ok: false, error: { code: "forbidden" } });
 		expect(
+			await call(viewer, { type: "mcp.setEnabled", workspaceId: workspace.id, serverId: "docs", enabled: false })
+		).toMatchObject({ ok: false, error: { code: "forbidden" } });
+		expect(
 			await call(viewer, { type: "mcp.configuration.get", workspaceId: workspace.id, serverId: "docs" })
 		).toMatchObject({ ok: false, error: { code: "forbidden" } });
 		expect(await call(viewer, { type: "mcp.remove", workspaceId: workspace.id, serverId: "docs" })).toMatchObject({
@@ -504,6 +770,18 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 				() => false
 			)
 		).toBe(true);
+		expect(
+			await call(owner, { type: "mcp.setEnabled", workspaceId: workspace.id, serverId: "docs", enabled: false })
+		).toMatchObject({
+			ok: true,
+			result: { type: "mcp.updated", server: { trusted: true, discoveryStatus: "disabled" } },
+		});
+		expect(
+			await call(owner, { type: "mcp.setEnabled", workspaceId: workspace.id, serverId: "docs", enabled: true })
+		).toMatchObject({
+			ok: true,
+			result: { type: "mcp.updated", server: { trusted: true, discoveryStatus: "ready", toolCount: 1 } },
+		});
 		expect(await call(owner, { type: "mcp.untrust", workspaceId: workspace.id, serverId: "docs" })).toMatchObject({
 			ok: true,
 			result: { type: "mcp.updated", server: { id: "docs", trusted: false, discoveryStatus: "untrusted" } },
@@ -1924,6 +2202,23 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			(message): message is Extract<ServerMessage, { type: "hello" }> => message.type === "hello"
 		);
 		expect(hello.capabilities).toContain("terminal");
+		send(ws, { type: "terminal.shells", requestId: "shells" });
+		const shells = await collector.waitFor(
+			(message): message is Extract<ServerMessage, { type: "terminal.shells" }> => message.type === "terminal.shells"
+		);
+		expect(shells.shells.some((shell) => shell.id === shells.defaultShellId)).toBe(true);
+		send(ws, {
+			type: "terminal.create",
+			requestId: "bad-shell",
+			terminalId: "bad-shell",
+			workspaceId: workspace.id,
+			shellId: "not-installed",
+			cols: 80,
+			rows: 24,
+		});
+		expect(
+			await collector.waitFor((message) => message.type === "terminal.error" && message.requestId === "bad-shell")
+		).toMatchObject({ code: "process_unavailable", terminalId: "bad-shell" });
 		ws.send(
 			JSON.stringify({
 				type: "terminal.create",
@@ -1972,15 +2267,13 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 				rows: 30,
 			})
 		);
-		const replay = await reconnectedCollector.waitFor(
-			(message): message is Extract<ServerMessage, { type: "terminal.reset" }> =>
-				message.type === "terminal.reset" && message.terminalId === "terminal-1"
-		);
-		expect(replay.data).toContain("GATEWAY_TERMINAL");
-		expect(replay.seq).toBeGreaterThanOrEqual(beforeDisconnect.seq);
 		await reconnectedCollector.waitFor(
 			(message) => message.type === "terminal.ready" && message.requestId === "terminal-attach"
 		);
+		expect(reconnectedCollector.messages.some((message) => message.type === "terminal.reset")).toBe(false);
+		for (const message of reconnectedCollector.messages) {
+			if (message.type === "terminal.output") expect(message.seq).toBeGreaterThan(beforeDisconnect.seq);
+		}
 
 		reconnected.send(
 			JSON.stringify({

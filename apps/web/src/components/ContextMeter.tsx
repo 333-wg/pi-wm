@@ -1,36 +1,30 @@
+import { useT, type Translate } from "../lib/locale.js";
 import { ChevronRight, Gauge, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { contextLevel, formatTokens, type CacheUsage, type ContextUsage } from "../lib/context-usage.js";
 import "./context-meter.css";
 
-function describeOccupancy(usage: ContextUsage): string {
+function describeOccupancy(usage: ContextUsage, t: Translate): string {
 	if (usage.tokens === null || usage.ratio === null)
-		return (
-			(usage.basis === "compaction" ? "已压缩，" : "") +
-			"上下文用量待更新（模型窗口 " +
-			usage.contextWindow.toLocaleString("en-US") +
-			" token）"
-		);
-	const basis = usage.basis === "compaction" ? "按压缩后保留内容估算" : "按最近一次模型请求的输入、缓存和输出估算";
-	return (
-		"上下文约占 " +
-		Math.round(usage.ratio * 100) +
-		"%（" +
-		usage.tokens.toLocaleString("en-US") +
-		" / " +
-		usage.contextWindow.toLocaleString("en-US") +
-		" token，" +
-		basis +
-		"）"
-	);
+		return t("contextAwaiting", {
+			prefix: usage.basis === "compaction" ? t("compactedPrefix") : "",
+			window: usage.contextWindow.toLocaleString("en-US"),
+		});
+	return t("contextOccupancy", {
+		percent: Math.round(usage.ratio * 100),
+		tokens: usage.tokens.toLocaleString("en-US"),
+		window: usage.contextWindow.toLocaleString("en-US"),
+		basis: t(usage.basis === "compaction" ? "contextCompactedBasis" : "contextRequestBasis"),
+	});
 }
 
-function hitRate(cache: CacheUsage | undefined): string {
-	return cache?.hitRatio == null ? "暂无数据" : (cache.hitRatio * 100).toFixed(1) + "%";
+function hitRate(cache: CacheUsage | undefined, t: Translate): string {
+	return cache?.hitRatio == null ? t("noData") : (cache.hitRatio * 100).toFixed(1) + "%";
 }
 
 export function ContextDetails({ usage }: { usage: ContextUsage }) {
+	const t = useT();
 	const percent = usage.ratio === null ? null : Math.round(usage.ratio * 100);
 	const count = (value: number | undefined) => (value === undefined ? "--" : value.toLocaleString("en-US"));
 	return (
@@ -38,7 +32,7 @@ export function ContextDetails({ usage }: { usage: ContextUsage }) {
 			<div className="context-detail-occupancy">
 				<strong>
 					{percent === null ? (
-						"待更新"
+						t("awaitingUpdate")
 					) : (
 						<>
 							{percent}
@@ -46,49 +40,52 @@ export function ContextDetails({ usage }: { usage: ContextUsage }) {
 						</>
 					)}
 				</strong>
-				<span>{usage.basis === "compaction" ? "压缩后估算" : "当前占用"}</span>
+				<span>{usage.basis === "compaction" ? t("compactedEstimate") : t("currentOccupancy")}</span>
 			</div>
-			<div className="context-detail-track" role="img" aria-label={describeOccupancy(usage)}>
+			<div className="context-detail-track" role="img" aria-label={describeOccupancy(usage, t)}>
 				<i style={{ width: (percent ?? 0) + "%" }} />
 			</div>
 			<div className="context-detail-tokens">
 				{count(usage.tokens ?? undefined)} / {count(usage.contextWindow)} <span>tokens</span>
 			</div>
 			<div className="context-cache-heading">
-				缓存命中率 <span>输入 tokens</span>
+				{t("cacheHitRate")} <span>{t("inputTokens")}</span>
 			</div>
 			<div className="context-cache-summary">
 				<div>
-					<span>最近完成请求</span>
+					<span>{t("latestRequest")}</span>
 					<strong className={usage.cache?.awaitingRequest ? "context-cache-waiting" : undefined}>
-						{usage.cache?.awaitingRequest ? "等待首个请求用量" : hitRate(usage.cache?.latest)}
+						{usage.cache?.awaitingRequest ? t("awaitingFirstUsage") : hitRate(usage.cache?.latest, t)}
 					</strong>
 				</div>
 				<div>
-					<span>会话累计 {!!usage.cache?.requestCount && <small>{usage.cache.requestCount} 次</small>}</span>
-					<strong>{hitRate(usage.cache?.session)}</strong>
+					<span>
+						{t("sessionTotal")}{" "}
+						{!!usage.cache?.requestCount && <small>{t("callCount", { count: usage.cache.requestCount })}</small>}
+					</span>
+					<strong>{hitRate(usage.cache?.session, t)}</strong>
 				</div>
 			</div>
 			<details className="context-detail-disclosure">
 				<summary>
 					<ChevronRight size={12} />
-					用量明细
+					{t("usageDetails")}
 				</summary>
 				<table>
-					<caption>输入用量（tokens）</caption>
+					<caption>{t("inputUsage")}</caption>
 					<thead>
 						<tr>
-							<th scope="col">用量</th>
-							<th scope="col">最近完成请求</th>
-							<th scope="col">会话累计</th>
+							<th scope="col">{t("usage")}</th>
+							<th scope="col">{t("latestRequest")}</th>
+							<th scope="col">{t("sessionTotal")}</th>
 						</tr>
 					</thead>
 					<tbody>
 						{(
 							[
-								["缓存读取", "readTokens"],
-								["缓存写入", "writeTokens"],
-								["输入总量", "inputTokens"],
+								[t("usageCacheRead"), "readTokens"],
+								[t("usageCacheWrite"), "writeTokens"],
+								[t("totalInput"), "inputTokens"],
 							] as const
 						).map(([label, key]) => (
 							<tr key={key}>
@@ -99,8 +96,8 @@ export function ContextDetails({ usage }: { usage: ContextUsage }) {
 						))}
 					</tbody>
 				</table>
-				<p>命中率 = 缓存读取 / 输入总量，不含输出。会话累计包含历史模型。</p>
-				<p>按接口上报统计，未上报缓存时可能显示 0。压缩后需新请求确认缓存命中。</p>
+				<p>{t("cacheRateHint")}</p>
+				<p>{t("cacheReportedHint")}</p>
 			</details>
 		</>
 	);
@@ -115,6 +112,7 @@ function ContextPopover({
 	className: string;
 	children: ReactNode;
 }) {
+	const t = useT();
 	const [open, setOpen] = useState(false);
 	const [position, setPosition] = useState<CSSProperties>({});
 	const trigger = useRef<HTMLButtonElement>(null);
@@ -198,7 +196,7 @@ function ContextPopover({
 				type="button"
 				ref={trigger}
 				className={className}
-				aria-label={describeOccupancy(usage)}
+				aria-label={describeOccupancy(usage, t)}
 				aria-expanded={open}
 				aria-haspopup="dialog"
 				aria-controls={open ? id : undefined}
@@ -232,7 +230,7 @@ function ContextPopover({
 						id={id}
 						ref={panel}
 						role="dialog"
-						aria-label="上下文统计"
+						aria-label={t("contextStats")}
 						className={"context-popover level-" + contextLevel(usage.ratio ?? 0)}
 						style={position}
 						onPointerEnter={clearTimer}
@@ -251,9 +249,9 @@ function ContextPopover({
 						<header>
 							<span>
 								<Gauge size={14} />
-								上下文
+								{t("context")}
 							</span>
-							<button type="button" aria-label="关闭上下文统计" title="关闭" onClick={() => close(true)}>
+							<button type="button" aria-label={t("closeContextStats")} title={t("close")} onClick={() => close(true)}>
 								<X size={14} />
 							</button>
 						</header>
@@ -267,14 +265,15 @@ function ContextPopover({
 
 /** Bar for the run rail. */
 export function ContextMeter({ usage }: { usage: ContextUsage }) {
+	const t = useT();
 	const percent = usage.ratio === null ? null : Math.round(usage.ratio * 100);
 	return (
 		<ContextPopover usage={usage} className={"context-meter level-" + contextLevel(usage.ratio ?? 0)}>
 			<span className="context-head">
-				<span>上下文</span>
-				<strong>{percent === null ? "待更新" : percent + "%"}</strong>
+				<span>{t("context")}</span>
+				<strong>{percent === null ? t("awaitingUpdate") : percent + "%"}</strong>
 			</span>
-			<span className="context-bar" role="img" aria-label={describeOccupancy(usage)}>
+			<span className="context-bar" role="img" aria-label={describeOccupancy(usage, t)}>
 				<i style={{ width: (percent ?? 0) + "%" }} />
 			</span>
 			<span className="context-foot">
@@ -282,9 +281,9 @@ export function ContextMeter({ usage }: { usage: ContextUsage }) {
 					{usage.tokens === null ? "--" : formatTokens(usage.tokens)} / {formatTokens(usage.contextWindow)}
 				</span>
 				{usage.ratio !== null && usage.ratio >= 0.75 ? (
-					<span>建议 /compact</span>
+					<span>{t("compactSuggestion")}</span>
 				) : (
-					usage.basis === "compaction" && <span>{usage.tokens === null ? "已压缩" : "压缩后估算"}</span>
+					usage.basis === "compaction" && <span>{usage.tokens === null ? t("compacted") : t("compactedEstimate")}</span>
 				)}
 			</span>
 		</ContextPopover>
@@ -293,11 +292,14 @@ export function ContextMeter({ usage }: { usage: ContextUsage }) {
 
 /** Compact readout for the composer, where the rail may be hidden. */
 export function ContextPill({ usage }: { usage: ContextUsage }) {
+	const t = useT();
 	const percent = usage.ratio === null ? null : Math.round(usage.ratio * 100);
 	return (
 		<ContextPopover usage={usage} className={"context-pill level-" + contextLevel(usage.ratio ?? 0)}>
 			<Gauge size={13} />
-			<span>上下文 {percent === null ? "待更新" : percent + "%"}</span>
+			<span>
+				{t("context")} {percent === null ? t("awaitingUpdate") : percent + "%"}
+			</span>
 		</ContextPopover>
 	);
 }

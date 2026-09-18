@@ -32,6 +32,7 @@
 		"test:desktop": "node --test apps/desktop/tests/*.test.mjs",
 		"verify:desktop": "npm run build && node scripts/verify-desktop.mjs",
 		"verify:desktop:chrome": "npm run build && node scripts/verify-desktop-chrome.mjs",
+		"verify:desktop:browser": "npm run build && node scripts/verify-desktop-browser.mjs",
 		"verify:desktop:updates": "npm run build && node scripts/verify-desktop-updates.mjs",
 		"verify:desktop:workflows": "npm run build && node scripts/verify-desktop-workflows.mjs",
 		"verify:desktop:installer": "node scripts/verify-desktop-installer.mjs",

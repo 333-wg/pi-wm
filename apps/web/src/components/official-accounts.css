@@ -1,0 +1,112 @@
+.official-accounts {
+	width: 100%;
+	min-width: 0;
+}
+.official-account {
+	padding: 14px 0;
+	border-bottom: 1px solid var(--line);
+}
+.official-account:last-child {
+	border-bottom: 0;
+}
+.official-account-row,
+.official-account-actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.official-account-row {
+	justify-content: space-between;
+	flex-wrap: wrap;
+}
+.official-account-identity {
+	display: grid;
+	gap: 5px;
+	min-width: 120px;
+}
+.official-account-identity > strong {
+	font-size: 14px;
+}
+.official-account-identity > span {
+	font-size: 12px;
+	color: var(--muted);
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+.official-account-actions {
+	flex-wrap: wrap;
+}
+.official-account-actions .secondary-button,
+.official-account-authorization .secondary-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	min-height: 34px;
+	white-space: nowrap;
+}
+.official-account-actions select {
+	min-height: 34px;
+	max-width: 160px;
+	font-size: 12px;
+	border: 1px solid var(--line-strong);
+	border-radius: 5px;
+	background: var(--panel);
+	color: var(--text);
+	padding: 0 6px;
+}
+.official-account-authorization {
+	display: grid;
+	gap: 12px;
+	margin-top: 14px;
+	font-size: 12px;
+}
+.official-account-authorization > a,
+.official-account-authorization > span {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.official-account-authorization a {
+	color: var(--text);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+.official-account-authorization summary {
+	cursor: pointer;
+	color: var(--muted);
+}
+.official-account-authorization form {
+	display: flex;
+	gap: 8px;
+	margin-top: 10px;
+}
+.official-account-authorization input {
+	min-width: 0;
+	flex: 1;
+}
+.official-account-device-code {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+.official-account-device-code code {
+	font-size: 18px;
+	overflow-wrap: anywhere;
+}
+.official-account-error {
+	color: var(--red);
+	font-size: 12px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+	margin: 10px 0 0;
+}
+@media (max-width: 480px) {
+	.official-account-actions {
+		gap: 6px;
+	}
+	.official-account-actions select {
+		max-width: 136px;
+	}
+}

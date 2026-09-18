@@ -1,4 +1,10 @@
 import Type, { type Static } from "typebox";
+import { ArtifactRefSchema, type ArtifactRef } from "./artifact-ref.js";
+export { ArtifactRefSchema, type ArtifactRef } from "./artifact-ref.js";
+import { AgentTeamCommandSchemas, AgentTeamResultSchema, AgentTeamListResultSchema } from "./agent-teams.js";
+import { AgentTemplateCommandSchemas, AgentTemplateResultSchema } from "./agent-templates.js";
+export * from "./agent-templates.js";
+export * from "./agent-teams.js";
 
 export const PROTOCOL_VERSION = 1 as const;
 
@@ -39,13 +45,17 @@ export const CapabilitySchema = Type.Union([
 	Type.Literal("mcp"),
 	Type.Literal("tools"),
 	Type.Literal("subagents"),
+	Type.Literal("agent.teams"),
 	Type.Literal("goals"),
 	Type.Literal("automations"),
 	Type.Literal("model.custom"),
+	Type.Literal("model.official"),
 	Type.Literal("model.media"),
 	Type.Literal("run.trajectory"),
 	Type.Literal("session.memory"),
 	Type.Literal("evaluation"),
+	Type.Literal("session.search"),
+	Type.Literal("task.notifications"),
 ]);
 export type Capability = Static<typeof CapabilitySchema>;
 
@@ -78,7 +88,13 @@ export const ModelMetadataSchema = StrictObject({
 				Type.Literal("none"),
 				Type.Literal("unknown"),
 			]),
-			source: Type.Union([Type.Literal("endpoint"), Type.Literal("catalog"), Type.Literal("unknown")]),
+			source: Type.Union([
+				Type.Literal("endpoint"),
+				Type.Literal("catalog"),
+				Type.Literal("family"),
+				Type.Literal("manual"),
+				Type.Literal("unknown"),
+			]),
 		})
 	),
 	input: Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")])),
@@ -88,6 +104,37 @@ export const ModelMetadataSchema = StrictObject({
 	custom: Type.Optional(Type.Boolean()),
 });
 export type ModelMetadata = Static<typeof ModelMetadataSchema>;
+
+export const OfficialProviderSchema = Type.Union([
+	Type.Literal("official-claude"),
+	Type.Literal("official-chatgpt"),
+	Type.Literal("official-grok"),
+]);
+export type OfficialProvider = Static<typeof OfficialProviderSchema>;
+export const OfficialAccountSchema = StrictObject({
+	provider: OfficialProviderSchema,
+	name: Type.String(),
+	loggedIn: Type.Boolean(),
+	expiresAt: Type.Optional(Timestamp),
+	modelCount: Type.Integer({ minimum: 0 }),
+	login: Type.Optional(
+		StrictObject({
+			id: Id,
+			status: Type.Union([
+				Type.Literal("pending"),
+				Type.Literal("complete"),
+				Type.Literal("cancelled"),
+				Type.Literal("error"),
+			]),
+			expiresAt: Timestamp,
+			authorizeUrl: Type.Optional(Type.String({ maxLength: 8000 })),
+			userCode: Type.Optional(Type.String()),
+			manualCode: Type.Optional(Type.Boolean()),
+			error: Type.Optional(Type.String()),
+		})
+	),
+});
+export type OfficialAccount = Static<typeof OfficialAccountSchema>;
 
 /** Matches Pi: prefer the next supported higher level, then fall back downward. */
 export function clampModelThinkingLevel(
@@ -132,13 +179,25 @@ export const CustomModelServiceSchema = StrictObject({
 });
 export type CustomModelService = Static<typeof CustomModelServiceSchema>;
 
+export const CustomModelKindSchema = Type.Union([Type.Literal("chat"), Type.Literal("image"), Type.Literal("video")]);
+export type CustomModelKind = Static<typeof CustomModelKindSchema>;
+
 export const CustomModelCandidateSchema = StrictObject({
 	id: Id,
 	name: Type.String({ minLength: 1, maxLength: 500 }),
+	kind: Type.Optional(CustomModelKindSchema),
 });
 export type CustomModelCandidate = Static<typeof CustomModelCandidateSchema>;
 
+export const CustomModelThinkingOverrideSchema = Type.Union([
+	Type.Literal("auto"),
+	Type.Literal("disabled"),
+	StrictObject({ levels: Type.Array(ThinkingLevelSchema, { minItems: 1, maxItems: 7, uniqueItems: true }) }),
+]);
+export type CustomModelThinkingOverride = Static<typeof CustomModelThinkingOverrideSchema>;
+
 export const CustomModelConfigSchema = StrictObject({
+	kind: Type.Optional(CustomModelKindSchema),
 	provider: Id,
 	id: Id,
 	name: Type.String({ minLength: 1, maxLength: 500 }),
@@ -148,6 +207,7 @@ export const CustomModelConfigSchema = StrictObject({
 	// Kept optional for protocol compatibility; custom model capabilities are
 	// inferred from the discovered model instead of a per-model checkbox.
 	reasoning: Type.Optional(Type.Boolean()),
+	thinkingOverride: Type.Optional(CustomModelThinkingOverrideSchema),
 	input: Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]), {
 		minItems: 1,
 		uniqueItems: true,
@@ -158,11 +218,14 @@ export const CustomModelConfigSchema = StrictObject({
 export type CustomModelConfig = Static<typeof CustomModelConfigSchema>;
 
 export const CustomModelSettingsSchema = StrictObject({
+	kind: Type.Optional(CustomModelKindSchema),
 	model: ModelRefSchema,
 	name: Type.String({ minLength: 1, maxLength: 500 }),
 	api: CustomModelApiSchema,
 	baseUrl: Type.String({ minLength: 1, maxLength: 2000 }),
 	reasoning: Type.Boolean(),
+	thinkingOverride: Type.Optional(CustomModelThinkingOverrideSchema),
+	thinkingLevels: Type.Optional(Type.Array(ThinkingLevelSchema, { minItems: 1, uniqueItems: true })),
 	input: Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]), {
 		minItems: 1,
 		uniqueItems: true,
@@ -185,12 +248,14 @@ export type VideoProtocolPreference = Static<typeof VideoProtocolPreferenceSchem
 export const VideoReferenceFormatSchema = Type.Union([Type.Literal("auto"), Type.Literal("data-url")]);
 export type VideoReferenceFormat = Static<typeof VideoReferenceFormatSchema>;
 export const MediaModelDiscoveryConnectionSchema = StrictObject({
+	provider: Type.Optional(Id),
 	kind: MediaKindSchema,
 	baseUrl: Type.String({ minLength: 1, maxLength: 2000 }),
 	apiKey: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
 });
 export type MediaModelDiscoveryConnection = Static<typeof MediaModelDiscoveryConnectionSchema>;
 export const MediaModelConfigSchema = StrictObject({
+	provider: Type.Optional(Id),
 	kind: MediaKindSchema,
 	videoProtocol: Type.Optional(VideoProtocolPreferenceSchema),
 	videoReferenceFormat: Type.Optional(VideoReferenceFormatSchema),
@@ -202,15 +267,26 @@ export const MediaModelConfigSchema = StrictObject({
 	apiKey: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
 });
 export type MediaModelConfig = Static<typeof MediaModelConfigSchema>;
+export const ImageModelOptionSchema = StrictObject({
+	videoProtocol: Type.Optional(VideoProtocolPreferenceSchema),
+	videoReferenceFormat: Type.Optional(VideoReferenceFormatSchema),
+	provider: Id,
+	id: Id,
+	name: Type.String({ minLength: 1, maxLength: 500 }),
+	baseUrl: Type.String({ minLength: 1, maxLength: 2000 }),
+	custom: Type.Boolean(),
+});
+export type ImageModelOption = Static<typeof ImageModelOptionSchema>;
+export type MediaModelOption = ImageModelOption;
 export const MediaModelSettingsSchema = StrictObject({
+	provider: Type.Optional(Id),
+	availableModels: Type.Optional(Type.Array(ImageModelOptionSchema)),
 	kind: MediaKindSchema,
 	videoProtocol: Type.Optional(VideoProtocolPreferenceSchema),
 	videoReferenceFormat: Type.Optional(VideoReferenceFormatSchema),
 	baseUrl: Type.String({ minLength: 1, maxLength: 2000 }),
 	model: Type.String({ minLength: 1, maxLength: 200 }),
-	models: Type.Optional(
-		Type.Array(Type.String({ minLength: 1, maxLength: 200 }), { minItems: 1, maxItems: 50, uniqueItems: true })
-	),
+	models: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 200 }), { minItems: 1, uniqueItems: true })),
 	authenticated: Type.Boolean(),
 });
 export type MediaModelSettings = Static<typeof MediaModelSettingsSchema>;
@@ -228,14 +304,6 @@ export const ApprovalPolicySchema = Type.Union([
 ]);
 export type SandboxMode = Static<typeof SandboxModeSchema>;
 export type ApprovalPolicy = Static<typeof ApprovalPolicySchema>;
-
-export const ArtifactRefSchema = StrictObject({
-	id: Id,
-	name: Type.String({ minLength: 1, maxLength: 500 }),
-	mimeType: Type.String({ minLength: 1, maxLength: 200 }),
-	size: Type.Integer({ minimum: 0 }),
-});
-export type ArtifactRef = Static<typeof ArtifactRefSchema>;
 
 export const UserContentPartSchema = Type.Union([
 	StrictObject({ type: Type.Literal("text"), text: Type.String() }),
@@ -305,6 +373,12 @@ export const UsageRequestSummarySchema = StrictObject({
 	requestId: Id,
 	model: ModelRefSchema,
 	usage: UsageSchema,
+	startedAt: Type.Optional(Timestamp),
+	finishedAt: Type.Optional(Timestamp),
+	firstContentAt: Type.Optional(Timestamp),
+	status: Type.Optional(
+		Type.Union([Type.Literal("pending"), Type.Literal("complete"), Type.Literal("error"), Type.Literal("aborted")])
+	),
 });
 export type UsageRequestSummary = Static<typeof UsageRequestSummarySchema>;
 
@@ -960,6 +1034,10 @@ export interface GitActionResult {
 
 export const ToolCapabilitySchema = Type.Union([
 	StrictObject({
+		type: Type.Literal("computer.use"),
+		action: Type.Union([Type.Literal("screenshot"), Type.Literal("input")]),
+	}),
+	StrictObject({
 		type: Type.Literal("filesystem.read"),
 		paths: Type.Array(Type.String(), { minItems: 1 }),
 	}),
@@ -1003,6 +1081,21 @@ export const ToolCapabilitySchema = Type.Union([
 	}),
 ]);
 export type ToolCapability = Static<typeof ToolCapabilitySchema>;
+
+export interface ComputerUseStatus {
+	activity?: "semantic" | "foreground";
+	supported: boolean;
+	enabled: boolean;
+	requestedEnabled?: boolean;
+	authorization?: "settings" | "each_operation";
+	setupStage?: "checking" | "creating_environment" | "installing_packages";
+	ready: boolean;
+	installing: boolean;
+	platform: string;
+	python: string;
+	ownerSessionId?: string;
+	error?: string;
+}
 
 export const ToolStatusSchema = StrictObject({
 	name: Id,
@@ -1397,6 +1490,18 @@ export const SessionSnapshotSchema = StrictObject({
 export type SessionSummary = Static<typeof SessionSummarySchema>;
 export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
 
+export const SessionSearchMatchSchema = StrictObject({
+	sessionId: Id,
+	sessionName: Type.String({ maxLength: 500 }),
+	messageId: Id,
+	role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+	createdAt: Timestamp,
+	snippet: Type.String({ maxLength: 600 }),
+	highlightStart: Type.Integer({ minimum: 0 }),
+	highlightEnd: Type.Integer({ minimum: 0 }),
+});
+export type SessionSearchMatch = Static<typeof SessionSearchMatchSchema>;
+
 /** Older snapshots only recorded request details at the end of a turn. */
 export function sessionUsageRequests(snapshot: SessionSnapshot): UsageRequestSummary[] {
 	return snapshot.usageRequests ?? mergeUsageRequests([], snapshot.usageByTurn?.flatMap((turn) => turn.requests) ?? []);
@@ -1415,6 +1520,8 @@ export const InstalledSkillSchema = StrictObject({
 export type InstalledSkill = Static<typeof InstalledSkillSchema>;
 
 export const CommandSchema = Type.Union([
+	...AgentTemplateCommandSchemas,
+	...AgentTeamCommandSchemas,
 	StrictObject({ type: Type.Literal("workspace.list") }),
 	StrictObject({
 		type: Type.Literal("usage.overview"),
@@ -1451,7 +1558,22 @@ export const CommandSchema = Type.Union([
 	}),
 	StrictObject({ type: Type.Literal("mcp.trust"), workspaceId: Id, serverId: Id }),
 	StrictObject({ type: Type.Literal("mcp.untrust"), workspaceId: Id, serverId: Id }),
+	StrictObject({ type: Type.Literal("mcp.setEnabled"), workspaceId: Id, serverId: Id, enabled: Type.Boolean() }),
 	StrictObject({ type: Type.Literal("model.list") }),
+	StrictObject({ type: Type.Literal("model.official.list") }),
+	StrictObject({
+		type: Type.Literal("model.official.start"),
+		provider: OfficialProviderSchema,
+		method: Type.Optional(Type.Union([Type.Literal("browser"), Type.Literal("device_code")])),
+	}),
+	StrictObject({
+		type: Type.Literal("model.official.submit"),
+		provider: OfficialProviderSchema,
+		loginId: Id,
+		code: Type.String({ minLength: 1, maxLength: 8000 }),
+	}),
+	StrictObject({ type: Type.Literal("model.official.cancel"), provider: OfficialProviderSchema, loginId: Id }),
+	StrictObject({ type: Type.Literal("model.official.logout"), provider: OfficialProviderSchema }),
 	StrictObject({
 		type: Type.Literal("model.custom.discover"),
 		connection: CustomModelConnectionSchema,
@@ -1461,9 +1583,14 @@ export const CommandSchema = Type.Union([
 	StrictObject({ type: Type.Literal("model.custom.service.remove"), provider: Id }),
 	StrictObject({ type: Type.Literal("model.custom.get"), model: ModelRefSchema }),
 	StrictObject({ type: Type.Literal("model.custom.set"), config: CustomModelConfigSchema }),
+	StrictObject({ type: Type.Literal("model.custom.media.list") }),
 	StrictObject({ type: Type.Literal("model.custom.remove"), model: ModelRefSchema }),
 	StrictObject({ type: Type.Literal("model.custom.test"), model: ModelRefSchema }),
 	StrictObject({ type: Type.Literal("model.media.list") }),
+	StrictObject({ type: Type.Literal("model.media.image.default"), model: ModelRefSchema }),
+	StrictObject({ type: Type.Literal("model.media.image.remove"), model: ModelRefSchema }),
+	StrictObject({ type: Type.Literal("model.media.video.default"), model: ModelRefSchema }),
+	StrictObject({ type: Type.Literal("model.media.video.remove"), model: ModelRefSchema }),
 	StrictObject({ type: Type.Literal("model.media.discover"), connection: MediaModelDiscoveryConnectionSchema }),
 	StrictObject({ type: Type.Literal("model.media.set"), config: MediaModelConfigSchema }),
 	StrictObject({ type: Type.Literal("model.media.remove"), kind: MediaKindSchema }),
@@ -1487,6 +1614,13 @@ export const CommandSchema = Type.Union([
 		budgetWarningThreshold: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 1 })),
 	}),
 	StrictObject({ type: Type.Literal("session.attach"), sessionId: Id }),
+	StrictObject({
+		type: Type.Literal("session.search"),
+		workspaceId: Id,
+		query: Type.String({ minLength: 1, maxLength: 200 }),
+		archived: Type.Optional(Type.Boolean()),
+		limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
+	}),
 	StrictObject({ type: Type.Literal("session.detach"), sessionId: Id }),
 	StrictObject({ type: Type.Literal("session.snapshot.get"), sessionId: Id }),
 	StrictObject({
@@ -1688,6 +1822,9 @@ export const ProtocolErrorSchema = StrictObject({
 export type ProtocolError = Static<typeof ProtocolErrorSchema>;
 
 export const CommandResultSchema = Type.Union([
+	AgentTemplateResultSchema,
+	AgentTeamResultSchema,
+	AgentTeamListResultSchema,
 	StrictObject({
 		type: Type.Literal("workspace.list"),
 		workspaces: Type.Array(WorkspaceSummarySchema),
@@ -1731,6 +1868,7 @@ export const CommandResultSchema = Type.Union([
 	}),
 	StrictObject({ type: Type.Literal("mcp.removed"), workspaceId: Id, serverId: Id }),
 	StrictObject({ type: Type.Literal("model.list"), models: Type.Array(ModelMetadataSchema) }),
+	StrictObject({ type: Type.Literal("model.official.accounts"), accounts: Type.Array(OfficialAccountSchema) }),
 	StrictObject({
 		type: Type.Literal("model.custom.discovered"),
 		provider: Id,
@@ -1749,6 +1887,7 @@ export const CommandResultSchema = Type.Union([
 		settings: CustomModelSettingsSchema,
 	}),
 	StrictObject({ type: Type.Literal("model.custom.configured"), model: ModelMetadataSchema }),
+	StrictObject({ type: Type.Literal("model.custom.media.list"), models: Type.Array(CustomModelSettingsSchema) }),
 	StrictObject({
 		type: Type.Literal("model.media.settings"),
 		settings: Type.Array(MediaModelSettingsSchema, { maxItems: 2 }),
@@ -1765,6 +1904,11 @@ export const CommandResultSchema = Type.Union([
 		latencyMs: Type.Integer({ minimum: 0 }),
 	}),
 	StrictObject({ type: Type.Literal("session.list"), sessions: Type.Array(SessionSummarySchema) }),
+	StrictObject({
+		type: Type.Literal("session.search"),
+		matches: Type.Array(SessionSearchMatchSchema, { maxItems: 50 }),
+		truncated: Type.Boolean(),
+	}),
 	StrictObject({ type: Type.Literal("usage.overview"), overview: UsageOverviewSchema }),
 	StrictObject({ type: Type.Literal("session.created"), snapshot: SessionSnapshotSchema }),
 	StrictObject({ type: Type.Literal("session.attached"), snapshot: SessionSnapshotSchema }),
@@ -1885,11 +2029,13 @@ export const CommandResultSchema = Type.Union([
 export type CommandResult = Static<typeof CommandResultSchema>;
 
 export const TerminalClientMessageSchema = Type.Union([
+	StrictObject({ type: Type.Literal("terminal.shells"), requestId: Id }),
 	StrictObject({
 		type: Type.Literal("terminal.create"),
 		requestId: Id,
 		terminalId: Id,
 		workspaceId: Id,
+		shellId: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
 		cols: Type.Integer({ minimum: 20, maximum: 400 }),
 		rows: Type.Integer({ minimum: 5, maximum: 200 }),
 	}),
@@ -1918,10 +2064,18 @@ export type TerminalClientMessage = Static<typeof TerminalClientMessageSchema>;
 
 export const TerminalServerMessageSchema = Type.Union([
 	StrictObject({
+		type: Type.Literal("terminal.shells"),
+		requestId: Id,
+		shells: Type.Array(StrictObject({ id: Id, label: Type.String({ minLength: 1, maxLength: 100 }) })),
+		defaultShellId: Id,
+	}),
+	StrictObject({
 		type: Type.Literal("terminal.ready"),
 		requestId: Id,
 		terminalId: Id,
 		shell: Type.String({ minLength: 1, maxLength: 1000 }),
+		shellId: Type.Optional(Id),
+		cwd: Type.Optional(Type.String({ maxLength: 4000 })),
 		seq: Type.Integer({ minimum: 0 }),
 	}),
 	StrictObject({
@@ -2096,6 +2250,13 @@ export type DurableEvent = Static<typeof DurableEventSchema>;
 export type ProgressEvent = Static<typeof ProgressEventSchema>;
 
 export const ServerMessageSchema = Type.Union([
+	StrictObject({
+		type: Type.Literal("task.notification"),
+		id: Id,
+		sessionId: Id,
+		workspaceId: Id,
+		kind: Type.Union([Type.Literal("completed"), Type.Literal("failed"), Type.Literal("approval")]),
+	}),
 	StrictObject({
 		type: Type.Literal("hello"),
 		protocolVersion: Type.Literal(PROTOCOL_VERSION),

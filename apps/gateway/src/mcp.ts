@@ -1520,6 +1520,44 @@ export class FileMcpCatalog {
 		return this.get(workspaceId, root, candidate.id);
 	}
 
+	async setEnabled(workspaceId: string, workspaceRoot: string, serverId: string, enabled: boolean): Promise<McpServer> {
+		return this.#mutate(workspaceRoot, async () => {
+			const root = resolve(workspaceRoot);
+			const servers = await this.#servers(root);
+			const previous = servers.find((server) => server.id === serverId);
+			if (!previous) throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
+			if (previous.enabled !== enabled) {
+				const next = { ...previous, enabled };
+				// Carry forward only an existing local grant for this exact configuration.
+				// A failed write can lose trust, but cannot authorize an edited configuration.
+				const locallyTrusted = this.#localTrust.get(root)?.get(serverId) === configurationDigest(previous);
+				await this.#setLocalTrust(root, serverId, locallyTrusted, next);
+				const updated = servers.map((server) => (server.id === serverId ? next : server));
+				await writeConfig(root, updated);
+				this.#reconcileConnections(root, updated);
+			}
+			try {
+				return await this.get(workspaceId, root, serverId);
+			} catch {
+				// Enabling is persisted even if discovery fails; report the resulting state.
+				const server = (await this.#servers(root)).find((entry) => entry.id === serverId);
+				if (!server) throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
+				const trusted = await this.#trusted(workspaceId, root, server);
+				return {
+					id: server.id,
+					workspaceId,
+					name: server.name ?? server.id,
+					transport: server.transport,
+					readOnly: server.readOnly,
+					trusted,
+					toolCount: 0,
+					tools: [],
+					discoveryStatus: !server.enabled ? "disabled" : trusted ? "failed" : "untrusted",
+				};
+			}
+		});
+	}
+
 	async trustServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<McpServer> {
 		return this.#mutate(workspaceRoot, () => this.#trustServer(workspaceId, workspaceRoot, serverId));
 	}

@@ -1,3 +1,4 @@
+import { createTranslator, useT, type LocaleKey, type Translate } from "../lib/locale.js";
 import {
 	Activity,
 	AppWindow,
@@ -35,16 +36,17 @@ import type { ArtifactRef, ContentPart, WebEvidence } from "@wuming/protocol";
 import { CodeBlock } from "./CodeBlock";
 import { ImageViewer } from "./ImageViewer.js";
 import { DiffStat, EditDiff, editDiffStat } from "./DiffView";
+import { openBrowserPreview, previewUrl } from "../lib/browser-preview.js";
 
 export type ToolStatusValue = "pending" | "awaiting_approval" | "running" | "complete" | "error" | "aborted";
 
-const statusText: Record<ToolStatusValue, string> = {
-	pending: "排队中",
-	awaiting_approval: "等待批准",
-	running: "运行中",
-	complete: "已完成",
-	error: "失败",
-	aborted: "已取消",
+const statusText: Record<ToolStatusValue, LocaleKey> = {
+	pending: "statusQueued",
+	awaiting_approval: "statusApproval",
+	running: "statusRunning",
+	complete: "statusComplete",
+	error: "statusFailed",
+	aborted: "statusCancelled",
 };
 
 const extensionLanguages: Record<string, string> = {
@@ -136,10 +138,10 @@ function readEdits(input: unknown): EditBlock[] {
 
 type PlanStepStatus = "pending" | "in_progress" | "completed";
 
-const planStatusText: Record<PlanStepStatus, string> = {
-	pending: "待办",
-	in_progress: "进行中",
-	completed: "已完成",
+const planStatusText: Record<PlanStepStatus, LocaleKey> = {
+	pending: "toolTodo",
+	in_progress: "inProgress",
+	completed: "statusComplete",
 };
 const planStatusMark: Record<PlanStepStatus, string> = {
 	pending: "○",
@@ -178,16 +180,26 @@ export interface ToolDescription {
 	quiet?: boolean;
 }
 
-export function describeTool(toolName: string, input: unknown): ToolDescription {
+export function describeTool(toolName: string, input: unknown, t: Translate = createTranslator("zh")): ToolDescription {
 	const args = asRecord(input);
 	const size = 15;
-	if (toolName === "media_model_status") {
-		return { icon: <Image size={size} />, verb: "查看生成模型配置", quiet: true };
+	if (toolName === "team_start" || toolName === "TeamCreate") {
+		return { icon: <Bot size={size} />, verb: t("toolCreateTeam"), target: asText(args.name) ?? "" };
 	}
-	if (toolName === "generate_image" || toolName === "generate_video" || toolName === "get_generated_video") {
+	if (toolName === "media_model_status") {
+		return { icon: <Image size={size} />, verb: t("toolMediaStatus"), quiet: true };
+	}
+	if (["generate_image", "get_generated_image", "generate_video", "get_generated_video"].includes(toolName)) {
 		return {
-			icon: toolName === "generate_image" ? <Image size={size} /> : <Video size={size} />,
-			verb: toolName === "generate_image" ? "生成图片" : toolName === "generate_video" ? "生成视频" : "获取视频",
+			icon: toolName.endsWith("image") ? <Image size={size} /> : <Video size={size} />,
+			verb:
+				toolName === "generate_image"
+					? t("toolGenerateImage")
+					: toolName === "get_generated_image"
+						? t("toolGetImage")
+						: toolName === "generate_video"
+							? t("toolGenerateVideo")
+							: t("toolGetVideo"),
 			target: asText(args.prompt) ?? asText(args.jobId) ?? "",
 			fallbackArgs: true,
 		};
@@ -198,15 +210,15 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const limit = typeof args.limit === "number" ? args.limit : undefined;
 		const range =
 			offset !== undefined && limit !== undefined
-				? `行 ${offset}–${offset + limit - 1}`
+				? t("toolLineRange", { start: offset, end: offset + limit - 1 })
 				: offset !== undefined
-					? `从第 ${offset} 行`
+					? t("toolFromLine", { start: offset })
 					: limit !== undefined
-						? `前 ${limit} 行`
+						? t("toolFirstLines", { count: limit })
 						: undefined;
 		return {
 			icon: <FileText size={size} />,
-			verb: "读取",
+			verb: t("toolRead"),
 			target: shortPath(path),
 			title: path,
 			meta: range,
@@ -219,10 +231,10 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const lines = content.length === 0 ? 0 : content.split("\n").length;
 		return {
 			icon: <FilePen size={size} />,
-			verb: "写入",
+			verb: t("toolWrite"),
 			target: shortPath(path),
 			title: path,
-			meta: `${lines} 行`,
+			meta: t("toolLines", { count: lines }),
 			body: content ? <CodeBlock code={content} lang={languageFromPath(path)} /> : undefined,
 		};
 	}
@@ -238,12 +250,12 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		}
 		return {
 			icon: <FileDiff size={size} />,
-			verb: "编辑",
+			verb: t("toolEdit"),
 			target: shortPath(path),
 			title: path,
 			meta: (
 				<>
-					{blocks.length > 1 ? <span>{blocks.length} 处</span> : null}
+					{blocks.length > 1 ? <span>{t("toolEdits", { count: blocks.length })}</span> : null}
 					<DiffStat added={added} removed={removed} />
 				</>
 			),
@@ -251,7 +263,9 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 				<div className="tool-edits">
 					{blocks.map((block, index) => (
 						<div className="tool-edit" key={index}>
-							{blocks.length > 1 ? <span className="tool-edit-label">第 {index + 1} 处</span> : null}
+							{blocks.length > 1 ? (
+								<span className="tool-edit-label">{t("toolEditNumber", { number: index + 1 })}</span>
+							) : null}
 							<EditDiff before={block.oldText} after={block.newText} numbered={false} />
 						</div>
 					))}
@@ -265,12 +279,13 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const mode = asText(args.output_mode);
 		return {
 			icon: <FileSearch size={size} />,
-			verb: "检索",
+			verb: t("toolGrep"),
 			target: pattern,
 			title: pattern,
 			meta:
-				[scope, mode === "files" ? "仅路径" : mode === "count" ? "仅计数" : undefined].filter(Boolean).join(" · ") ||
-				undefined,
+				[scope, mode === "files" ? t("toolPathsOnly") : mode === "count" ? t("toolCountOnly") : undefined]
+					.filter(Boolean)
+					.join(" · ") || undefined,
 			quiet: true,
 		};
 	}
@@ -279,7 +294,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const scope = asText(args.path);
 		return {
 			icon: <FolderSearch size={size} />,
-			verb: "匹配",
+			verb: t("toolGlob"),
 			target: pattern,
 			title: pattern,
 			meta: scope,
@@ -291,10 +306,10 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const depth = typeof args.depth === "number" ? args.depth : undefined;
 		return {
 			icon: <FolderTree size={size} />,
-			verb: "列出",
+			verb: t("toolList"),
 			target: shortPath(path),
 			title: path,
-			meta: depth !== undefined && depth > 1 ? `${depth} 层` : undefined,
+			meta: depth !== undefined && depth > 1 ? t("toolDepth", { count: depth }) : undefined,
 			quiet: true,
 		};
 	}
@@ -304,7 +319,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const multiline = command.includes("\n");
 		return {
 			icon: <SquareTerminal size={size} />,
-			verb: "执行",
+			verb: t("toolExecute"),
 			target: first,
 			title: command,
 			body: multiline ? <CodeBlock code={command} lang="bash" /> : undefined,
@@ -326,18 +341,18 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const code = asText(args.code) ?? "";
 		return {
 			icon: <Braces size={size} />,
-			verb: "运行 Python",
-			meta: `${code === "" ? 0 : code.split("\n").length} 行`,
+			verb: t("toolPython"),
+			meta: t("toolLines", { count: code === "" ? 0 : code.split("\n").length }),
 			body: code ? <CodeBlock code={code} lang="python" /> : undefined,
 		};
 	}
 	if (toolName === "web_fetch") {
 		const url = asText(args.url) ?? "";
-		return { icon: <Globe size={size} />, verb: "抓取网页", target: url, title: url, quiet: true };
+		return { icon: <Globe size={size} />, verb: t("toolFetch"), target: url, title: url, quiet: true };
 	}
 	if (toolName === "web_search" || toolName === "browser_search") {
 		const query = asText(args.query) ?? asText(args.q) ?? "";
-		return { icon: <Search size={size} />, verb: "搜索", target: query, title: query, quiet: true };
+		return { icon: <Search size={size} />, verb: t("toolSearch"), target: query, title: query, quiet: true };
 	}
 	if (toolName === "browser_open") {
 		const url = asText(args.url) ?? "";
@@ -345,7 +360,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 			typeof args.width === "number" && typeof args.height === "number" ? `${args.width}x${args.height}` : undefined;
 		return {
 			icon: <AppWindow size={size} />,
-			verb: "打开页面",
+			verb: t("toolOpenPage"),
 			target: url,
 			title: url,
 			meta: viewport,
@@ -356,13 +371,13 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const selector = asText(args.selector);
 		return {
 			icon: <ScanSearch size={size} />,
-			verb: "检查页面",
+			verb: t("toolInspectPage"),
 			...(selector ? { target: selector, title: selector } : {}),
 			quiet: true,
 		};
 	}
 	if (toolName === "browser_action") {
-		const action = asText(args.action) ?? "操作";
+		const action = asText(args.action) ?? t("toolAction");
 		const target =
 			asText(args.ref) ??
 			asText(args.tab_id) ??
@@ -372,52 +387,112 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 			asText(args.url);
 		return {
 			icon: <MousePointerClick size={size} />,
-			verb: `页面 · ${action}`,
+			verb: t("toolPageAction", { action }),
 			...(target ? { target, title: target } : {}),
 		};
 	}
 	if (toolName === "browser_screenshot") {
 		return {
 			icon: <Camera size={size} />,
-			verb: "页面截图",
-			meta: args.full_page === true ? "完整页面" : "当前视口",
+			verb: t("toolPageScreenshot"),
+			meta: args.full_page === true ? t("toolFullPage") : t("toolViewport"),
 			quiet: true,
+		};
+	}
+	if (toolName === "computer_screenshot") {
+		return {
+			icon: <Camera size={size} />,
+			verb: t("toolDesktopScreenshot"),
+			meta: t("toolMonitor", { number: Number(args.monitor) || 1 }),
+			quiet: true,
+		};
+	}
+	if (toolName === "computer_windows")
+		return { icon: <AppWindow size={size} />, verb: t("toolWindows"), meta: t("toolControlMode"), quiet: true };
+	if (toolName === "computer_inspect")
+		return { icon: <AppWindow size={size} />, verb: t("toolInspectWindow"), meta: t("toolNoMouse"), quiet: true };
+	if (toolName === "computer_element_action") {
+		const labels: Record<string, string> = {
+			invoke: t("toolInvoke"),
+			set_value: t("toolSetText"),
+			select: t("toolSelect"),
+			toggle: t("toolToggle"),
+			expand: t("toolExpand"),
+			collapse: t("toolCollapse"),
+		};
+		return {
+			icon: <AppWindow size={size} />,
+			verb: t("toolControlAction", { action: labels[asText(args.action) ?? ""] ?? t("toolAction") }),
+			meta: "UI Automation",
+		};
+	}
+	if (toolName === "computer_action") {
+		const action = args.action && typeof args.action === "object" ? (args.action as Record<string, unknown>) : {};
+		const kind = asText(action.kind) ?? t("toolAction");
+		const key = asText(action.key);
+		const label: Record<string, string> = {
+			click: t("toolClick"),
+			double_click: t("toolDoubleClick"),
+			right_click: t("toolRightClick"),
+			type: t("toolType"),
+			key: t("toolKey"),
+			scroll: t("toolScroll"),
+			focus: t("toolFocus"),
+		};
+		return {
+			icon: <MousePointerClick size={size} />,
+			verb: t("toolDesktopAction", { action: label[kind] ?? kind }),
+			meta: t("toolRealInput"),
+			...(key ? { target: key } : {}),
+		};
+	}
+	if (toolName === "computer_release") {
+		return { icon: <AppWindow size={size} />, verb: t("toolRelease"), quiet: true };
+	}
+	if (toolName === "computer_apps")
+		return { icon: <AppWindow size={size} />, verb: t("toolInstalledApps"), quiet: true };
+	if (toolName === "computer_open") return { icon: <AppWindow size={size} />, verb: t("toolOpenApp") };
+	if (toolName === "computer_control") {
+		return {
+			icon: <MousePointerClick size={size} />,
+			verb: t("toolAuthorize"),
+			meta: t("toolMaxMinutes", { minutes: Number(args.minutes) || 5 }),
 		};
 	}
 	if (toolName === "browser_diagnostics") {
 		return {
 			icon: <Bug size={size} />,
-			verb: "浏览器诊断",
-			meta: args.clear === true ? "读取后清空" : undefined,
+			verb: t("toolBrowserDiagnostics"),
+			meta: args.clear === true ? t("toolClearAfterRead") : undefined,
 			quiet: true,
 		};
 	}
 	if (toolName === "browser_tabs") {
-		return { icon: <AppWindow size={size} />, verb: "查看标签页", quiet: true };
+		return { icon: <AppWindow size={size} />, verb: t("toolTabs"), quiet: true };
 	}
 	if (toolName === "browser_close") {
-		return { icon: <PanelTopClose size={size} />, verb: "关闭浏览器", quiet: true };
+		return { icon: <PanelTopClose size={size} />, verb: t("toolCloseBrowser"), quiet: true };
 	}
 	if (toolName === "preview_start") {
 		const command = asText(args.command) ?? "";
 		const url = asText(args.url);
 		return {
 			icon: <SquareTerminal size={size} />,
-			verb: "启动预览",
+			verb: t("toolStartPreview"),
 			target: command,
 			title: command,
 			meta: url,
 		};
 	}
 	if (toolName === "preview_status") {
-		return { icon: <Activity size={size} />, verb: "预览状态", quiet: true };
+		return { icon: <Activity size={size} />, verb: t("toolPreviewStatus"), quiet: true };
 	}
 	if (toolName === "preview_stop") {
-		return { icon: <PanelTopClose size={size} />, verb: "停止预览", quiet: true };
+		return { icon: <PanelTopClose size={size} />, verb: t("toolStopPreview"), quiet: true };
 	}
 	if (toolName === "weather") {
 		const location = asText(args.location) ?? asText(args.city) ?? "";
-		return { icon: <CloudSun size={size} />, verb: "天气", target: location, quiet: true };
+		return { icon: <CloudSun size={size} />, verb: t("toolWeather"), target: location, quiet: true };
 	}
 	if (toolName === "update_plan") {
 		const steps = readPlan(args);
@@ -426,7 +501,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 		const explanation = asText(args.explanation)?.trim();
 		return {
 			icon: <ListChecks size={size} />,
-			verb: "计划",
+			verb: t("toolPlan"),
 			...(active === undefined ? {} : { target: active.step, title: active.step }),
 			meta: steps.length > 0 ? `${done}/${steps.length}` : undefined,
 			body:
@@ -439,7 +514,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 									<li
 										className={`tool-plan-step ${step.status}`}
 										key={index}
-										aria-label={`${planStatusText[step.status]}：${step.step}`}
+										aria-label={`${t(planStatusText[step.status])}：${step.step}`}
 									>
 										<span aria-hidden="true">{planStatusMark[step.status]}</span>
 										<span>{step.step}</span>
@@ -454,10 +529,11 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 	if (toolName === "subagent") {
 		const task = asText(args.task) ?? "";
 		const first = task.split("\n")[0] ?? "";
-		const budget = typeof args.cost_budget_usd === "number" ? `预算 $${args.cost_budget_usd}` : undefined;
+		const budget =
+			typeof args.cost_budget_usd === "number" ? t("toolBudget", { amount: args.cost_budget_usd }) : undefined;
 		return {
 			icon: <Bot size={size} />,
-			verb: "子代理",
+			verb: t("toolSubagent"),
 			target: asText(args.name) ?? first,
 			title: task,
 			meta: budget,
@@ -478,6 +554,7 @@ export function describeTool(toolName: string, input: unknown): ToolDescription 
 }
 
 export function StatusIndicator({ status }: { status: ToolStatusValue }) {
+	const t = useT();
 	const icon =
 		status === "complete" ? (
 			<CircleCheck size={12} />
@@ -493,9 +570,38 @@ export function StatusIndicator({ status }: { status: ToolStatusValue }) {
 	return (
 		<span className={`tool-state ${status}`}>
 			{icon}
-			<span>{statusText[status]}</span>
+			<span>{t(statusText[status])}</span>
 		</span>
 	);
+}
+
+export function desktopReceiptOutcome(toolName: string, text?: string): "not_started" | "unknown" | undefined {
+	if (!toolName.startsWith("computer_") || !text) return undefined;
+	for (const line of text.split("\n")) {
+		if (!line.trimStart().startsWith("{")) continue;
+		try {
+			const receipt = JSON.parse(line) as Record<string, unknown>;
+			if (receipt.outcome === "not_started" || receipt.performed === false) return "not_started";
+			if (receipt.outcome === "unknown" || receipt.observationFailed === true) return "unknown";
+		} catch {
+			/* Only structured executor receipts affect the status label. */
+		}
+	}
+	return undefined;
+}
+
+export function imageRetrievalPending(toolName: string, text?: string): boolean {
+	if (!["generate_image", "get_generated_image"].includes(toolName) || !text) return false;
+	try {
+		const receipt = asRecord(JSON.parse(text));
+		return (
+			receipt.status === "retrieval_pending" &&
+			receipt.generationStatus === "result_received" &&
+			typeof receipt.jobId === "string"
+		);
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -527,6 +633,7 @@ export function ArtifactMediaPreview({
 	onDownload?: ((artifact: ArtifactRef) => void) | undefined;
 	showDownload?: boolean;
 }) {
+	const t = useT();
 	const [url, setUrl] = useState<string>();
 	const [failed, setFailed] = useState(false);
 	const [expanded, setExpanded] = useState(false);
@@ -553,13 +660,13 @@ export function ArtifactMediaPreview({
 	if (failed)
 		return (
 			<div className="media-model-error" role="alert">
-				{showDownload ? "媒体预览加载失败，可下载文件查看。" : "媒体预览加载失败。"}
+				{showDownload ? t("mediaPreviewFailedDownload") : t("mediaPreviewFailed")}
 				{showDownload && isPreviewableImageArtifact(artifact) && onDownload && (
 					<button
 						type="button"
 						className="image-download"
-						title="下载图片"
-						aria-label="下载图片"
+						title={t("downloadImage")}
+						aria-label={t("downloadImage")}
 						onClick={() => onDownload(artifact)}
 					>
 						<Download size={15} />
@@ -583,8 +690,8 @@ export function ArtifactMediaPreview({
 				<button
 					type="button"
 					className="image-thumbnail"
-					title={`查看 ${artifact.name}`}
-					aria-label={`查看 ${artifact.name}`}
+					title={t("viewArtifact", { name: artifact.name })}
+					aria-label={t("viewArtifact", { name: artifact.name })}
 					onClick={() => setExpanded(true)}
 				>
 					<img
@@ -596,7 +703,13 @@ export function ArtifactMediaPreview({
 					/>
 				</button>
 				{showDownload && (
-					<a className="image-download" href={url} download={artifact.name} title="下载图片" aria-label="下载图片">
+					<a
+						className="image-download"
+						href={url}
+						download={artifact.name}
+						title={t("downloadImage")}
+						aria-label={t("downloadImage")}
+					>
 						<Download size={15} />
 					</a>
 				)}
@@ -606,7 +719,7 @@ export function ArtifactMediaPreview({
 			</div>
 		)
 	) : (
-		<div className="tool-image-loading" aria-label={`正在载入 ${artifact.name}`} />
+		<div className="tool-image-loading" aria-label={t("loadingArtifact", { name: artifact.name })} />
 	);
 }
 
@@ -625,6 +738,7 @@ export function ToolResult({
 	onDownload?: (artifact: ArtifactRef) => void;
 	onLoadArtifact?: (artifact: ArtifactRef) => Promise<Blob>;
 }) {
+	const t = useT();
 	const path = asText(asRecord(input).path);
 	const lang = toolName === "read_file" && path ? languageFromPath(path) : "";
 	const echoesInput = resultEchoesCard(toolName, isError);
@@ -634,7 +748,8 @@ export function ToolResult({
 			if (
 				echoesInput ||
 				part.text.trim() === "" ||
-				(toolName === "browser_screenshot" && part.text.startsWith("[Image result: image/"))
+				(["browser_screenshot", "computer_screenshot", "computer_action"].includes(toolName) &&
+					part.text.startsWith("[Image result: image/"))
 			)
 				continue;
 			nodes.push(
@@ -664,7 +779,11 @@ export function ToolResult({
 				<div className="artifact-line" key={index}>
 					<FileText size={14} /> <span>{part.artifact.name}</span>
 					{onDownload ? (
-						<button type="button" title={`下载 ${part.artifact.name}`} onClick={() => onDownload(part.artifact)}>
+						<button
+							type="button"
+							title={t("downloadArtifact", { name: part.artifact.name })}
+							onClick={() => onDownload(part.artifact)}
+						>
 							<Download size={14} />
 						</button>
 					) : null}
@@ -681,6 +800,7 @@ export function ToolCard({
 	input,
 	status,
 	webEvidence,
+	receiptText,
 	children,
 	onOpenSession,
 }: {
@@ -688,10 +808,15 @@ export function ToolCard({
 	input: unknown;
 	status: ToolStatusValue;
 	webEvidence?: WebEvidence | undefined;
+	receiptText?: string | undefined;
 	children?: ReactNode;
 	onOpenSession?: (() => void) | undefined;
 }) {
-	const description = describeTool(toolName, input);
+	const t = useT();
+	const description = describeTool(toolName, input, t);
+	const desktopOutcome = status === "complete" ? desktopReceiptOutcome(toolName, receiptText) : undefined;
+	const imagePending = status === "complete" && imageRetrievalPending(toolName, receiptText);
+	const browserPreviewUrl = status === "complete" ? previewUrl(toolName, input) : undefined;
 	const failed = status === "error" || status === "aborted";
 	const hasDetail = Boolean(description.body) || Boolean(children) || Boolean(description.fallbackArgs);
 	// Keep intermediate tool attempts compact. The final assistant failure is
@@ -710,42 +835,73 @@ export function ToolCard({
 				className="tool-trace-summary"
 				onClick={() => (onOpenSession ? onOpenSession() : expandable && setOpen(!open))}
 				aria-expanded={!onOpenSession && expandable ? open : undefined}
-				title={onOpenSession ? "打开子代理对话" : undefined}
+				title={onOpenSession ? t("openSubagent") : undefined}
 				disabled={!expandable && !onOpenSession}
 			>
 				<ChevronRight size={14} className="tool-caret" />
 				<span className="tool-icon">{description.icon}</span>
-				<span className="tool-verb">{description.verb}</span>
+				<span className="tool-verb" title={description.verb}>
+					{description.verb}
+				</span>
 				{description.target ? (
 					<span className="tool-target" title={description.title ?? description.target}>
 						{description.target}
 					</span>
 				) : null}
-				{description.meta ? <span className="tool-meta">{description.meta}</span> : null}
+				{description.meta ? (
+					<span
+						className={typeof description.meta === "string" ? "tool-meta tool-meta-text" : "tool-meta"}
+						title={typeof description.meta === "string" ? description.meta : undefined}
+					>
+						{description.meta}
+					</span>
+				) : null}
 				{status === "complete" && webEvidence ? (
 					<span className={"tool-evidence " + webEvidence.level} title={webEvidence.note}>
 						{
 							{
-								candidate_links: "候选链接",
-								page_content: "页面已读取",
-								insufficient_content: "内容不足",
-								access_blocked: "访问受阻",
+								candidate_links: t("candidateLinks"),
+								page_content: t("pageRead"),
+								insufficient_content: t("insufficientContent"),
+								access_blocked: t("accessBlocked"),
 							}[webEvidence.level]
 						}
 					</span>
 				) : null}
-				<StatusIndicator status={status} />
+				{imagePending ? (
+					<span
+						className="tool-state pending"
+						title={t("imageRetrievalPending")}
+						aria-label={t("imageRetrievalPending")}
+					>
+						<Clock size={12} />
+						<span>{t("imageRetrievalPending")}</span>
+					</span>
+				) : desktopOutcome ? (
+					<span className="tool-state aborted">
+						<CircleAlert size={12} />
+						<span>{t(desktopOutcome === "not_started" ? "desktopNotStarted" : "desktopOutcomeUnknown")}</span>
+					</span>
+				) : (
+					<StatusIndicator status={status} />
+				)}
 			</button>
 			{onOpenSession && expandable && (
 				<button
 					type="button"
 					className="tool-detail-toggle"
-					title={open ? "收起工具详情" : "展开工具详情"}
-					aria-label={open ? "收起工具详情" : "展开工具详情"}
+					title={open ? t("collapseTool") : t("expandTool")}
+					aria-label={open ? t("collapseTool") : t("expandTool")}
 					aria-expanded={open}
 					onClick={() => setOpen(!open)}
 				>
 					<Braces size={14} />
+				</button>
+			)}
+			{browserPreviewUrl && typeof window !== "undefined" && window.wumingDesktop?.browser && (
+				<button type="button" className="tool-preview-open" onClick={() => openBrowserPreview(browserPreviewUrl)}>
+					<Globe size={14} />
+					{t("openPreview")}
 				</button>
 			)}
 			{open ? (

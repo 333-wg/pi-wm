@@ -8,6 +8,7 @@ import {
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { routeSkills } from './skill-router.js';
+import { isTeamLaunch, teamCommandGoal } from './team-launch-runtime.js';
 import { EvaluationError } from '@wuming/evaluation';
 import {
   MAX_SUBAGENT_DEPTH,
@@ -40,6 +41,7 @@ import {
   type CustomModelConnection,
   type CustomModelService,
   type CustomModelSettings,
+  type MediaModelConfig,
   type ModelRef,
   PROTOCOL_VERSION,
   type ProtocolError,
@@ -65,6 +67,8 @@ import type { FileMcpCatalog } from './mcp.js';
 import type { StructuredLogger } from '@wuming/orchestrator';
 import type { GatewayToolCatalog } from './tools.js';
 import type { MediaModelRegistry } from './media-models.js';
+import type { WindowsComputerManager } from '@wuming/sandbox';
+import type { OfficialAccountManager } from '@wuming/pi-adapter';
 
 const checkClientMessage = Compile(ClientMessageSchema);
 const checkServerMessage = Compile(ServerMessageSchema);
@@ -72,9 +76,11 @@ const checkGitAction = Compile(GitActionSchema);
 
 interface ConnectionState {
   ws: WebSocket;
+  local: boolean;
   principal: GatewayPrincipal;
   connectionId: string;
   hello: boolean;
+  taskNotifications?: boolean;
   attachedSessions: Set<string>;
   terminalUnsubscribers: Set<() => void>;
 }
@@ -106,6 +112,8 @@ export interface GatewayArtifactService {
 }
 
 export interface GatewayCustomModelService {
+  listMedia?(): CustomModelSettings[];
+  resolveMedia?(config: MediaModelConfig): MediaModelConfig;
   list(): ModelMetadata[];
   services(): CustomModelService[];
   get(model: ModelRef): CustomModelSettings;
@@ -188,7 +196,10 @@ export interface GatewayEvaluationService {
   }): Extract<CommandResult, { type: 'session.run.attested' }>;
 }
 
+import type { AgentTeamService } from './agent-teams.js';
+
 export interface GatewayServerOptions {
+  teams?: AgentTeamService;
   auth: GatewayAuth;
   orchestrator: SessionOrchestrator;
   store: SqliteOrchestratorStore;
@@ -202,11 +213,13 @@ export interface GatewayServerOptions {
   autoRouteSkills?: boolean;
   mcp?: FileMcpCatalog;
   tools?: GatewayToolCatalog;
+  computer?: Pick<WindowsComputerManager, 'status' | 'refresh' | 'setEnabled' | 'stop' | 'install'>;
   workspacePath?: (workspaceId: string) => string;
   terminal?: TerminalManager;
   maxArtifactBytes?: number;
   models?: ModelMetadata[];
   customModels?: GatewayCustomModelService;
+  officialAccounts?: OfficialAccountManager;
   mediaModels?: MediaModelRegistry;
   capabilities?: Capability[];
   executionEnvironment?: ExecutionEnvironment;
@@ -302,6 +315,7 @@ export class GatewayServer implements AsyncDisposable {
   readonly #auth: GatewayAuth;
   readonly #orchestrator: SessionOrchestrator;
   readonly #store: SqliteOrchestratorStore;
+  readonly #teams: AgentTeamService | undefined;
   readonly #approvals: ApprovalResponder | undefined;
   readonly #artifacts: GatewayArtifactService | undefined;
   readonly #workspace: GatewayWorkspaceService | undefined;
@@ -312,11 +326,13 @@ export class GatewayServer implements AsyncDisposable {
   readonly #autoRouteSkills: boolean;
   readonly #mcp: FileMcpCatalog | undefined;
   readonly #tools: GatewayToolCatalog | undefined;
+  readonly #computer: GatewayServerOptions['computer'];
   readonly #workspacePath: ((workspaceId: string) => string) | undefined;
   readonly #terminal: TerminalManager | undefined;
   readonly #maxArtifactBytes: number;
   readonly #models: ModelMetadata[];
   readonly #customModels: GatewayCustomModelService | undefined;
+  readonly #officialAccounts: OfficialAccountManager | undefined;
   readonly #mediaModels: MediaModelRegistry | undefined;
   readonly #capabilities: Capability[];
   readonly #executionEnvironment: ExecutionEnvironment;
@@ -342,6 +358,7 @@ export class GatewayServer implements AsyncDisposable {
     this.#auth = options.auth;
     this.#orchestrator = options.orchestrator;
     this.#store = options.store;
+    this.#teams = options.teams;
     this.#approvals = options.approvals;
     this.#artifacts = options.artifacts;
     this.#workspace = options.workspace;
@@ -352,11 +369,13 @@ export class GatewayServer implements AsyncDisposable {
     this.#autoRouteSkills = options.autoRouteSkills ?? false;
     this.#mcp = options.mcp;
     this.#tools = options.tools;
+    this.#computer = options.computer;
     this.#workspacePath = options.workspacePath;
     this.#terminal = options.terminal;
     this.#maxArtifactBytes = options.maxArtifactBytes ?? 10 * 1024 * 1024;
     this.#models = options.models ?? [];
     this.#customModels = options.customModels;
+    this.#officialAccounts = options.officialAccounts;
     this.#mediaModels = options.mediaModels;
     this.#capabilities = options.capabilities ?? [
       ...(options.mediaModels ? (['model.media'] satisfies Capability[]) : []),
@@ -372,6 +391,10 @@ export class GatewayServer implements AsyncDisposable {
       ...(options.terminal ? (['terminal'] satisfies Capability[]) : []),
       ...(options.evaluation ? (['evaluation'] satisfies Capability[]) : []),
     ];
+    for (const capability of ['session.search', 'task.notifications'] as const) {
+      if (!this.#capabilities.includes(capability)) this.#capabilities = [...this.#capabilities, capability];
+    }
+    if (options.teams && !this.#capabilities.includes('agent.teams')) this.#capabilities = [...this.#capabilities, 'agent.teams'];
     this.#executionEnvironment = options.executionEnvironment ?? {
       placement: 'server',
       processMode: 'disabled',
@@ -444,6 +467,7 @@ export class GatewayServer implements AsyncDisposable {
       const gitDiff = /^\/api\/workspaces\/([^/]+)\/git\/diff$/.exec(url.pathname);
       const gitDetails = /^\/api\/workspaces\/([^/]+)\/git\/details$/.exec(url.pathname);
       const gitAction = /^\/api\/workspaces\/([^/]+)\/git\/action$/.exec(url.pathname);
+      const computerPath = /^\/api\/computer-use(?:\/(enable|install|stop))?$/.exec(url.pathname);
       if (
         !upload &&
         !download &&
@@ -459,7 +483,8 @@ export class GatewayServer implements AsyncDisposable {
         !gitStatus &&
         !gitDetails &&
         !gitAction &&
-        !gitDiff
+        !gitDiff &&
+        !computerPath
       ) {
         this.#json(response, 404, { error: 'Not found' });
         return;
@@ -468,6 +493,34 @@ export class GatewayServer implements AsyncDisposable {
       if (!principal) {
         response.setHeader('WWW-Authenticate', 'Bearer');
         this.#json(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (computerPath) {
+        this.#requirePrincipalPermission(principal, 'admin');
+        if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? ''))
+          throw Object.assign(new Error('Computer Use settings are local-only'), { httpStatus: 403 });
+        const action = computerPath[1];
+        if ((!action && request.method !== 'GET') || (action && request.method !== 'POST')) {
+          this.#json(response, 405, { error: 'Method not allowed' });
+          return;
+        }
+        const computer = this.#executionEnvironment.placement === 'local_device' ? this.#computer : undefined;
+        if (!computer) {
+          if (action) throw Object.assign(new Error('Computer Use requires a Windows local Pi runtime'), { httpStatus: 409 });
+          this.#json(response, 200, { supported: false, enabled: false, ready: false, installing: false, platform: process.platform, python: '', error: '仅支持 Windows 本地设备的 Pi 运行时' });
+          return;
+        }
+        if (action === 'enable') {
+          let value: unknown;
+          try { value = JSON.parse((await this.#readRequestBody(request)).toString('utf8')); }
+          catch { throw Object.assign(new Error('Invalid JSON'), { httpStatus: 400 }); }
+          if (!value || typeof value !== 'object' || Array.isArray(value) ||
+              Object.keys(value).length !== 1 || typeof (value as { enabled?: unknown }).enabled !== 'boolean')
+            throw Object.assign(new Error('Expected { enabled: boolean }'), { httpStatus: 400 });
+          this.#json(response, 200, computer.setEnabled((value as { enabled: boolean }).enabled));
+        } else if (action === 'stop') this.#json(response, 200, computer.stop());
+        else if (action === 'install') this.#json(response, 202, computer.install());
+        else this.#json(response, 200, url.searchParams.get('refresh') === '1' ? await computer.refresh() : computer.status());
         return;
       }
       if (projectOpenFolder && request.method === 'POST') {
@@ -804,6 +857,7 @@ export class GatewayServer implements AsyncDisposable {
     return [
       'workspace.list',
       'session.list',
+      'session.search',
       'session.attach',
       'session.snapshot.get',
       'session.run.list',
@@ -813,6 +867,9 @@ export class GatewayServer implements AsyncDisposable {
       'session.memory.list',
       'session.memory.search',
       'goal.list',
+      'team.get',
+      'team.list',
+      'agent.template.list',
       'automation.list',
       'automation.run.list',
       'skill.list',
@@ -890,7 +947,8 @@ export class GatewayServer implements AsyncDisposable {
       return rejectUpgrade(socket, 500, 'Internal Server Error');
     }
     if (!principal) return rejectUpgrade(socket, 401, 'Unauthorized');
-    this.#wss.handleUpgrade(request, socket, head, (ws) => this.#accept(ws, principal));
+    const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '');
+    this.#wss.handleUpgrade(request, socket, head, (ws) => this.#accept(ws, principal, local));
   }
 
   #originAllowed(request: IncomingMessage): boolean {
@@ -908,9 +966,10 @@ export class GatewayServer implements AsyncDisposable {
     }
   }
 
-  #accept(ws: WebSocket, principal: GatewayPrincipal): void {
+  #accept(ws: WebSocket, principal: GatewayPrincipal, local: boolean): void {
     const connection: ConnectionState = {
       ws,
+      local,
       principal,
       connectionId: this.#idFactory(),
       hello: false,
@@ -965,6 +1024,7 @@ export class GatewayServer implements AsyncDisposable {
         return connection.ws.close(1002, 'Unsupported protocol version');
       }
       connection.hello = true;
+      connection.taskNotifications = message.capabilities.includes('task.notifications');
       this.#logger.log('debug', 'gateway.hello.accepted', {
         connectionId: connection.connectionId,
         clientId: message.clientId,
@@ -1004,6 +1064,10 @@ export class GatewayServer implements AsyncDisposable {
       return;
     }
     try {
+      if (message.type === 'terminal.shells') {
+        this.#send(connection, terminal.shells(message.requestId));
+        return;
+      }
       if (message.type === 'terminal.create') {
         this.#requireWorkspace(connection, message.workspaceId);
         const ready = terminal.create({
@@ -1012,6 +1076,7 @@ export class GatewayServer implements AsyncDisposable {
           owner: { principalId: connection.principal.id, workspaceId: message.workspaceId },
           cols: message.cols,
           rows: message.rows,
+          ...(message.shellId ? { shellId: message.shellId } : {}),
           connectionId: connection.connectionId,
           send: (value) => this.#send(connection, value),
         });
@@ -1046,17 +1111,10 @@ export class GatewayServer implements AsyncDisposable {
       const normalized = protocolError(error);
       this.#send(connection, {
         type: 'terminal.error',
-        ...(message.type === 'terminal.create' ||
-        message.type === 'terminal.attach' ||
-        message.type === 'terminal.close'
-          ? { requestId: message.requestId }
-          : {}),
-        ...(message.type === 'terminal.input' ||
-        message.type === 'terminal.resize' ||
-        message.type === 'terminal.close'
-          ? { terminalId: message.terminalId }
-          : {}),
-        code: normalized.code,
+        ...('requestId' in message ? { requestId: message.requestId } : {}),
+        ...('terminalId' in message ? { terminalId: message.terminalId } : {}),
+        code: error instanceof Error && 'code' in error && typeof error.code === 'string'
+          ? error.code.slice(0, 100) : normalized.code,
         message: normalized.message,
       });
     }
@@ -1258,11 +1316,28 @@ export class GatewayServer implements AsyncDisposable {
     idempotencyKey: string,
     command: Command
   ): Promise<CommandResult> {
+    if (command.type === 'model.official.list' || command.type === 'model.official.start' ||
+        command.type === 'model.official.submit' || command.type === 'model.official.cancel' || command.type === 'model.official.logout') {
+      if (!hasGatewayPermission(connection.principal, 'admin')) throw Object.assign(new Error('Permission denied'), { protocolCode: 'forbidden' });
+      if (!connection.local) throw Object.assign(new Error('Official account management requires a local connection'), { protocolCode: 'forbidden' });
+      if (!this.#officialAccounts) throw Object.assign(new Error('Official accounts are unavailable'), { protocolCode: 'not_implemented' });
+      if (command.type === 'model.official.start') await this.#officialAccounts.start(command.provider, command.method);
+      if (command.type === 'model.official.submit') this.#officialAccounts.submit(command.provider, command.loginId, command.code);
+      if (command.type === 'model.official.cancel') await this.#officialAccounts.cancel(command.provider, command.loginId);
+      if (command.type === 'model.official.logout') await this.#officialAccounts.logout(command.provider);
+      return { type: 'model.official.accounts', accounts: this.#officialAccounts.accounts() };
+    }
     if (command.type.startsWith('model.media.')) {
       this.#requirePrincipalPermission(connection.principal, 'admin');
       if (!this.#mediaModels) throw Object.assign(new Error('Media models are unavailable'), { protocolCode: 'not_implemented' });
       if (command.type === 'model.media.discover') return { type: 'model.media.discovered', kind: command.connection.kind, models: await this.#mediaModels.discover(command.connection) };
-      if (command.type === 'model.media.set') await this.#mediaModels.set(command.config);
+      if (command.type === 'model.media.image.default') await this.#mediaModels.setImageDefault(command.model);
+      if (command.type === 'model.media.image.remove') await this.#mediaModels.removeImage(command.model);
+      if (command.type === 'model.media.video.default') await this.#mediaModels.setVideoDefault(command.model);
+      if (command.type === 'model.media.video.remove') await this.#mediaModels.removeVideo(command.model);
+      if (command.type === 'model.media.set') {
+        await this.#mediaModels.set(command.config);
+      }
       if (command.type === 'model.media.remove') await this.#mediaModels.remove(command.kind);
       return { type: 'model.media.settings', settings: this.#mediaModels.list() };
     }
@@ -1407,6 +1482,13 @@ export class GatewayServer implements AsyncDisposable {
         await this.#mcp.removeServer(command.workspaceId, this.#workspacePath(command.workspaceId), command.serverId);
         return { type: 'mcp.removed', workspaceId: command.workspaceId, serverId: command.serverId };
       }
+      case 'mcp.setEnabled': {
+        this.#requireWorkspace(connection, command.workspaceId);
+        if (!this.#mcp || !this.#workspacePath)
+          throw Object.assign(new Error('MCP management is unavailable'), { protocolCode: 'not_implemented' });
+        const server = await this.#mcp.setEnabled(command.workspaceId, this.#workspacePath(command.workspaceId), command.serverId, command.enabled);
+        return { type: 'mcp.updated', workspaceId: command.workspaceId, server };
+      }
       case 'mcp.configure':
       case 'mcp.trust':
       case 'mcp.untrust': {
@@ -1427,7 +1509,7 @@ export class GatewayServer implements AsyncDisposable {
       case 'model.list':
         return {
           type: 'model.list',
-          models: [...this.#models, ...(this.#customModels?.list() ?? [])],
+          models: this.#availableModels(),
         };
       case 'model.custom.discover': {
         if (!this.#customModels)
@@ -1437,6 +1519,8 @@ export class GatewayServer implements AsyncDisposable {
         const discovery = await this.#customModels.discover(command.connection);
         return { type: 'model.custom.discovered', ...discovery };
       }
+      case 'model.custom.media.list':
+        return { type: 'model.custom.media.list', models: this.#customModels?.listMedia?.() ?? [] };
       case 'model.custom.service.list': {
         if (!this.#customModels)
           throw Object.assign(new Error('Custom model configuration is unavailable'), {
@@ -1508,8 +1592,15 @@ export class GatewayServer implements AsyncDisposable {
           latencyMs: await this.#customModels.test(command.model),
         };
       }
-      case 'session.list':
+      case 'session.search': {
         this.#requireWorkspace(connection, command.workspaceId);
+        return { type: 'session.search', ...this.#store.searchSessions(command.workspaceId, {
+          ...command, excludeSessionIds: [...(this.#teams?.internalSessionIds() ?? [])],
+        }) };
+      }
+      case 'session.list': {
+        this.#requireWorkspace(connection, command.workspaceId);
+        const internalSessions = this.#teams?.internalSessionIds() ?? new Set<string>();
         return {
           type: 'session.list',
           sessions: this.#store
@@ -1517,18 +1608,20 @@ export class GatewayServer implements AsyncDisposable {
               ...(command.query === undefined ? {} : { query: command.query }),
               archived: command.archived ?? false,
               limit: command.limit ?? 100,
+              excludeSessionIds: [...internalSessions],
             })
             .map((snapshot) => snapshot.session),
         };
+      }
       case 'session.create': {
         this.#requireWorkspace(connection, command.workspaceId);
-        const availableModels = [...this.#models, ...(this.#customModels?.list() ?? [])];
+        const availableModels = this.#availableModels();
         const model = availableModels.find(
             (candidate) =>
               candidate.model.provider === command.model.provider &&
               candidate.model.id === command.model.id
           );
-        if (availableModels.length > 0) {
+        if (availableModels.length > 0 || command.model.provider.startsWith('official-')) {
           if (!model?.authenticated)
             throw new OrchestratorError('conflict', 'Model is unavailable or not authenticated');
         }
@@ -1574,6 +1667,8 @@ export class GatewayServer implements AsyncDisposable {
         });
       case 'session.archive':
         this.#requireSession(connection, command.sessionId);
+        if (this.#teams?.internalSessionIds().has(command.sessionId))
+          throw new OrchestratorError('conflict', 'Team execution records cannot be archived as chats; manage the team from Agent Teams');
         return this.#orchestrator.archiveSession({
           principalId: connection.principal.id,
           idempotencyKey,
@@ -1604,13 +1699,13 @@ export class GatewayServer implements AsyncDisposable {
         });
       case 'session.model.set': {
         this.#requireSession(connection, command.sessionId);
-        const model = [...this.#models, ...(this.#customModels?.list() ?? [])].find(
+        const model = this.#availableModels().find(
           (candidate) =>
             candidate.model.provider === command.model.provider &&
             candidate.model.id === command.model.id
         );
         if (
-          [...this.#models, ...(this.#customModels?.list() ?? [])].length > 0 &&
+          (this.#availableModels().length > 0 || command.model.provider.startsWith('official-')) &&
           !model?.authenticated
         ) {
           throw new OrchestratorError('conflict', 'Model is unavailable or not authenticated');
@@ -1626,7 +1721,7 @@ export class GatewayServer implements AsyncDisposable {
       }
       case 'session.thinking.set': {
         const snapshot = this.#requireSession(connection, command.sessionId);
-        const model = [...this.#models, ...(this.#customModels?.list() ?? [])].find(
+        const model = this.#availableModels().find(
           (candidate) => candidate.model.provider === snapshot.model.provider && candidate.model.id === snapshot.model.id
         );
         return this.#orchestrator.setSessionThinking({
@@ -1906,6 +2001,54 @@ export class GatewayServer implements AsyncDisposable {
           memoryId: command.memoryId,
           action: command.action,
         });
+      case 'agent.template.list':
+      case 'agent.template.save':
+      case 'agent.template.delete': {
+        this.#requireWorkspace(connection, command.workspaceId);
+        if (!this.#teams) throw new OrchestratorError('conflict', 'Agent templates are unavailable');
+        const canEditUser = hasGatewayPermission(connection.principal, 'admin');
+        const canEditProject = hasGatewayPermission(connection.principal, 'workspace.write');
+        if (command.type !== 'agent.template.list' && command.scope === 'user' && !canEditUser)
+          throw Object.assign(new Error('User-wide Agent templates require owner permission'), { protocolCode: 'forbidden' });
+        if (command.type === 'agent.template.save')
+          this.#teams.templates.save(command.workspaceId, command.scope, command.template, command.expectedRevision);
+        if (command.type === 'agent.template.delete')
+          this.#teams.templates.delete(command.workspaceId, command.scope, command.name, command.expectedRevision);
+        return { type: 'agent.templates', templates: this.#teams.templates.list(command.workspaceId), canEditUser, canEditProject };
+      }
+      case 'team.list':
+        this.#requireWorkspace(connection, command.workspaceId);
+        if (!this.#teams) throw new OrchestratorError('conflict', 'Agent Teams are unavailable');
+        return { type: 'team.list', teams: this.#teams.list(command.workspaceId) };
+      case 'team.start': {
+        this.#requireSession(connection, command.sessionId);
+        if (!this.#teams) throw new OrchestratorError('conflict', 'Agent Teams are unavailable');
+        const team = await this.#teams.start(command.sessionId, command.objective, command.name, true, `rpc:${connection.principal.id}:${idempotencyKey}`);
+        return { type: 'team.snapshot', team };
+      }
+      case 'team.get':
+      case 'team.message':
+      case 'team.stop':
+      case 'team.retry': {
+        if (!this.#teams) throw new OrchestratorError('conflict', 'Agent Teams are unavailable');
+        if (Boolean(command.teamId) === Boolean(command.sessionId))
+          throw new OrchestratorError('conflict', 'Provide exactly one teamId or legacy sessionId');
+        if (command.sessionId) this.#requireSession(connection, command.sessionId);
+        const team = command.teamId ? this.#teams.store.get(command.teamId) : this.#teams.get(command.sessionId!);
+        if (!team || (command.teamId && team.id !== command.teamId)) {
+          if (command.type === 'team.get' && command.sessionId) return { type: 'team.snapshot', team: null };
+          throw new OrchestratorError('not_found', 'Team not found');
+        }
+        const workspaceId = team.workspaceId ?? this.#store.loadSnapshot(team.sessionId)?.session.workspaceId;
+        if (!workspaceId) throw new OrchestratorError('not_found', 'Team workspace not found');
+        this.#requireWorkspace(connection, workspaceId);
+        if (command.sessionId && command.type !== 'team.get' && command.sessionId !== team.sessionId)
+          throw new OrchestratorError('conflict', 'Use teamId to control the team');
+        if (command.type === 'team.message') this.#teams.send(team.sessionId, command.recipient, command.text, `rpc:${connection.principal.id}:${idempotencyKey}`, true);
+        if (command.type === 'team.stop') await this.#teams.stop(team.id);
+        if (command.type === 'team.retry') this.#teams.retry(team.sessionId, command.memberId, `rpc:${connection.principal.id}:${idempotencyKey}`);
+        return { type: 'team.snapshot', team: this.#teams.get(team.id, command.type === 'team.get' ? command.revision : undefined) ?? null };
+      }
       case 'subagent.create':
         this.#requireSession(connection, command.sessionId);
         return this.#orchestrator.createSubagent({
@@ -2055,6 +2198,20 @@ export class GatewayServer implements AsyncDisposable {
       case 'turn.follow_up':
         const session = this.#requireSession(connection, command.sessionId);
         let selectedSkillIds = command.skills;
+		const teamGoal = teamCommandGoal(command.content);
+		const explicitTeam = command.skills?.includes('team') || teamGoal !== undefined;
+		if (explicitTeam) {
+			if (!this.#teams) throw new OrchestratorError('conflict', 'Agent Teams 当前不可用，未启动团队');
+			if (command.type !== 'turn.prompt' || session.session.phase !== 'idle')
+				throw new OrchestratorError('conflict', '请先停止当前任务，或在新对话中启动团队');
+			if (this.#teams.get(command.sessionId)) throw new OrchestratorError('conflict', '团队成员不能启动嵌套团队');
+			const objective = teamGoal ?? command.content.filter((part: any) => part.type === 'text').map((part: any) => part.text).join('\n').trim();
+			if (!objective) throw new OrchestratorError('conflict', '请提供团队任务目标，例如 /team 帮我做一个图书管理系统');
+			selectedSkillIds = [...new Set([...(selectedSkillIds ?? []), 'team'])];
+		}
+		const running = this.#store.getRunningOperation(command.sessionId);
+		if (running && isTeamLaunch(running.payload))
+			throw new OrchestratorError('conflict', '团队正在创建，请等待创建结果');
         if (
           this.#autoRouteSkills &&
           !selectedSkillIds?.length &&
@@ -2072,7 +2229,7 @@ export class GatewayServer implements AsyncDisposable {
               this.#workspacePath(session.session.workspaceId)
             )
           );
-          if (routed.length > 0) selectedSkillIds = routed.map((route) => route.skill.id);
+          if (routed.length > 0) selectedSkillIds = routed.filter((route) => route.skill.id !== 'team').map((route) => route.skill.id);
         }
         if (command.content.some((part: any) => part.type === 'artifact')) {
           if (!this.#artifacts)
@@ -2125,6 +2282,14 @@ export class GatewayServer implements AsyncDisposable {
         });
       case 'approval.respond':
         this.#requireSession(connection, command.sessionId);
+        if (this.#store.loadSnapshot(command.sessionId)?.pendingApprovals
+          .find((approval) => approval.id === command.approvalId)?.capabilities
+          .some((capability) => capability.type === 'computer.use')) {
+          if (!hasGatewayPermission(connection.principal, 'admin'))
+            throw Object.assign(new Error('Desktop approval requires the device owner'), { protocolCode: 'forbidden' });
+          if (!connection.local)
+            throw Object.assign(new Error('Desktop approval requires the local device owner'), { protocolCode: 'forbidden' });
+        }
         if (!this.#approvals) {
           throw Object.assign(new Error('Approval handling is unavailable'), {
             protocolCode: 'not_implemented',
@@ -2240,6 +2405,21 @@ export class GatewayServer implements AsyncDisposable {
 
   #broadcastStoredEvent(stored: StoredSessionEvent): void {
     for (const connection of this.#connections) this.#sendStoredEvent(connection, stored, true);
+    const event = stored.event;
+    if (event.type !== 'approval.requested' && !(event.type === 'session.phase.changed' && event.phase === 'idle')) return;
+    const snapshot = this.#store.loadSnapshot(event.sessionId);
+    if (!snapshot || snapshot.session.parentSessionId || snapshot.session.archivedAt !== undefined) return;
+    const operation = event.type === 'approval.requested' ? undefined : this.#store.listOperations(event.sessionId, 1)[0];
+    const kind = event.type === 'approval.requested' ? 'approval'
+      : operation?.finishedAt === event.timestamp && operation.status === 'completed' ? 'completed'
+      : operation?.finishedAt === event.timestamp && operation.status === 'failed' ? 'failed' : undefined;
+    if (!kind) return;
+    for (const connection of this.#connections) {
+      if (!connection.hello || !connection.taskNotifications ||
+        !connection.principal.workspaces.some((workspace) => workspace.id === snapshot.session.workspaceId)) continue;
+      this.#send(connection, { type: 'task.notification', id: event.eventId,
+        sessionId: event.sessionId, workspaceId: snapshot.session.workspaceId, kind });
+    }
   }
 
   #sendStoredEvent(
@@ -2286,8 +2466,13 @@ export class GatewayServer implements AsyncDisposable {
     for (const connection of this.#connections) connection.ws.close(1001, 'Server shutting down');
   }
 
+  #availableModels(): ModelMetadata[] {
+    return [...this.#models, ...(this.#customModels?.list() ?? []), ...(this.#officialAccounts?.list() ?? [])];
+  }
+
   async close(): Promise<void> {
     this.beginShutdown();
+    await this.#officialAccounts?.dispose();
     this.#unsubscribeStore();
     this.#unsubscribeProgress();
     for (const connection of this.#connections) connection.ws.close(1001, 'Server shutting down');

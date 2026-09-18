@@ -197,7 +197,8 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 										type="checkbox"
 										checked={skill.enabled}
 										aria-label={`启用 ${skill.id}`}
-										disabled={busy}
+										disabled={busy || skill.id === "computer-use"}
+										title={skill.id === "computer-use" ? "由 Computer Use 设置管理" : undefined}
 										onChange={(event) =>
 											void act({
 												type: "skill.set_enabled",
@@ -207,7 +208,7 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 											})
 										}
 									/>
-									<span>{skill.enabled ? "已启用" : "已禁用"}</span>
+									<span>{skill.id === "computer-use" ? "跟随设置" : skill.enabled ? "已启用" : "已禁用"}</span>
 								</label>
 								<button
 									className="icon-button"

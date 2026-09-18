@@ -6,7 +6,13 @@ import type { ArtifactStore } from "@wuming/artifacts";
 import type { ArtifactRef, SessionSnapshot } from "@wuming/protocol";
 import { SafeWebClient, type ApprovalBroker } from "@wuming/sandbox";
 import { Type } from "typebox";
-import { MediaModelRegistry, mediaResourceUrl, readMediaBody, type MediaConnection } from "./media-models.js";
+import {
+	MediaModelRegistry,
+	mediaResourceUrl,
+	readMediaBody,
+	mediaConnectionHash as connectionHash,
+	type MediaConnection,
+} from "./media-models.js";
 import { MEDIA_SKILL_ROUTING_POLICY, mediaModelStatus } from "./media-skill-policy.js";
 import {
 	validateVideoRequest,
@@ -21,6 +27,14 @@ import { mediaErrorDetail, mediaResponseError } from "./media-errors.js";
 import { VideoPollSchedule } from "./media-video-polling.js";
 
 type Json = Record<string, unknown>;
+interface ImageJob {
+	id: string;
+	session_id: string;
+	workspace_id: string;
+	model: string;
+	url: string | null;
+	artifact: string | null;
+}
 interface VideoJob {
 	id: string;
 	session_id: string;
@@ -28,15 +42,16 @@ interface VideoJob {
 	connection_hash: string;
 	artifact: string | null;
 	protocol: VideoProtocol;
+	provider: string | null;
+	model: string | null;
 }
 const object = (value: unknown): Json =>
 	value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
-// The job owns its transport. Changing a preference must not invalidate an in-flight job.
-const connectionHash = (config: MediaConnection) =>
-	createHash("sha256")
-		.update(JSON.stringify({ kind: config.kind, baseUrl: config.baseUrl, model: config.model, apiKey: config.apiKey }))
-		.digest("hex");
 const outputText = (text: string) => [{ type: "text" as const, text }];
+interface ImageToolResult {
+	content: ReturnType<typeof outputText>;
+	details: { artifact?: ArtifactRef; jobId?: string; status?: "retrieval_pending" };
+}
 
 export class MediaGenerationService {
 	readonly #db: DatabaseSync;
@@ -66,6 +81,10 @@ export class MediaGenerationService {
 		this.#artifacts = options.artifacts;
 		this.#db = new DatabaseSync(options.databasePath);
 		this.#db.exec(
+			"CREATE TABLE IF NOT EXISTS media_image_jobs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, workspace_id TEXT NOT NULL, request_hash TEXT NOT NULL, model TEXT NOT NULL, url TEXT, artifact TEXT);" +
+				"CREATE INDEX IF NOT EXISTS media_image_jobs_pending ON media_image_jobs(session_id, workspace_id, request_hash) WHERE artifact IS NULL"
+		);
+		this.#db.exec(
 			"CREATE TABLE IF NOT EXISTS media_video_jobs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, remote_id TEXT NOT NULL, connection_hash TEXT NOT NULL, artifact TEXT)"
 		);
 		// Existing jobs retain their original transport when an adapter is added.
@@ -76,9 +95,14 @@ export class MediaGenerationService {
 				.some((column) => column.name === "protocol")
 		)
 			this.#db.exec("ALTER TABLE media_video_jobs ADD COLUMN protocol TEXT NOT NULL DEFAULT 'openai'");
+		const columns = this.#db.prepare("PRAGMA table_info(media_video_jobs)").all();
+		if (!columns.some((column) => column.name === "provider"))
+			this.#db.exec("ALTER TABLE media_video_jobs ADD COLUMN provider TEXT");
+		if (!columns.some((column) => column.name === "model"))
+			this.#db.exec("ALTER TABLE media_video_jobs ADD COLUMN model TEXT");
 		this.#fetch = options.fetch ?? fetch;
 		const web = new SafeWebClient({ timeoutMs: 120_000 });
-		this.#download = options.download ?? ((url, limits) => web.download(url, limits));
+		this.#download = options.download ?? ((url, limits) => web.download(url, { ...limits, resolveProxyHttp: true }));
 		this.#maxImageBytes = options.maxImageBytes ?? 10 * 1024 * 1024;
 		this.#maxVideoBytes = options.maxVideoBytes ?? 100 * 1024 * 1024;
 		this.#polling = new VideoPollSchedule(this.#db, options.pollMs ?? 30_000);
@@ -88,6 +112,58 @@ export class MediaGenerationService {
 
 	close(): void {
 		this.#db.close();
+	}
+
+	async #retrieveImage(
+		snapshot: SessionSnapshot,
+		job: ImageJob,
+		signal: AbortSignal,
+		recovery = false
+	): Promise<ImageToolResult> {
+		if (job.artifact)
+			return {
+				content: outputText("Image completed and attached."),
+				details: { jobId: job.id, artifact: JSON.parse(job.artifact) as ArtifactRef },
+			};
+		try {
+			const content = await this.#download(job.url!, { maxBytes: this.#maxImageBytes, signal });
+			signal.throwIfAborted();
+			const artifact = await this.#save(snapshot, content, "image");
+			// Signed result URLs are only needed until the attachment is safely stored.
+			this.#db
+				.prepare("UPDATE media_image_jobs SET artifact = ?, url = NULL WHERE id = ?")
+				.run(JSON.stringify(artifact), job.id);
+			return {
+				content: outputText("Image generated with " + job.model + ". Attached as " + artifact.name + "."),
+				details: { jobId: job.id, artifact },
+			};
+		} catch (error) {
+			// Do not expose signed URLs or provider-controlled error text to the model/UI.
+			const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+			const reason =
+				typeof code === "string" && ["network_denied", "network_timeout", "network_failed"].includes(code)
+					? code
+					: signal.aborted
+						? "retrieval_interrupted"
+						: "retrieval_failed";
+			return {
+				content: outputText(
+					JSON.stringify({
+						jobId: job.id,
+						status: "retrieval_pending",
+						generationStatus: "result_received",
+						reason,
+						next:
+							"The provider returned an image result, but downloading or saving it did not complete. The result is saved for recovery. Do not say generation failed or submit generate_image again, even with a different prompt or model: it may charge again. " +
+							(recovery
+								? "Recovery did not complete. Explain the retrieval problem and wait for user direction. Do not retry automatically. "
+								: "Use get_generated_image with this jobId to retry retrieval once. ") +
+							"Never loop or bypass network safety checks.",
+					})
+				),
+				details: { jobId: job.id, status: "retrieval_pending" as const },
+			};
+		}
 	}
 
 	async #request(
@@ -205,7 +281,7 @@ export class MediaGenerationService {
 				name: "generate_image",
 				label: "Generate image",
 				description:
-					"Generate one image with the configured default image model. Optional model selects only another image model saved in Settings when explicitly requested by the user; no endpoint or credential overrides. Returns a persisted chat attachment. Optional referenceArtifactId edits an existing workspace image through images/edits.",
+					"Generate one image with the configured default image model. Optional model and provider select any added image model across saved services when requested by the user; no endpoint or credential overrides. Returns a persisted chat attachment or a recovery jobId if retrieving the result failed. Use get_generated_image for recovery, never resubmit a billable generation. Optional referenceArtifactId edits an existing workspace image through images/edits.",
 				promptSnippet: "Generate or edit an image using the default image model from Settings",
 				promptGuidelines: [
 					"When the user provides a product or reference image, use its attached_image artifactId as referenceArtifactId. Never invent an artifact ID or substitute an unrelated sample product for an unavailable reference image.",
@@ -220,7 +296,15 @@ export class MediaGenerationService {
 								minLength: 1,
 								maxLength: 200,
 								description:
-									"Omit to use the default. Only use a saved image model ID when the user explicitly requests it; media_model_status lists allowed IDs.",
+									"Omit to use the default. Any added image model from media_model_status is available, including other services. Pass provider too when the ID appears on multiple services.",
+							})
+						),
+						provider: Type.Optional(
+							Type.String({
+								minLength: 1,
+								maxLength: 200,
+								description:
+									"Saved service ID from media_model_status.availableModels. Pair with model to choose a specific service; never pass an endpoint or API key.",
 							})
 						),
 						size: Type.Optional(Type.String({ pattern: "^(auto|[0-9]{2,4}x[0-9]{2,4})$" })),
@@ -231,14 +315,32 @@ export class MediaGenerationService {
 					},
 					{ additionalProperties: false }
 				),
-				execute: async (id, params, externalSignal) => {
-					const config = this.#models.resolve("image", params.model);
+				execute: async (id, params, externalSignal): Promise<ImageToolResult> => {
+					const config = this.#models.resolve("image", params.model, params.provider);
 					const permit = await authorize(id, config, externalSignal);
 					const signal = AbortSignal.any([
 						...(externalSignal ? [externalSignal] : []),
 						AbortSignal.timeout(5 * 60_000),
 					]);
 					try {
+						signal.throwIfAborted();
+						const requestHash = createHash("sha256")
+							.update(
+								JSON.stringify([
+									connectionHash(config),
+									params.prompt,
+									params.size ?? null,
+									params.quality ?? null,
+									params.referenceArtifactId ?? null,
+								])
+							)
+							.digest("hex");
+						const pending = this.#db
+							.prepare(
+								"SELECT * FROM media_image_jobs WHERE session_id = ? AND workspace_id = ? AND request_hash = ? AND artifact IS NULL ORDER BY rowid DESC LIMIT 1"
+							)
+							.get(snapshot.session.id, snapshot.session.workspaceId, requestHash) as unknown as ImageJob | undefined;
+						if (pending) return await this.#retrieveImage(snapshot, pending, signal, true);
 						let body: BodyInit;
 						let resource = "images/generations";
 						if (params.referenceArtifactId) {
@@ -274,8 +376,21 @@ export class MediaGenerationService {
 							if (!/^[A-Za-z0-9+/\r\n]+={0,2}$/.test(image.b64_json)) throw new Error("Invalid image Base64 response");
 							content = Buffer.from(image.b64_json, "base64");
 						} else if (typeof image.url === "string") {
-							// Provider output is untrusted. This downloader pins public DNS and never sends the API key.
-							content = await this.#download(image.url, { maxBytes: this.#maxImageBytes, signal });
+							const job: ImageJob = {
+								id: randomUUID(),
+								session_id: snapshot.session.id,
+								workspace_id: snapshot.session.workspaceId,
+								model: config.model,
+								url: image.url,
+								artifact: null,
+							};
+							// Persist before downloading so restarts/cancellation cannot turn recovery into another charge.
+							this.#db
+								.prepare(
+									"INSERT INTO media_image_jobs (id, session_id, workspace_id, request_hash, model, url) VALUES (?, ?, ?, ?, ?, ?)"
+								)
+								.run(job.id, job.session_id, job.workspace_id, requestHash, job.model, job.url);
+							return await this.#retrieveImage(snapshot, job, signal);
 						} else throw new Error("Unsupported image response: expected data[0].b64_json or data[0].url");
 						signal.throwIfAborted();
 						const artifact = await this.#save(snapshot, content, "image");
@@ -283,6 +398,54 @@ export class MediaGenerationService {
 							content: outputText(`Image generated with ${config.model}. Attached as ${artifact.name}.`),
 							details: { artifact },
 						};
+					} finally {
+						if (permit) approvals.completeAuthorization(permit);
+					}
+				},
+			}),
+			defineTool({
+				name: "get_generated_image",
+				label: "Retrieve generated image",
+				description:
+					"Retrieve a saved image result by jobId, without submitting or billing another generation. Omit jobId to recover the latest image in this session after an interruption. If retrieval is still pending, report the download problem and wait for user direction; never loop or call generate_image as a retry.",
+				parameters: Type.Object(
+					{ jobId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })) },
+					{ additionalProperties: false }
+				),
+				execute: async (id, params, externalSignal) => {
+					if (snapshot.sandboxMode === "read_only") throw new Error("Image retrieval is unavailable in read-only mode");
+					externalSignal?.throwIfAborted();
+					const job = (params.jobId
+						? this.#db
+								.prepare("SELECT * FROM media_image_jobs WHERE id = ? AND session_id = ? AND workspace_id = ?")
+								.get(params.jobId, snapshot.session.id, snapshot.session.workspaceId)
+						: this.#db
+								.prepare(
+									"SELECT * FROM media_image_jobs WHERE session_id = ? AND workspace_id = ? ORDER BY rowid DESC LIMIT 1"
+								)
+								.get(snapshot.session.id, snapshot.session.workspaceId)) as unknown as ImageJob | undefined;
+					if (!job)
+						throw new Error(
+							"No saved image result exists in this session. Do not submit a new generation without user direction."
+						);
+					const signal = AbortSignal.any([...(externalSignal ? [externalSignal] : []), AbortSignal.timeout(120_000)]);
+					if (job.artifact) return this.#retrieveImage(snapshot, job, signal, true);
+					let host: string;
+					try {
+						host = new URL(job.url!).hostname;
+					} catch {
+						return this.#retrieveImage(snapshot, job, signal, true);
+					}
+					const permit = await approvals.authorize({
+						sessionId: snapshot.session.id,
+						toolCallId: id,
+						risk: "medium",
+						summary: "Retrieve an existing image result (no new generation charge)",
+						capabilities: [{ type: "network.connect", hosts: [host] }],
+						signal,
+					});
+					try {
+						return await this.#retrieveImage(snapshot, job, signal, true);
 					} finally {
 						if (permit) approvals.completeAuthorization(permit);
 					}
@@ -302,6 +465,22 @@ export class MediaGenerationService {
 				parameters: Type.Object(
 					{
 						prompt: Type.String({ minLength: 1, maxLength: 32_000 }),
+						model: Type.Optional(
+							Type.String({
+								minLength: 1,
+								maxLength: 200,
+								description:
+									"Omit for the default. Select any added video model from media_model_status when requested by the user.",
+							})
+						),
+						provider: Type.Optional(
+							Type.String({
+								minLength: 1,
+								maxLength: 200,
+								description:
+									"Saved service ID from media_model_status; pair with model to distinguish identical IDs across services. Never pass an endpoint or API key.",
+							})
+						),
 						size: Type.Optional(
 							Type.String({
 								pattern: "^([0-9]{2,4}x[0-9]{2,4}|720[Pp]|1080[Pp]|[12][Kk])$",
@@ -324,7 +503,7 @@ export class MediaGenerationService {
 					{ additionalProperties: false }
 				),
 				execute: async (id, params, externalSignal) => {
-					const config = this.#models.resolve("video");
+					const config = this.#models.resolve("video", params.model, params.provider);
 					validateVideoRequest(config, params);
 					const permit = await authorize(id, config, externalSignal);
 					const signal = AbortSignal.any([...(externalSignal ? [externalSignal] : []), AbortSignal.timeout(120_000)]);
@@ -351,9 +530,17 @@ export class MediaGenerationService {
 						const jobId = randomUUID();
 						this.#db
 							.prepare(
-								"INSERT INTO media_video_jobs (id, session_id, remote_id, connection_hash, protocol) VALUES (?, ?, ?, ?, ?)"
+								"INSERT INTO media_video_jobs (id, session_id, remote_id, connection_hash, protocol, provider, model) VALUES (?, ?, ?, ?, ?, ?, ?)"
 							)
-							.run(jobId, snapshot.session.id, remoteId, connectionHash(config), request.protocol);
+							.run(
+								jobId,
+								snapshot.session.id,
+								remoteId,
+								connectionHash(config),
+								request.protocol,
+								config.provider!,
+								config.model
+							);
 						this.#polling.initialize(jobId, connectionHash(config), this.#now(), true);
 						return {
 							content: outputText(
@@ -400,9 +587,10 @@ export class MediaGenerationService {
 							content: outputText("Video completed."),
 							details: { artifact: JSON.parse(job.artifact) as ArtifactRef },
 						};
-					const config = this.#models.resolve("video");
-					if (job.connection_hash !== connectionHash(config))
-						throw new Error("Video model settings changed; restore the original settings to retrieve this job");
+					const config = this.#models.resolveVideoJob(
+						job.connection_hash,
+						job.provider && job.model ? { provider: job.provider, id: job.model } : undefined
+					);
 					const permit = await authorize(id, config, externalSignal);
 					const signal = AbortSignal.any([...(externalSignal ? [externalSignal] : []), AbortSignal.timeout(180_000)]);
 					try {

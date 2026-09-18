@@ -2,9 +2,11 @@
 
 ## Available Workflows
 
-The gateway ships seven original Wuming skill packages in
+The gateway ships original Wuming skill packages in
 `apps/gateway/builtin-skills`: code-change, code-review, debug, research, run-app,
-verify-app and skill-authoring. They are available in every workspace, including
+verify-app, skill-authoring and team. The team skill is for explicitly requested
+persistent Agent Teams, not ordinary chats or questions about the feature.
+They are available in every workspace, including
 empty workspaces. These are adaptations of public workflow patterns, not copies
 of hidden vendor prompts. See `skill-system-research.md` for evidence and goals.
 

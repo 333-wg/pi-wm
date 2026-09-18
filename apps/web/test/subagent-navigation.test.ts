@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderLocalized as renderToStaticMarkup } from "./render-localized.js";
 import type { SubagentSummary } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
 import { findToolSubagent } from "../src/lib/subagent-navigation.js";

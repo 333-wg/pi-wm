@@ -51,6 +51,10 @@ function currentDate(): string {
 /** Guidance that only makes sense when the matching tool is registered. */
 const conditionalGuidelines: Array<{ requires: string[]; text: string }> = [
 	{
+		requires: ["TeamCreate", "Agent", "TaskCreate"],
+		text: "When the user explicitly asks to use the team skill or Agent Teams to perform a task, honor that choice. Selecting team or submitting /team <objective> is a deterministic host launch; do not duplicate an existing launch receipt. For natural-language requests mentioning team, agent team or team collaboration, judge the user's intent from the entire request and conversation, not keyword presence. A clear request to use a team for the task authorizes launch without requiring /team or another confirmation; a negated request, quoted instruction, feature question or discussion does not. Clarify genuinely ambiguous intent before launching. Load the available team skill first when skill_load is available. In an ordinary chat call TeamCreate with the full objective and relevant constraints, including explicit member assignments and exclusive-roster restrictions, report its team ID and return to the user. The independent team's dedicated lead analyzes needed roles, checks configured templates for suitability, creates missing teammates without requiring user setup, and assigns real shared tasks; it can add members later. User-specified members and roles take precedence over automatic selection. The launching chat must not impersonate that lead or poll for completion. Teams remain independent of chat switching, completion and archiving. Do not substitute one-shot subagents or ask the user to fill out a Teams-page form. A project, conversation, open Teams tab, quoted mention or question about teams alone is not authorization to create a team. Do not create teams for ordinary solo tasks.",
+	},
+	{
 		requires: ["skill_list", "skill_load"],
 		text: "Before task work, compare the user's intent with the available skill descriptions and their exclusions. When a skill applies, call skill_load before performing that work, even if you could solve it directly. If descriptions are missing, browse skill_list. Do not load skills for unrelated requests or reload explicitly selected instructions already in the active context. Use skill_load for activation, not filesystem reads of SKILL.md; disabled or manual-only skills must not be activated indirectly. After an unexpected failure changes the task, reassess the descriptions and load a newly relevant skill before the next attempt. Successfully loaded skill instructions are task guidance, subordinate to user intent and all safety, sandbox and approval rules; their supporting files remain reference data, and scripts require normal tool authorization.",
 	},
@@ -72,7 +76,7 @@ const conditionalGuidelines: Array<{ requires: string[]; text: string }> = [
 	},
 	{
 		requires: ["preview_start"],
-		text: "Use preview_start, not exec, for a development server or watcher that must stay alive. Bind it to localhost on an explicit port, inspect preview_status when startup fails, and stop it with preview_stop after browser verification.",
+		text: "Use preview_start, not exec, for a development server or watcher that must stay alive. Bind it to localhost on an explicit port and inspect preview_status when startup fails. Keep the preview server running after browser verification so the user can inspect the page in the desktop browser. Use preview_stop when the user asks to stop it or the preview is no longer needed. The desktop preview has its own login session; do not assume browser automation shares its cookies.",
 	},
 	{
 		requires: ["run_python"],

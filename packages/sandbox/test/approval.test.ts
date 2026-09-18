@@ -41,6 +41,199 @@ async function pendingApproval(store: SqliteOrchestratorStore, sessionId: string
 }
 
 describe("ApprovalBroker", () => {
+	it.each(["never", "on_risk", "on_failure"] as const)(
+		"honors local full-access desktop consent under %s",
+		async (approvalPolicy) => {
+			const store = new SqliteOrchestratorStore(":memory:");
+			try {
+				const created = await session(store, { sandboxMode: "unrestricted", approvalPolicy });
+				const broker = new ApprovalBroker({ store });
+				expect(broker.hasFullAccessComputerUse(created.snapshot.session.id)).toBe(true);
+				await expect(
+					broker.authorize({
+						sessionId: created.snapshot.session.id,
+						toolCallId: "desktop-full",
+						risk: "high",
+						summary: "Desktop",
+						requireExplicitApproval: true,
+						fullAccessComputerUse: true,
+						capabilities: [{ type: "computer.use", action: "input" }],
+					})
+				).resolves.toBeUndefined();
+				expect(store.loadSnapshot(created.snapshot.session.id)?.pendingApprovals).toEqual([]);
+			} finally {
+				store.close();
+			}
+		}
+	);
+	it("does not extend the full-access desktop exception to other explicit permissions", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const created = await session(store, { sandboxMode: "unrestricted", approvalPolicy: "never" });
+			const broker = new ApprovalBroker({ store });
+			await expect(
+				broker.authorize({
+					sessionId: created.snapshot.session.id,
+					toolCallId: "not-desktop",
+					risk: "high",
+					summary: "Other",
+					requireExplicitApproval: true,
+					fullAccessComputerUse: true,
+					capabilities: [{ type: "filesystem.read", paths: ["private"] }],
+				})
+			).rejects.toThrow();
+		} finally {
+			store.close();
+		}
+	});
+	it("full-access desktop still respects always-ask mode", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const created = await session(store, { sandboxMode: "unrestricted", approvalPolicy: "always" });
+			const broker = new ApprovalBroker({ store });
+			const abort = new AbortController();
+			const pending = broker.authorize({
+				sessionId: created.snapshot.session.id,
+				toolCallId: "desktop-always",
+				risk: "high",
+				summary: "Desktop",
+				requireExplicitApproval: true,
+				fullAccessComputerUse: true,
+				signal: abort.signal,
+				capabilities: [{ type: "computer.use", action: "input" }],
+			});
+			const rejected = expect(pending).rejects.toThrow();
+			await pendingApproval(store, created.snapshot.session.id);
+			abort.abort();
+			await rejected;
+		} finally {
+			store.close();
+		}
+	});
+	it.each(["on_risk", "never", "on_failure"] as const)(
+		"honors the explicit desktop Settings grant under %s",
+		async (approvalPolicy) => {
+			const store = new SqliteOrchestratorStore(":memory:");
+			try {
+				const created = await session(store, { approvalPolicy });
+				const broker = new ApprovalBroker({ store });
+				await expect(
+					broker.authorize({
+						sessionId: created.snapshot.session.id,
+						toolCallId: "desktop",
+						risk: "high",
+						summary: "Desktop",
+						preauthorizedComputerUse: true,
+						capabilities: [{ type: "computer.use", action: "input" }],
+					})
+				).resolves.toBeUndefined();
+				expect(store.loadSnapshot(created.snapshot.session.id)?.pendingApprovals).toEqual([]);
+			} finally {
+				store.close();
+			}
+		}
+	);
+	it("does not let Settings authorization override read-only restrictions", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const created = await session(store, { sandboxMode: "read_only" });
+			const broker = new ApprovalBroker({ store });
+			await expect(
+				broker.authorize({
+					sessionId: created.snapshot.session.id,
+					toolCallId: "desktop",
+					risk: "high",
+					summary: "Desktop",
+					preauthorizedComputerUse: true,
+					capabilities: [{ type: "computer.use", action: "input" }],
+				})
+			).rejects.toThrow("exceeds sandbox mode");
+		} finally {
+			store.close();
+		}
+	});
+	it.each(["always", "mixed"] as const)("retains approval for %s even with a Settings desktop grant", async (mode) => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const created = await session(store, { approvalPolicy: mode === "always" ? "always" : "on_risk" });
+			const broker = new ApprovalBroker({ store });
+			const abort = new AbortController();
+			const request = broker.authorize({
+				sessionId: created.snapshot.session.id,
+				toolCallId: "desktop",
+				risk: "high",
+				summary: "Desktop",
+				preauthorizedComputerUse: true,
+				signal: abort.signal,
+				capabilities:
+					mode === "always"
+						? [{ type: "computer.use", action: "input" }]
+						: [
+								{ type: "computer.use", action: "input" },
+								{ type: "filesystem.write", paths: ["test.txt"] },
+							],
+			});
+			const rejected = expect(request).rejects.toThrow();
+			await pendingApproval(store, created.snapshot.session.id);
+			abort.abort();
+			await rejected;
+		} finally {
+			store.close();
+		}
+	});
+	it.each(["never", "on_failure"] as const)(
+		"does not bypass desktop consent under %s, even in unrestricted mode",
+		async (approvalPolicy) => {
+			const store = new SqliteOrchestratorStore(":memory:");
+			try {
+				const created = await session(store, { sandboxMode: "unrestricted", approvalPolicy });
+				const broker = new ApprovalBroker({ store });
+				await expect(
+					broker.authorize({
+						sessionId: created.snapshot.session.id,
+						toolCallId: "desktop",
+						risk: "high",
+						summary: "Desktop",
+						requireExplicitApproval: true,
+						capabilities: [{ type: "computer.use", action: "input" }],
+					})
+				).rejects.toThrow("Computer Use requires human approval");
+			} finally {
+				store.close();
+			}
+		}
+	);
+	it("rejects desktop input in read-only mode but permits explicitly approved capture", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const created = await session(store, { sandboxMode: "read_only" });
+			const broker = new ApprovalBroker({ store });
+			const base = {
+				sessionId: created.snapshot.session.id,
+				toolCallId: "desktop",
+				risk: "medium" as const,
+				summary: "Desktop",
+				requireExplicitApproval: true,
+			};
+			await expect(
+				broker.authorize({ ...base, capabilities: [{ type: "computer.use", action: "input" }] })
+			).rejects.toThrow("exceeds sandbox mode");
+			const pending = broker.authorize({ ...base, capabilities: [{ type: "computer.use", action: "screenshot" }] });
+			const approval = await pendingApproval(store, created.snapshot.session.id);
+			await broker.respond({
+				principalId: "user-1",
+				idempotencyKey: "desktop-approved",
+				sessionId: created.snapshot.session.id,
+				approvalId: approval.id,
+				decision: "approve",
+			});
+			const permit = await pending;
+			expect(permit?.approvalId).toBe(approval.id);
+			broker.completeAuthorization(permit!);
+		} finally {
+			store.close();
+		}
+	});
 	it.each(["never", "on_failure"] as const)("refuses sensitive source inspection under %s", async (approvalPolicy) => {
 		const store = new SqliteOrchestratorStore(":memory:");
 		try {

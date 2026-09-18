@@ -2,6 +2,52 @@ import { describe, expect, it } from "vitest";
 import { createBuiltinToolCatalog } from "../src/tools.js";
 
 describe("built-in tool catalog", () => {
+	it("refreshes Computer Use availability without rebuilding the catalog", async () => {
+		let enabled = false;
+		const catalog = createBuiltinToolCatalog({
+			runtime: "pi",
+			searchProvider: "bing",
+			executionPlacement: "local_device",
+			computerStatus: () => ({
+				supported: true,
+				enabled,
+				ready: true,
+				installing: false,
+				platform: "win32",
+				python: "python",
+			}),
+		});
+		expect((await catalog.list("w1")).find((tool) => tool.name === "computer_action")?.status).toBe(
+			"requires_configuration"
+		);
+		enabled = true;
+		expect((await catalog.list("w1")).find((tool) => tool.name === "computer_control")).toMatchObject({
+			status: "ready",
+			risk: "high",
+			sandboxModes: ["workspace_write", "unrestricted"],
+		});
+		expect((await catalog.list("w1")).find((tool) => tool.name === "computer_action")).toMatchObject({
+			status: "ready",
+			risk: "high",
+			sandboxModes: ["workspace_write", "unrestricted"],
+		});
+		const remote = createBuiltinToolCatalog({
+			runtime: "pi",
+			searchProvider: "bing",
+			executionPlacement: "server",
+			computerStatus: () => ({
+				supported: true,
+				enabled: true,
+				ready: true,
+				installing: false,
+				platform: "win32",
+				python: "python",
+			}),
+		});
+		expect((await remote.list("w1")).find((tool) => tool.name === "computer_action")?.status).toBe(
+			"requires_configuration"
+		);
+	});
 	it("reports Pi tools and local process tools accurately", async () => {
 		const catalog = createBuiltinToolCatalog({
 			runtime: "pi",
@@ -11,7 +57,18 @@ describe("built-in tool catalog", () => {
 		});
 		const tools = await catalog.list("workspace-1");
 
-		expect(tools).toHaveLength(39);
+		expect(tools).toHaveLength(57);
+		for (const name of [
+			"TeamCreate",
+			"Agent",
+			"TaskCreate",
+			"TaskList",
+			"TaskGet",
+			"TaskUpdate",
+			"SendMessage",
+			"TeamFinish",
+		])
+			expect(tools.find((tool) => tool.name === name)).toMatchObject({ backend: "AgentTeamService", status: "ready" });
 		for (const name of ["skill_list", "skill_load"])
 			expect(tools.find((tool) => tool.name === name)).toMatchObject({
 				category: "agent",

@@ -8,12 +8,14 @@ import {
 	useState,
 	type ReactNode,
 } from "react";
+import { workbenchCatalog } from "./workbench-messages.js";
 
 export type Locale = "zh" | "en";
 
 export const LOCALE_STORAGE_KEY = "wuming.locale";
 
 const zh = {
+	...workbenchCatalog(0),
 	desktopUpdates: "关于与更新",
 	desktopUpdatesHint: "版本与更新日志",
 	settings: "设置",
@@ -22,6 +24,8 @@ const zh = {
 	generalSettingsHint: "外观与语言",
 	generalSettingsDescription: "管理界面外观和显示语言。",
 	modelSettings: "模型",
+	officialAccountSettings: "官方直登",
+	officialAccountSettingsHint: "订阅账号授权",
 	modelSettingsHint: "服务与可用模型",
 	modelSettingsDescription: "管理模型服务、访问凭据和已添加模型。",
 	usageSettings: "用量统计",
@@ -114,6 +118,11 @@ const zh = {
 	name: "名称",
 	contextLength: "上下文长度",
 	maxOutput: "最大输出",
+	modelThinking: "思考能力",
+	thinkingAuto: "自动识别",
+	thinkingManual: "手动配置",
+	thinkingDisabled: "不支持思考",
+	thinkingLevels: "思考强度档位",
 	supportImages: "支持图片",
 	saving: "正在保存...",
 	saveChanges: "保存修改",
@@ -185,6 +194,7 @@ const zh = {
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
+	...workbenchCatalog(1),
 	desktopUpdates: "About & updates",
 	desktopUpdatesHint: "Version and release notes",
 	settings: "Settings",
@@ -193,6 +203,8 @@ const en: Record<keyof typeof zh, string> = {
 	generalSettingsHint: "Appearance and language",
 	generalSettingsDescription: "Manage the interface appearance and display language.",
 	modelSettings: "Models",
+	officialAccountSettings: "Official accounts",
+	officialAccountSettingsHint: "Subscription accounts",
 	modelSettingsHint: "Services and available models",
 	modelSettingsDescription: "Manage model services, credentials, and added models.",
 	usageSettings: "Usage",
@@ -289,6 +301,11 @@ const en: Record<keyof typeof zh, string> = {
 	name: "Name",
 	contextLength: "Context length",
 	maxOutput: "Max output",
+	modelThinking: "Thinking capability",
+	thinkingAuto: "Automatic",
+	thinkingManual: "Manual",
+	thinkingDisabled: "No reasoning",
+	thinkingLevels: "Thinking levels",
 	supportImages: "Image input",
 	saving: "Saving...",
 	saveChanges: "Save changes",
@@ -362,6 +379,13 @@ const en: Record<keyof typeof zh, string> = {
 export type LocaleKey = keyof typeof zh;
 export type Translate = (key: LocaleKey, vars?: Record<string, string | number>) => string;
 
+export function createTranslator(locale: Locale): Translate {
+	return (key, vars) =>
+		(locale === "en" ? en : zh)[key].replace(/\{(\w+)\}/g, (placeholder, name: string) =>
+			vars && Object.hasOwn(vars, name) ? String(vars[name]) : placeholder
+		);
+}
+
 export function isLocale(value: unknown): value is Locale {
 	return value === "zh" || value === "en";
 }
@@ -392,9 +416,9 @@ const LocaleContext = createContext<{
 	t: Translate;
 } | null>(null);
 
-export function LanguageProvider({ children }: { children: ReactNode }) {
-	const [locale, setLocaleState] = useState<Locale>(() =>
-		readStoredLocale(typeof window === "undefined" ? undefined : window.localStorage)
+export function LanguageProvider({ children, initialLocale }: { children: ReactNode; initialLocale?: Locale }) {
+	const [locale, setLocaleState] = useState<Locale>(
+		() => initialLocale ?? readStoredLocale(typeof window === "undefined" ? undefined : window.localStorage)
 	);
 
 	const setLocale = useCallback((next: Locale) => {
@@ -406,18 +430,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 		}
 	}, []);
 
-	const t = useCallback<Translate>(
-		(key, vars) => {
-			let value = (locale === "en" ? en : zh)[key];
-			if (vars) {
-				for (const [name, replacement] of Object.entries(vars)) {
-					value = value.replaceAll(`{${name}}`, String(replacement));
-				}
-			}
-			return value;
-		},
-		[locale]
-	);
+	const t = useMemo(() => createTranslator(locale), [locale]);
 
 	useEffect(() => applyLocale(locale), [locale]);
 

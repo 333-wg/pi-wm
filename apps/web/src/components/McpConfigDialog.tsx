@@ -6,20 +6,21 @@ import { importMcpConfigurations } from "../lib/mcp-config.js";
 
 interface Props {
 	initial?: McpServerConfiguration;
+	initialMode?: "form" | "import";
 	existingIds: string[];
 	onSave: (config: McpServerConfiguration) => Promise<void>;
 	onClose: () => void;
 }
 
-export function McpConfigDialog({ initial, existingIds, onSave, onClose }: Props) {
+export function McpConfigDialog({ initial, initialMode = "form", existingIds, onSave, onClose }: Props) {
 	const dialog = useFocusTrap<HTMLDivElement>();
 	const [config, setConfig] = useState<McpServerConfiguration>(
 		initial ?? { id: "", name: "", transport: "stdio", command: "", args: [], enabled: true, readOnly: false }
 	);
-	const [args, setArgs] = useState(JSON.stringify(initial?.args ?? [], null, 2));
+	const [args, setArgs] = useState<string[]>((initial?.args ?? []) as string[]);
 	const [imports, setImports] = useState<McpServerConfiguration[]>([]);
 	const [json, setJson] = useState("");
-	const [mode, setMode] = useState<"form" | "import">("form");
+	const [mode, setMode] = useState<"form" | "import">(initialMode);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string>();
 	const update = (key: string, value: JsonValue) => setConfig((current) => ({ ...current, [key]: value }));
@@ -29,7 +30,7 @@ export function McpConfigDialog({ initial, existingIds, onSave, onClose }: Props
 	const setSecrets = (values: Array<[string, string | null]>) => update(secretField, Object.fromEntries(values));
 	const load = (value: McpServerConfiguration) => {
 		setConfig(value);
-		setArgs(JSON.stringify(value.args ?? [], null, 2));
+		setArgs((value.args ?? []) as string[]);
 		setMode("form");
 		setError(undefined);
 	};
@@ -37,15 +38,7 @@ export function McpConfigDialog({ initial, existingIds, onSave, onClose }: Props
 		setError(undefined);
 		let candidate: McpServerConfiguration;
 		try {
-			let parsedArgs: unknown = [];
-			if (stdio) {
-				try {
-					parsedArgs = JSON.parse(args);
-				} catch {
-					throw new Error("启动参数必须是 JSON 字符串数组");
-				}
-			}
-			const values: Record<string, unknown> = { ...config, ...(stdio ? { args: parsedArgs } : {}) };
+			const values: Record<string, unknown> = { ...config, ...(stdio ? { args } : {}) };
 			if (typeof values.name === "string" && !values.name.trim()) delete values.name;
 			delete values[stdio ? "headers" : "env"];
 			if (!stdio) {
@@ -94,10 +87,10 @@ export function McpConfigDialog({ initial, existingIds, onSave, onClose }: Props
 				</header>
 				{!initial && (
 					<div className="mcp-mode" role="tablist" aria-label="配置方式">
-						<button role="tab" aria-selected={mode === "form"} onClick={() => setMode("form")}>
+						<button role="tab" disabled={busy} aria-selected={mode === "form"} onClick={() => setMode("form")}>
 							手动填写
 						</button>
-						<button role="tab" aria-selected={mode === "import"} onClick={() => setMode("import")}>
+						<button role="tab" disabled={busy} aria-selected={mode === "import"} onClick={() => setMode("import")}>
 							<Upload size={14} />
 							导入 JSON
 						</button>
@@ -204,15 +197,41 @@ export function McpConfigDialog({ initial, existingIds, onSave, onClose }: Props
 												onChange={(event) => update("command", event.target.value)}
 											/>
 										</label>
-										<label>
-											启动参数（JSON 数组）
-											<textarea
-												rows={3}
-												value={args}
-												spellCheck={false}
-												onChange={(event) => setArgs(event.target.value)}
-											/>
-										</label>
+										<section aria-label="启动参数">
+											<div className="mcp-inline-heading">
+												<strong>启动参数</strong>
+												<button
+													type="button"
+													className="icon-button"
+													title="添加参数"
+													onClick={() => setArgs([...args, ""])}
+												>
+													<Plus size={15} />
+												</button>
+											</div>
+											{args.map((arg, index) => (
+												<div className="mcp-argument-row" key={index}>
+													<span>{index + 1}</span>
+													<input
+														aria-label={`启动参数 ${index + 1}`}
+														value={arg}
+														spellCheck={false}
+														autoComplete="off"
+														onChange={(event) =>
+															setArgs(args.map((value, i) => (i === index ? event.target.value : value)))
+														}
+													/>
+													<button
+														type="button"
+														className="icon-button"
+														title={`删除参数 ${index + 1}`}
+														onClick={() => setArgs(args.filter((_, i) => i !== index))}
+													>
+														<Trash2 size={14} />
+													</button>
+												</div>
+											))}
+										</section>
 										<label>
 											工作目录
 											<input

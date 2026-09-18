@@ -16,6 +16,10 @@ export interface ApprovalBrokerOptions {
 export interface ApprovalAuthorization {
 	/** Sensitive inspection must never inherit automatic read authorization. */
 	requireExplicitApproval?: boolean;
+	/** Explicit desktop Settings grant; never applies to other capabilities. */
+	preauthorizedComputerUse?: boolean;
+	/** Local-owner desktop tools may honor the user's full-access session mode. */
+	fullAccessComputerUse?: boolean;
 	sessionId: string;
 	toolCallId: string;
 	risk: ApprovalRequest["risk"];
@@ -44,6 +48,7 @@ function capabilityAllowed(snapshot: SessionSnapshot, capability: ToolCapability
 	if (snapshot.sandboxMode === "unrestricted") return true;
 	if (snapshot.sandboxMode === "read_only") {
 		return (
+			(capability.type === "computer.use" && capability.action === "screenshot") ||
 			capability.type === "filesystem.read" ||
 			capability.type === "network.connect" ||
 			capability.type === "secret.use" ||
@@ -51,6 +56,7 @@ function capabilityAllowed(snapshot: SessionSnapshot, capability: ToolCapability
 		);
 	}
 	return (
+		capability.type === "computer.use" ||
 		capability.type === "filesystem.read" ||
 		capability.type === "filesystem.write" ||
 		capability.type === "process.exec" ||
@@ -64,6 +70,13 @@ function capabilityAllowed(snapshot: SessionSnapshot, capability: ToolCapability
 
 function requiresApproval(snapshot: SessionSnapshot, request: ApprovalAuthorization): boolean {
 	if (request.requireExplicitApproval) return true;
+	if (
+		request.preauthorizedComputerUse &&
+		snapshot.approvalPolicy !== "always" &&
+		request.capabilities.length > 0 &&
+		request.capabilities.every((capability) => capability.type === "computer.use")
+	)
+		return false;
 	// Full access is the user's explicit decision to let the agent operate in the
 	// existing environment. Keep the explicit "always ask" policy meaningful,
 	// but do not re-prompt for ordinary risky tools in this mode.
@@ -120,16 +133,33 @@ export class ApprovalBroker {
 		}
 	}
 
+	hasFullAccessComputerUse(sessionId: string): boolean {
+		const snapshot = this.#store.loadSnapshot(sessionId);
+		return snapshot?.sandboxMode === "unrestricted" && snapshot.approvalPolicy !== "always";
+	}
+
 	async authorize(request: ApprovalAuthorization): Promise<ApprovalPermit | undefined> {
 		const snapshot = this.#store.loadSnapshot(request.sessionId);
 		if (!snapshot) throw new SandboxError("approval_denied", `Session ${request.sessionId} does not exist`);
+		// Read current permissions from the store. Cached tool definitions must not
+		// turn a previous full-access choice into a permanent grant.
+		if (
+			request.fullAccessComputerUse &&
+			snapshot.sandboxMode === "unrestricted" &&
+			snapshot.approvalPolicy !== "always" &&
+			request.capabilities.length > 0 &&
+			request.capabilities.every((capability) => capability.type === "computer.use")
+		)
+			request = { ...request, requireExplicitApproval: false, preauthorizedComputerUse: true };
 		if (
 			request.requireExplicitApproval &&
 			(snapshot.approvalPolicy === "never" || snapshot.approvalPolicy === "on_failure")
 		) {
 			throw new SandboxError(
 				"approval_denied",
-				"Skill source inspection requires human approval. Use an approval-enabled session to review or edit source; use skill_load for invocation. Do not read another copy to bypass this restriction."
+				request.capabilities.some((capability) => capability.type === "computer.use")
+					? "Computer Use requires human approval. Select an approval-enabled permission mode before using desktop tools."
+					: "Skill source inspection requires human approval. Use an approval-enabled session to review or edit source; use skill_load for invocation. Do not read another copy to bypass this restriction."
 			);
 		}
 		for (const capability of request.capabilities) {

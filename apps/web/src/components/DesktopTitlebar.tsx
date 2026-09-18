@@ -1,13 +1,14 @@
 import { Ellipsis } from "lucide-react";
 import { useEffect } from "react";
-import clover from "../assets/wuming-clover.svg";
+import { paletteMode } from "../lib/theme.js";
+import clover from "../assets/wuming-clover.png";
 import "./desktop-titlebar.css";
 
 export function DesktopTitlebar() {
 	useEffect(() => {
 		const root = document.documentElement;
 		const syncTheme = () => {
-			const theme = root.dataset.theme === "dark" ? "dark" : "light";
+			const theme = paletteMode(root.dataset.theme ?? "light");
 			void window.wumingDesktop?.setWindowTheme?.(theme).catch(console.error);
 		};
 		syncTheme();

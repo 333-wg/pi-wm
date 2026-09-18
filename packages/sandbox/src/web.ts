@@ -285,7 +285,10 @@ export class SafeWebClient implements WebSandbox {
 		}
 	}
 
-	async download(value: string, options: { maxBytes: number; signal?: AbortSignal }): Promise<Buffer> {
+	async download(
+		value: string,
+		options: { maxBytes: number; signal?: AbortSignal; resolveProxyHttp?: boolean }
+	): Promise<Buffer> {
 		const response = await this.#request(validateWebUrl(value), options);
 		if (response.status < 200 || response.status >= 300)
 			throw new SandboxError("network_failed", `Media download returned HTTP ${response.status}`);
@@ -377,6 +380,47 @@ export class SafeWebClient implements WebSandbox {
 		};
 	}
 
+	async #publicDns(hostname: string, signal: AbortSignal, deadline: number): Promise<LookupAddress[]> {
+		// Query both families over authenticated HTTPS; never send signed image URLs to the resolver.
+		const answers = await Promise.all(
+			[1, 28].map(async (type) => {
+				const url = new URL("https://cloudflare-dns.com/dns-query");
+				url.search = new URLSearchParams({ name: hostname, type: String(type) }).toString();
+				const response = await this.#request(
+					url,
+					{
+						maxBytes: 16 * 1024,
+						signal,
+						redirectOrigin: url.origin,
+						headers: { accept: "application/dns-json" },
+					},
+					0,
+					deadline
+				);
+				if (response.status !== 200 || response.truncated)
+					throw new SandboxError("network_failed", "Public DNS lookup failed");
+				let data: { Status?: number; Answer?: Array<{ type?: number; data?: string }> };
+				try {
+					data = JSON.parse(response.body.toString("utf8"));
+				} catch {
+					throw new SandboxError("network_failed", "Invalid public DNS response");
+				}
+				if (!data || data.Status !== 0 || (data.Answer !== undefined && !Array.isArray(data.Answer)))
+					throw new SandboxError("network_failed", "Public DNS lookup did not succeed");
+				return (data.Answer ?? [])
+					.filter((answer) => answer?.type === 1 || answer?.type === 28)
+					.map((answer) => {
+						const address = typeof answer.data === "string" ? answer.data : "";
+						const family = answer.type === 1 ? 4 : 6;
+						if (isIP(address) !== family || !isPublicWebAddress(address))
+							throw new SandboxError("network_denied", "Public DNS returned a non-public address");
+						return { address, family };
+					});
+			})
+		);
+		return answers.flat();
+	}
+
 	async #request(
 		url: URL,
 		options: {
@@ -384,6 +428,7 @@ export class SafeWebClient implements WebSandbox {
 			headers?: Record<string, string>;
 			redirectOrigin?: string;
 			signal?: AbortSignal;
+			resolveProxyHttp?: boolean;
 		},
 		redirects = 0,
 		deadline = Date.now() + this.#timeoutMs
@@ -416,6 +461,15 @@ export class SafeWebClient implements WebSandbox {
 				);
 			}
 			const allowSyntheticResolution = this.#allowProxyDnsAddresses || url.protocol === "https:";
+			// Recover a real, pinned public destination; do not allow fake-IP HTTP or change signed URLs.
+			if (
+				options.resolveProxyHttp &&
+				url.protocol === "http:" &&
+				addresses.some((entry) => !isPublicWebAddress(entry.address)) &&
+				addresses.every((entry) => isAllowedWebResolution(entry.address, true))
+			) {
+				addresses = await this.#publicDns(hostname, controller.signal, deadline);
+			}
 			if (
 				addresses.length === 0 ||
 				addresses.some((entry) => !isAllowedWebResolution(entry.address, allowSyntheticResolution))

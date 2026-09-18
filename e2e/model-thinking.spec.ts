@@ -34,7 +34,16 @@ test.beforeAll(async () => {
 			socket.send(JSON.stringify({ type: "request", requestId, idempotencyKey: requestId, command }));
 		});
 	try {
-		for (const id of ["claude-opus-4-5", "gemini-3.5-flash", "kimi-k2.6", "gpt-5.5", "relay-unknown"]) {
+		for (const id of [
+			"claude-opus-4-5",
+			"claude-opus-6",
+			"gpt-7-future",
+			"gemini-3.5-flash",
+			"kimi-k2.6",
+			"gpt-5.5",
+			"gpt-6-astra",
+			"relay-unknown",
+		]) {
 			await request({
 				type: "model.custom.set",
 				config: {
@@ -91,6 +100,81 @@ test("shows catalog capability modes and only the effective options", async ({ p
 	);
 	await expect(page.locator(".thinking-menu-item")).toBeDisabled();
 	await expect(page.locator(".thinking-trigger-effort")).toHaveText("未识别");
+});
+
+test("GPT and Claude successors inherit complete thinking menus", async ({ page }) => {
+	await selectModel(page, "gpt-6-astra");
+	await page.locator(".thinking-menu-item").click();
+	await expect(page.locator(".thinking-option strong")).toHaveText(["低", "中", "高", "极高", "最大"]);
+	await selectModel(page, "gpt-7-future");
+	await expect(page.locator(".thinking-model-option").filter({ hasText: "gpt-7-future" })).toContainText(
+		"家族推断，待确认"
+	);
+	await page.locator(".thinking-menu-item").click();
+	await expect(page.locator(".thinking-option strong")).toHaveText(["低", "中", "高", "极高", "最大"]);
+	await page
+		.getByRole("menuitemradio")
+		.filter({ has: page.locator("strong", { hasText: /^高$/ }) })
+		.click();
+	await expect(page.locator(".thinking-trigger-effort")).toHaveText("高");
+	await selectModel(page, "claude-opus-6");
+	await page.locator(".thinking-menu-item").click();
+	await expect(page.locator(".thinking-option strong")).toHaveText(["关闭", "极简", "低", "中", "高", "极高", "最大"]);
+});
+
+test("manual levels persist, update the picker, and can return to automatic", async ({ page }, testInfo) => {
+	const edit = async () => {
+		await page.getByRole("button", { name: "设置", exact: true }).click();
+		const dialog = page.getByRole("dialog", { name: "设置" });
+		await dialog.getByRole("navigation", { name: "设置分类" }).getByRole("button", { name: /^模型/ }).click();
+		await dialog
+			.locator(".custom-model-row")
+			.filter({ hasText: "gpt-6-astra" })
+			.getByRole("button", { name: "编辑模型" })
+			.click();
+		return dialog;
+	};
+	let dialog = await edit();
+	await dialog.getByLabel("思考能力", { exact: true }).selectOption("manual");
+	await dialog.getByRole("checkbox", { name: "极简", exact: true }).check();
+	await dialog.getByRole("checkbox", { name: "极高", exact: true }).check();
+	await dialog.getByRole("checkbox", { name: "最大", exact: true }).check();
+	await page.setViewportSize({ width: 390, height: 844 });
+	await dialog.locator(".model-thinking-levels").scrollIntoViewIfNeeded();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+	await page.screenshot({ path: testInfo.outputPath("thinking-settings-mobile.png"), fullPage: true });
+	await page.setViewportSize({ width: 1440, height: 1000 });
+	await dialog.locator(".model-thinking-levels").scrollIntoViewIfNeeded();
+	await page.screenshot({ path: testInfo.outputPath("thinking-settings-desktop.png"), fullPage: true });
+	await dialog.getByRole("button", { name: "保存修改" }).click();
+	await expect(dialog.locator(".custom-model-edit")).toHaveCount(0);
+	await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+	await page.reload();
+	await selectModel(page, "gpt-6-astra");
+	await page.locator(".thinking-menu-item").click();
+	await expect(page.locator(".thinking-option strong")).toHaveText(["极简", "低", "中", "高", "极高", "最大"]);
+	await page
+		.getByRole("menuitemradio")
+		.filter({ has: page.locator("strong", { hasText: /^最大$/ }) })
+		.click();
+	await expect(page.locator(".thinking-trigger-effort")).toHaveText("最大");
+	dialog = await edit();
+	await expect(dialog.getByLabel("思考能力", { exact: true })).toHaveValue("manual");
+	await dialog.getByLabel("思考能力", { exact: true }).selectOption("disabled");
+	await dialog.getByRole("button", { name: "保存修改" }).click();
+	await expect(dialog.locator(".custom-model-edit")).toHaveCount(0);
+	await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+	await selectModel(page, "gpt-6-astra");
+	await expect(page.locator(".thinking-menu-item")).toBeDisabled();
+	await page.keyboard.press("Escape");
+	dialog = await edit();
+	await dialog.getByLabel("思考能力", { exact: true }).selectOption("auto");
+	await dialog.getByRole("button", { name: "保存修改" }).click();
+	await expect(dialog.locator(".custom-model-edit")).toHaveCount(0);
+	await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+	await selectModel(page, "gpt-6-astra");
+	await page.locator(".thinking-menu-item").click();
+	await expect(page.locator(".thinking-option strong")).toHaveText(["低", "中", "高", "极高", "最大"]);
 });
 
 for (const viewport of [

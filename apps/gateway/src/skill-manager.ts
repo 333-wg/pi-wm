@@ -70,12 +70,18 @@ export class SkillManager {
 	readonly #root: string;
 	readonly #builtins: string;
 	readonly #userSkillsEnabled: boolean;
+	readonly #managedEnabled: ((id: string) => boolean | undefined) | undefined;
 	readonly #userCatalog = new FileSkillCatalog();
 	readonly #builtinCatalog = new FileSkillCatalog([]);
-	constructor(root: string, builtins: string, options: { userSkillsEnabled?: boolean } = {}) {
+	constructor(
+		root: string,
+		builtins: string,
+		options: { userSkillsEnabled?: boolean; managedEnabled?: (id: string) => boolean | undefined } = {}
+	) {
 		this.#root = resolve(root);
 		this.#builtins = resolve(builtins);
 		this.#userSkillsEnabled = options.userSkillsEnabled ?? true;
+		this.#managedEnabled = options.managedEnabled;
 	}
 	private control() {
 		return join(this.#root, ".wuming");
@@ -143,7 +149,7 @@ export class SkillManager {
 					id: summary.id,
 					name: summary.name,
 					source,
-					enabled: stored?.source === source ? stored.enabled : true,
+					enabled: this.#managedEnabled?.(summary.id) ?? (stored?.source === source ? stored.enabled : true),
 					version:
 						source === "builtin" ? BUILTIN_SKILL_VERSION : stored?.source === source ? stored.version : "unversioned",
 					installedAt: stored?.source === source ? stored.installedAt : source === "builtin" ? 0 : summary.updatedAt,
@@ -279,6 +285,8 @@ export class SkillManager {
 	async setEnabled(id: string, enabled: boolean): Promise<InstalledSkill> {
 		if (!this.#userSkillsEnabled) throw skillError("User skill management requires a local device host", "forbidden");
 		validateSkillId(id);
+		if (this.#managedEnabled?.(id) !== undefined)
+			throw skillError("This built-in skill is managed in Settings > Computer Use", "forbidden");
 		return this.mutate(async () => {
 			const state = await this.readState();
 			const item = (await this.list()).find((entry) => entry.id === id);

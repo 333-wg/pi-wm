@@ -4,6 +4,7 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<meta name="theme-color" content="#f7f8f6" />
+		<link rel="icon" type="image/png" href="/src/assets/wuming-clover.png" />
 		<title>Pi-Wm</title>
 		<script>
 			// Resolve the stored interface language before React boots so the root
@@ -20,22 +21,18 @@
 				}
 			})();
 
-			// Resolves the stored theme before first paint so a dark-mode user never
-			// sees a light flash. Mirrors src/lib/theme.ts — keep the key, the choice
-			// values, and the two background colours in sync.
+			// Mirrors lib/theme.ts; the bootstrap parity test covers every palette.
 			(function () {
-				try {
-					var choice = localStorage.getItem("wuming.theme");
-					if (choice !== "light" && choice !== "dark") {
-						choice = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-					}
-					document.documentElement.dataset.theme = choice;
-					document
-						.querySelector('meta[name="theme-color"]')
-						.setAttribute("content", choice === "dark" ? "#0e120f" : "#f7f8f6");
-				} catch (error) {
-					document.documentElement.dataset.theme = "light";
-				}
+				var choice = "system", palettes = {};
+				try { choice = localStorage.getItem("wuming.theme"); } catch (error) {}
+				try { palettes = JSON.parse(localStorage.getItem("wuming.theme.palettes")) || {}; } catch (error) {}
+				var dark = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
+				var mode = choice === "dark" || choice !== "light" && dark ? "dark" : "light";
+				var backgrounds = { light: "#f7f8f6", dark: "#0e120f", white: "#ffffff", paper: "#fbf9f4", "warm-classic": "#f6f0e1", celadon: "#f5f8f5", "ink-night": "#201d17", "ink-blue": "#1a1d24" };
+				var allowed = mode === "dark" ? ["dark", "ink-night", "ink-blue"] : ["light", "white", "paper", "warm-classic", "celadon"];
+				var palette = allowed.indexOf(palettes[mode]) >= 0 ? palettes[mode] : mode;
+				document.documentElement.dataset.theme = palette;
+				document.querySelector('meta[name="theme-color"]').setAttribute("content", backgrounds[palette]);
 			})();
 		</script>
 	</head>

@@ -31,6 +31,7 @@ import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { OrchestratorError } from "./errors.js";
 import { searchMemoryRecords, verifyDurableMemory } from "./memory.js";
+import { SessionSearchIndex, type SessionSearchOptions } from "./session-search.js";
 import type {
 	ApprovalExecutionMode,
 	ApprovalExecutionState,
@@ -422,6 +423,7 @@ export interface ListSnapshotsOptions {
 	query?: string;
 	archived?: boolean;
 	limit?: number;
+	excludeSessionIds?: readonly string[];
 }
 
 const EMPTY_USAGE: Usage = {
@@ -709,6 +711,7 @@ function nextIntervalRun(
 
 export class SqliteOrchestratorStore implements Disposable {
 	readonly #db: DatabaseSync;
+	readonly #search: SessionSearchIndex;
 	readonly #eventListeners = new Set<(event: StoredSessionEvent) => void>();
 
 	constructor(path: string) {
@@ -974,6 +977,26 @@ export class SqliteOrchestratorStore implements Disposable {
 		this.#db.exec(
 			"CREATE INDEX IF NOT EXISTS session_snapshots_parent ON session_snapshots(parent_session_id, updated_at DESC)"
 		);
+		this.#search = new SessionSearchIndex(this.#db);
+		// A mismatch also repairs writes made by an older app after a downgrade.
+		this.#db.exec("BEGIN IMMEDIATE");
+		try {
+			const rows = this.#db
+				.prepare(
+					`SELECT s.session_id FROM session_snapshots s
+				LEFT JOIN session_search_revisions r ON r.session_id = s.session_id
+				WHERE r.revision IS NULL OR r.revision != s.revision`
+				)
+				.all();
+			for (const row of rows) {
+				const snapshot = this.loadSnapshot(String(row.session_id));
+				if (snapshot) this.#search.replace(snapshot);
+			}
+			this.#db.exec("COMMIT");
+		} catch (error) {
+			this.#db.exec("ROLLBACK");
+			throw error;
+		}
 		const goalColumns = this.#db.prepare("PRAGMA table_info(goals)").all() as unknown as Array<{
 			name: string;
 		}>;
@@ -1484,6 +1507,10 @@ export class SqliteOrchestratorStore implements Disposable {
 			options.archived ? "archived_at IS NOT NULL" : "archived_at IS NULL",
 		];
 		const parameters: Array<string | number> = [workspaceId];
+		if (options.excludeSessionIds?.length) {
+			conditions.push("session_id NOT IN (SELECT value FROM json_each(?))");
+			parameters.push(JSON.stringify(options.excludeSessionIds));
+		}
 		const query = options.query?.trim().toLocaleLowerCase();
 		if (query) {
 			const escaped = query.replace(/[!%_]/g, "!$&");
@@ -1499,6 +1526,10 @@ export class SqliteOrchestratorStore implements Disposable {
 		return rows.map((row) =>
 			parseChecked<SessionSnapshot>(row.snapshot_json, checkSnapshot, `Snapshot ${row.session_id}`)
 		);
+	}
+
+	searchSessions(workspaceId: string, options: SessionSearchOptions) {
+		return this.#search.search(workspaceId, options);
 	}
 
 	usageOverview(workspaceId: string, now: number, requestedDays = 7): UsageOverview {
@@ -2405,6 +2436,15 @@ export class SqliteOrchestratorStore implements Disposable {
 					);
 			}
 
+			if (!current) {
+				this.#search.replace(options.snapshot);
+			} else {
+				for (const event of options.events) {
+					if (event.type === "session.item.upserted") this.#search.upsert(options.sessionId, event.item);
+				}
+				this.#search.markRevision(options.sessionId, options.snapshot.revision);
+			}
+
 			const insertEvent = this.#db.prepare(
 				"INSERT INTO session_events(session_id, revision, event_id, event_json, created_at) VALUES (?, ?, ?, ?, ?)"
 			);
@@ -2971,6 +3011,16 @@ export class SqliteOrchestratorStore implements Disposable {
 		return rows.map(mapOperation);
 	}
 
+	/** Raw accepted requests for reconciling a missing or incomplete runtime log. */
+	listRecoveryOperations(sessionId: string): DurableOperation[] {
+		const rows = this.#db
+			.prepare(
+				"SELECT operation_id, session_id, type, status, payload_json, attempt, created_at, updated_at, started_at, finished_at, abort_requested, trace_id, error, retry_after, usage_json, tools_json, failure_kind, retry_history_json, approval_id, approval_tool_call_id, capability_plan_json, context_plan_json FROM operations WHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted') ORDER BY rowid"
+			)
+			.all(sessionId) as unknown as OperationRow[];
+		return rows.map(mapOperation);
+	}
+
 	listOperations(sessionId: string, limit = 20): DurableOperation[] {
 		const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
 		const rows = this.#db
@@ -2979,6 +3029,17 @@ export class SqliteOrchestratorStore implements Disposable {
 			)
 			.all(sessionId, boundedLimit) as unknown as OperationRow[];
 		return rows.map(mapOperation);
+	}
+
+	/** Durable delivery receipts survive transcript compaction and RPC cache expiry. */
+	findTurnDelivery(sessionId: string, marker: string): DurableOperation | undefined {
+		const row = this.#db
+			.prepare(
+				`SELECT operation_id FROM operations WHERE session_id = ?
+			AND substr(json_extract(payload_json, '$.content[0].text'), 1, ?) = ? LIMIT 1`
+			)
+			.get(sessionId, marker.length, marker);
+		return row ? this.getOperation(String(row.operation_id)) : undefined;
 	}
 
 	getRunningOperation(sessionId: string): DurableOperation | undefined {

@@ -4,7 +4,7 @@
 	"publish": null,
 	"electronLanguages": ["en-US", "zh-CN", "zh-TW"],
 	"directories": { "app": "apps/desktop", "output": "release" },
-	"files": ["src/**/*", "package.json"],
+	"files": ["src/**/*", "resources/**/*", "package.json"],
 	"extraResources": [
 		{ "from": ".desktop-stage/runtime", "to": "runtime", "filter": ["**/*", "!node_modules{,/**/*}"] },
 		{ "from": ".desktop-stage/runtime/node_modules", "to": "runtime/node_modules", "filter": ["**/*"] }
@@ -13,6 +13,7 @@
 	"asar": true,
 	"npmRebuild": false,
 	"win": {
+		"icon": "apps/desktop/resources/icon.ico",
 		"target": [{ "target": "nsis", "arch": ["x64"] }],
 		"executableName": "Pi-Wm",
 		"artifactName": "Pi-Wm-${version}-Setup-${arch}.${ext}"
