@@ -7,7 +7,7 @@ import { access, mkdir, readFile, realpath, writeFile, copyFile } from "node:fs/
 import { createServer } from "node:http";
 import { join, relative, isAbsolute } from "node:path";
 import { load } from "js-yaml";
-import { extractFile } from "@electron/asar";
+import { extractFile, uncache } from "@electron/asar";
 import { openDesktopRpc } from "./lib/desktop-rpc.mjs";
 import { releaseEnvironment } from "./lib/desktop-release.mjs";
 
@@ -81,7 +81,7 @@ function powershell(script, extra = {}) {
 	return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
 		encoding: "utf8",
 		windowsHide: true,
-		timeout: 30_000,
+		timeout: 90_000,
 		env: { ...process.env, UPDATE_INSTALL_EXE: executable, ...extra },
 	}).trim();
 }
@@ -92,7 +92,9 @@ function applicationProcesses() {
 	return value ? [JSON.parse(value)].flat() : [];
 }
 function installedVersion() {
-	return JSON.parse(extractFile(join(installDirectory, "resources", "app.asar"), "package.json").toString()).version;
+	const archive = join(installDirectory, "resources", "app.asar");
+	uncache(archive);
+	return JSON.parse(extractFile(archive, "package.json").toString()).version;
 }
 function uninstallEntries() {
 	const value = powershell(
@@ -139,6 +141,15 @@ async function waitStatus(value) {
 const button = (name) => page.locator("#settings-panel-updates").getByRole("button", { name, exact: true });
 async function stopObservedProcess(pid) {
 	assert.ok(applicationProcesses().some((p) => p.ProcessId === pid));
+	await expect
+		.poll(
+			() =>
+				powershell(`(Get-Process -Id ([int]$env:UPDATE_RESTART_PID)).MainWindowHandle.ToInt64()`, {
+					UPDATE_RESTART_PID: String(pid),
+				}),
+			{ timeout: 60_000, intervals: [1000] }
+		)
+		.not.toBe("0");
 	powershell(
 		`$p = Get-Process -Id ([int]$env:UPDATE_RESTART_PID); if (-not $p.CloseMainWindow()) { throw 'Cannot close verified restarted application' }; $p.WaitForExit(45000) | Out-Null; if (-not $p.HasExited) { throw 'Restarted application did not close' }`,
 		{ UPDATE_RESTART_PID: String(pid) }
@@ -147,13 +158,32 @@ async function stopObservedProcess(pid) {
 try {
 	assert.deepEqual(uninstallEntries(), [], "Runner must not have a prior Pi-Wm installation");
 	await new Promise((done, reject) => {
+		const started = Date.now();
 		const child = spawn(
 			join(fixtures, `Pi-Wm-${baselineVersion}-Setup-x64.exe`),
 			["/S", "/currentuser", `/D=${installDirectory}`],
-			{ windowsHide: true, stdio: "inherit", timeout: 180_000 }
+			{ windowsHide: true, stdio: "inherit", timeout: 600_000 }
 		);
-		child.once("error", reject);
-		child.once("exit", (code) => (code === 0 ? done() : reject(new Error(`Baseline installation exited ${code}`))));
+		const progress = setInterval(() => {
+			try {
+				const details = powershell(
+					`$p = Get-Process -Id ([int]$env:UPDATE_INSTALLER_PID) -ErrorAction SilentlyContinue; $dir = [IO.Path]::GetDirectoryName($env:UPDATE_INSTALL_EXE); [pscustomobject]@{ cpu = $p.CPU; window = $p.MainWindowTitle; files = @(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue).Count } | ConvertTo-Json -Compress`,
+					{ UPDATE_INSTALLER_PID: String(child.pid) }
+				);
+				console.log(`Baseline installation after ${Math.round((Date.now() - started) / 1000)}s: ${details}`);
+			} catch (error) {
+				console.log("Installation progress unavailable:", error.message);
+			}
+		}, 30_000);
+		child.once("error", (error) => {
+			clearInterval(progress);
+			reject(error);
+		});
+		child.once("exit", (code, signal) => {
+			clearInterval(progress);
+			report.baselineInstallSeconds = Math.round((Date.now() - started) / 1000);
+			code === 0 ? done() : reject(new Error(`Baseline installation exited ${code} (${signal ?? "no signal"})`));
+		});
 	});
 	report.installerExecuted = true;
 	assert.equal(installedVersion(), baselineVersion);
@@ -230,7 +260,7 @@ try {
 					return "replacing";
 				}
 			},
-			{ timeout: 180_000, intervals: [1000] }
+			{ timeout: 600_000, intervals: [1000] }
 		)
 		.toBe(targetVersion);
 	await expect
@@ -274,6 +304,9 @@ try {
 	server.closeAllConnections();
 	await new Promise((done) => server.close(done));
 	await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2));
+	await copyFile(join(fixtures, "download-verification.json"), join(output, "download-verification.json")).catch(
+		() => {}
+	);
 	await copyFile(join(profile, "logs", "gateway.log"), join(output, "gateway.log")).catch(() => {});
 	// The GitHub-hosted VM is destroyed after the job. Do not add reusable-machine cleanup here.
 }

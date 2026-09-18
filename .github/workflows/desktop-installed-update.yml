@@ -22,7 +22,7 @@ permissions:
 jobs:
   installed-update:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     # GitHub requires push-level access to read unpublished release assets.
     # This job is manual-only; the token is exposed only to the download step.
     permissions:
