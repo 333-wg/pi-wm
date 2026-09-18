@@ -648,6 +648,8 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 				? await state.page.locator(options.waitFor).first().isVisible()
 				: webEvidence.level !== "insufficient_content";
 		}
+		// The DOM may become ready between the content read and the visibility check.
+		if (ready && options.waitFor) webEvidence = await this.#pageEvidence(state);
 		if (options.signal?.aborted) throw options.signal.reason ?? new Error("Browser snapshot aborted");
 		if (!ready && options.waitFor && webEvidence.level !== "access_blocked") {
 			webEvidence = {

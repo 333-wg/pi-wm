@@ -98,7 +98,7 @@ function installedVersion() {
 }
 function uninstallEntries() {
 	const value = powershell(
-		`@(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Pi-Wm' } | Select-Object DisplayName,DisplayVersion,InstallLocation) | ConvertTo-Json -Compress`
+		`@(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match '^Pi-Wm(\\s|$)' } | Select-Object DisplayName,DisplayVersion,InstallLocation) | ConvertTo-Json -Compress`
 	);
 	return value ? [JSON.parse(value)].flat() : [];
 }
@@ -182,12 +182,15 @@ try {
 		child.once("exit", (code, signal) => {
 			clearInterval(progress);
 			report.baselineInstallSeconds = Math.round((Date.now() - started) / 1000);
-			code === 0 ? done() : reject(new Error(`Baseline installation exited ${code} (${signal ?? "no signal"})`));
+			if (code === 0) done();
+			else reject(new Error(`Baseline installation exited ${code} (${signal ?? "no signal"})`));
 		});
 	});
 	report.installerExecuted = true;
 	assert.equal(installedVersion(), baselineVersion);
-	assert.ok(uninstallEntries().some((entry) => entry.DisplayVersion === baselineVersion));
+	report.baselineRegistration = uninstallEntries();
+	console.log("Baseline registration:", JSON.stringify(report.baselineRegistration));
+	assert.ok(report.baselineRegistration.some((entry) => entry.DisplayVersion === baselineVersion));
 	passed("Candidate installed by the real NSIS installer and registered in Windows");
 	await mkdir(profile, { recursive: true });
 	await writeFile(join(profile, "desktop-updates.json"), JSON.stringify({ autoCheck: false, deferredUntil: 0 }));
@@ -267,6 +270,7 @@ try {
 		.poll(() => uninstallEntries().some((entry) => entry.DisplayVersion === targetVersion), { timeout: 60_000 })
 		.toBe(true);
 	report.installationVerified = true;
+	report.targetRegistration = uninstallEntries();
 	passed("Real updater launched NSIS, replaced the installed binary and updated Windows registration");
 	await expect
 		.poll(() => applicationProcesses().filter((p) => p.CommandLine.includes("--updated")).length, {

@@ -20,6 +20,15 @@ describe("browser research reliability", () => {
 					paragraph +
 					'</p><button id="ready">Ready</button>\', 350)</script>'
 			);
+		} else if (path === "/evidence-race") {
+			response.end(
+				'<main>Loading...</main><script>const main = document.querySelector("main");' +
+					"const clone = main.cloneNode.bind(main); main.cloneNode = (...args) => {" +
+					"const copy = clone(...args); delete main.cloneNode;" +
+					"queueMicrotask(() => main.innerHTML = " +
+					JSON.stringify("<p>" + paragraph + '</p><button id="ready">Ready</button>') +
+					"); return copy; };</script>"
+			);
 		} else if (path === "/footer" || path === "/blocked") {
 			response.end("<footer>About Privacy Terms Contact</footer>");
 		} else {
@@ -90,6 +99,12 @@ describe("browser research reliability", () => {
 		const explicit = await browser.open(origin + "/delayed", { waitFor: "#ready", waitTimeoutMs: 1200 });
 		expect(explicit.text).toContain("Ready");
 		expect(explicit.webEvidence?.level).toBe("page_content");
+	});
+	it("refreshes evidence when a requested element becomes ready after the content read", async () => {
+		const browser = manager.session("evidence-race");
+		const snapshot = await browser.open(origin + "/evidence-race", { waitFor: "#ready", waitTimeoutMs: 1200 });
+		expect(snapshot.text).toContain("Ready");
+		expect(snapshot.webEvidence?.level).toBe("page_content");
 	});
 	it("still selects a popup opened from the active page", async () => {
 		const browser = manager.session("popup");
