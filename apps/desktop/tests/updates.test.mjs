@@ -4,7 +4,14 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { DesktopUpdates, githubPublishConfig, readUpdatePreferences, saveUpdatePreferences } from "../src/updates.mjs";
+import {
+	DesktopUpdates,
+	githubPublishConfig,
+	resolveUpdateRepository,
+	classifyUpdateError,
+	readUpdatePreferences,
+	saveUpdatePreferences,
+} from "../src/updates.mjs";
 import { installDesktopUpdate } from "../src/install-update.mjs";
 
 class FakeUpdater extends EventEmitter {
@@ -60,6 +67,7 @@ test("checking never downloads; download never installs or quits", async () => {
 	assert.equal(updater.autoInstallOnAppQuit, false);
 	assert.equal(updater.allowDowngrade, false);
 	assert.equal(updater.allowPrerelease, false);
+	assert.equal(updater.disableWebInstaller, true);
 	await updates.check();
 	assert.equal(updates.state.status, "available");
 	assert.equal(updater.downloads, 0);
@@ -70,6 +78,108 @@ test("checking never downloads; download never installs or quits", async () => {
 	assert.ok(states.some((state) => state.progress === 45));
 	await updates.check();
 	assert.equal(updater.checks, 1);
+});
+
+test("desktop builds default to the project repository with explicit override and opt-out", async () => {
+	const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+	assert.equal(resolveUpdateRepository(undefined, manifest.desktopUpdateRepository), "333-wg/pi-wm");
+	assert.equal(resolveUpdateRepository("  ", manifest.desktopUpdateRepository), "333-wg/pi-wm");
+	assert.equal(resolveUpdateRepository(" other/releases ", manifest.desktopUpdateRepository), "other/releases");
+	assert.equal(resolveUpdateRepository("disabled", manifest.desktopUpdateRepository), undefined);
+	assert.throws(() => resolveUpdateRepository("https://token@host/repo", manifest.desktopUpdateRepository));
+});
+
+test("update failures are classified without returning provider messages or credentials", () => {
+	for (const [code, expected] of [
+		["ERR_UPDATER_NO_PUBLISHED_VERSIONS", "no-release"],
+		["ERR_UPDATER_CHANNEL_FILE_NOT_FOUND", "metadata"],
+		["ERR_UPDATER_INVALID_UPDATE_INFO", "metadata"],
+		["ERR_CHECKSUM_MISMATCH", "integrity"],
+		["ERR_UPDATER_INVALID_SIGNATURE", "integrity"],
+		["ENOSPC", "disk"],
+		["EPERM", "permission"],
+		["EACCES", "permission"],
+		["ETIMEDOUT", "timeout"],
+		["HTTP_ERROR_429", "rate-limit"],
+		["HTTP_ERROR_403", "access"],
+		["ECONNRESET", "network"],
+	]) {
+		assert.equal(classifyUpdateError({ code, message: "private-key-do-not-expose" }), expected);
+	}
+	assert.equal(classifyUpdateError({ statusCode: 403 }), "access");
+	assert.equal(classifyUpdateError(new Error("No published versions on GitHub")), "no-release");
+	assert.equal(
+		classifyUpdateError({
+			code: "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND",
+			message: '404 Not Found; "keep-alive": "timeout=5"',
+		}),
+		"metadata"
+	);
+	assert.equal(
+		classifyUpdateError({
+			code: "ERR_UPDATER_INVALID_RELEASE_FEED",
+			message: "HttpError: 403 Forbidden: rate limit exceeded",
+		}),
+		"rate-limit"
+	);
+	assert.equal(
+		classifyUpdateError({ code: "ERR_UPDATER_LATEST_VERSION_NOT_FOUND", message: "404 Not Found" }),
+		"no-release"
+	);
+	assert.equal(
+		classifyUpdateError({ code: "ERR_UPDATER_LATEST_VERSION_NOT_FOUND", message: "net::ERR_TIMED_OUT" }),
+		"timeout"
+	);
+	assert.equal(classifyUpdateError({ statusCode: 404 }, "download"), "metadata");
+	assert.equal(classifyUpdateError({ code: "EACCES" }, "install"), "install");
+});
+
+test("failed rechecks clear a stale version and never retry the old download", async () => {
+	const { updater, updates } = fixture();
+	await updates.check();
+	updater.checkForUpdates = async () => {
+		throw Object.assign(new Error("secret-url"), { code: "ETIMEDOUT" });
+	};
+	await updates.check();
+	assert.equal(updates.state.error, "timeout");
+	assert.equal(updates.state.retryAction, "check");
+	assert.equal(updates.state.nextVersion, undefined);
+	assert.equal(updates.checkResult, undefined);
+	assert.ok(!JSON.stringify(updates.snapshot()).includes("secret-url"));
+	await updates.download();
+	assert.equal(updater.downloads, 0);
+});
+
+test("checksum failures retry downloading, missing assets require a new check", async () => {
+	for (const [code, error, action] of [
+		["ERR_CHECKSUM_MISMATCH", "integrity", "download"],
+		["HTTP_ERROR_404", "metadata", "check"],
+	]) {
+		const { updater, updates } = fixture();
+		await updates.check();
+		updater.downloadUpdate = async () => {
+			throw Object.assign(new Error("status 404: only for missing asset"), {
+				code,
+				statusCode: code === "HTTP_ERROR_404" ? 404 : undefined,
+			});
+		};
+		await updates.download();
+		assert.equal(updates.state.error, error);
+		assert.equal(updates.state.retryAction, action);
+		updater.downloadUpdate = FakeUpdater.prototype.downloadUpdate;
+		await updates.download();
+		assert.equal(updates.state.status, action === "download" ? "ready" : "error");
+	}
+});
+
+test("installer errors cannot be overwritten by background checks", async () => {
+	const { updater, updates } = fixture();
+	updates.patch({ status: "installing" });
+	updater.emit("error", new Error("installer could not start"));
+	assert.equal(updates.state.error, "install");
+	assert.equal(updates.state.retryAction, "restart");
+	await updates.check();
+	assert.equal(updater.checks, 0);
 });
 
 test("concurrent checks coalesce and recover from network errors", async () => {

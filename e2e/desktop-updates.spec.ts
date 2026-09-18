@@ -19,6 +19,7 @@ async function desktop(page: Page, initial: Partial<DesktopUpdateState> = {}) {
 				nextVersion: "0.1.3",
 				platform: "win32",
 				arch: "x64",
+				repository: "333-wg/pi-wm",
 				autoCheck: true,
 				deferredUntil: 0,
 				progress: 0,
@@ -51,6 +52,7 @@ async function desktop(page: Page, initial: Partial<DesktopUpdateState> = {}) {
 						};
 					},
 					invoke: async (action, value) => {
+						if (action !== "state" && action !== "activity") document.documentElement.dataset.updateAction = action;
 						if (action === "check" || action === "download") delete state.error;
 						if (action === "check") patch({ status: "latest" });
 						if (action === "download")
@@ -136,3 +138,37 @@ test("unconfigured builds and error states are honest; ordinary browsers hide th
 	await panel.getByRole("button", { name: "重试" }).click();
 	await expect(panel.getByText("已是最新版本")).toBeVisible();
 });
+
+for (const width of [1360, 390]) {
+	test("update errors offer the correct recovery action at " + width, async ({ page }, testInfo) => {
+		await page.setViewportSize({ width, height: 900 });
+		await desktop(page);
+		await openUpdates(page);
+		const panel = page.locator("#settings-panel-updates");
+		await expect(panel.getByText("更新源 · 333-wg/pi-wm")).toBeVisible();
+		for (const [error, retryAction, description] of [
+			["no-release", "check", "尚无可用的正式版本"],
+			["metadata", "check", "更新文件缺失"],
+			["timeout", "check", "连接更新源超时"],
+			["rate-limit", "check", "请求过于频繁"],
+			["access", "check", "更新源拒绝访问"],
+			["disk", "download", "磁盘空间不足"],
+			["permission", "download", "无法写入更新缓存"],
+			["integrity", "download", "已阻止安装"],
+		] as const) {
+			await patch(page, { status: "error", error, retryAction, nextVersion: "0.1.3" });
+			await expect(panel.getByRole("alert")).toContainText(description);
+			await expect(panel.getByRole("button", { name: "重启并安装", exact: true })).toHaveCount(0);
+			await panel
+				.getByRole("button", { name: retryAction === "check" ? "重新检查更新" : "重新下载", exact: true })
+				.click();
+			await expect(page.locator("html")).toHaveAttribute("data-update-action", retryAction);
+		}
+		await patch(page, { status: "error", error: "integrity", retryAction: "download" });
+		await expect(panel.getByRole("button", { name: "检查更新", exact: true })).toBeVisible();
+		await page.screenshot({ path: testInfo.outputPath("update-error-" + width + ".png"), fullPage: true });
+		expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+		await panel.getByRole("button", { name: "检查更新", exact: true }).click();
+		await expect(page.locator("html")).toHaveAttribute("data-update-action", "check");
+	});
+}

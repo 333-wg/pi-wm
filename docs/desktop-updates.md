@@ -16,7 +16,9 @@
 
 Use a **public release repository**. It may be separate from the private source repository; publishing installation binaries does not require publishing source code. No GitHub access token belongs in the desktop package.
 
-The update repository is baked into each build. Choose a stable owner/repository before distributing the first update-enabled installer. The older 0.1.2 builds without this feature need one manual installation to acquire the updater.
+The update repository is baked into each build. New builds default to **333-wg/pi-wm**, configured in `apps/desktop/package.json` as `desktopUpdateRepository`. The older 0.1.2 builds without this feature or without an update source need one manual installation to acquire the configured updater. Editing the source repository does not reconfigure an already installed binary.
+
+Set `WUMING_UPDATE_REPOSITORY=owner/repository` to use a separate public release repository, or set it to `disabled` to intentionally build without an update source. Blank or unset values use the package default. GitHub URLs, credentials and malformed repository names are rejected.
 
 ## Build on Windows x64
 
@@ -26,7 +28,7 @@ Use Node 22.19+ (Node 22), as required by the existing desktop runtime packaging
 
    npm version 0.1.3 --workspace @wuming/desktop --no-git-tag-version
 
-2. Set the public release repository in PowerShell. Replace the example before running:
+2. Normally no update-source environment variable is needed. To override the default for a dedicated test repository, set it in PowerShell:
 
    $env:WUMING_UPDATE_REPOSITORY = 'YOUR_OWNER/YOUR_RELEASE_REPOSITORY'
 
@@ -36,9 +38,35 @@ Use Node 22.19+ (Node 22), as required by the existing desktop runtime packaging
    npm run test:desktop
    npm run desktop:dist
 
-The build script validates the repository and injects both electron-builder's GitHub publish configuration and the desktop's repository metadata. It always uses publish=never, even if GH_TOKEN is present. Without WUMING_UPDATE_REPOSITORY, it produces an explicitly unconfigured build.
+The build script validates the repository and injects both electron-builder's GitHub publish configuration and the desktop's repository metadata. It always uses publish=never, even if GH_TOKEN is present. Configured installer builds automatically run release-file verification after packaging; directory-only builds do not have release metadata to verify.
 
 Before uploading, verify release/win-unpacked/resources/app-update.yml points to the expected public repository. Do not edit generated checksums or rename the installer after building.
+
+### Verify Release Files
+
+```sh
+npm run verify:desktop:release
+```
+
+This read-only gate checks the desktop version, the expected Windows x64 filename, installer size and SHA-512 against both metadata entries in `latest.yml`, blockmap structure/coverage, and the packaged public GitHub source in `app-update.yml`. It rejects artifacts from mixed builds. Rebuild the entire release on failure; do not fix a checksum by hand. Blockmap coverage is not a cryptographic verification of every blockmap checksum, and this gate does not verify publisher signatures or installation behavior.
+
+### Failure Recovery
+
+The About & updates page shows the configured repository and bounded error categories, never raw provider errors, request URLs, filesystem paths or credentials. Missing stable releases, incomplete release metadata, network timeouts, access/rate-limit failures, disk space, cache permissions, and checksum/signature failures have separate messages.
+
+A failed check clears any previous release selection and retries checking. A missing installer asset returns to checking so a repaired release can be discovered. Interrupted or rejected downloads can be downloaded again, or the user can explicitly check for newer metadata. Failed checksum/signature verification never enables installation. An installation failure preserves the restart action instead of being overwritten by a periodic check.
+
+### Automated Verification
+
+```sh
+npm run test:desktop
+npx playwright test e2e/desktop-updates.spec.ts
+npm run verify:desktop:updates
+```
+
+The download test uses the real `electron-updater` NSIS implementation against an isolated loopback HTTP server and disposable cache. It exercises missing metadata, version discovery, corrupt payload rejection and a successful retry. The payload is not an executable; the test never installs, restarts or accesses a real user profile. This test uses Node loopback sockets in place of Electron networking and does not claim GitHub availability, differential-download verification, code-signing acceptance or a real N-to-N+1 installation.
+
+The Playwright suite checks recovery actions and desktop/mobile layout. The native Electron check covers the menu and preload IPC in development mode; it is not a production update installation test.
 
 ## Publish a Release
 

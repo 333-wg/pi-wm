@@ -1,6 +1,6 @@
 import { _electron as electron, expect } from "@playwright/test";
 import { createRequire } from "node:module";
-import { mkdtemp, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,13 @@ try {
 		timeout: 60_000,
 	});
 	const page = await desktop.firstWindow();
+	await desktop.evaluate(({ BrowserWindow }) => {
+		for (const window of BrowserWindow.getAllWindows()) {
+			window.webContents.setBackgroundThrottling(false);
+			window.hide();
+			window.on("show", () => window.hide());
+		}
+	});
 	const errors = [];
 	page.on("pageerror", (error) => errors.push(error.message));
 	await expect(page.locator(".welcome-screen")).toBeVisible();
@@ -34,6 +41,7 @@ try {
 	assert.equal(state.status, "disabled");
 	assert.equal(state.disabledReason, "development");
 	assert.equal(state.currentVersion, version);
+	assert.equal(state.repository, "333-wg/pi-wm");
 	await desktop.evaluate(({ Menu }) =>
 		Menu.getApplicationMenu()
 			.items[0].submenu.items.find((item) => item.label === "关于与更新")
@@ -69,15 +77,22 @@ try {
 	await page.reload();
 	await expect(page.locator(".connection")).toHaveClass(/connected/);
 	assert.equal((await page.evaluate(() => window.wumingDesktop.updates.invoke("state"))).autoCheck, false);
-	assert.equal((await page.evaluate(() => window.wumingDesktop.updates.invoke("activity"))).busy, false);
+	// Reload briefly has real in-flight requests; wait for idle instead of weakening the installation gate.
+	await expect
+		.poll(async () => (await page.evaluate(() => window.wumingDesktop.updates.invoke("activity"))).busy)
+		.toBe(false);
 	await desktop.evaluate(({ Menu }) =>
 		Menu.getApplicationMenu()
 			.items[0].submenu.items.find((item) => item.label === "关于与更新")
 			.click()
 	);
 	await expect(panel).toBeVisible();
-	await page.screenshot({ path: join(output, "development.png") });
 	assert.deepEqual(errors, []);
+	// Visual snapshots are covered by the browser suite; hidden native captures can stall on Windows.
+	await writeFile(
+		join(output, "verification.json"),
+		JSON.stringify({ version, repository: state.repository, mode: "development", passed: true, errors }, null, 2)
+	);
 	console.log(
 		"Desktop updates: native menu, isolated IPC, invalid-action validation, version, activity and reload persistence passed."
 	);

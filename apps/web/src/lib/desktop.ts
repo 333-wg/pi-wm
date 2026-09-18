@@ -66,7 +66,20 @@ export interface DesktopUpdateState {
 	bytesPerSecond?: number;
 	busy?: boolean;
 	activityUnknown?: boolean;
-	error?: "network" | "busy" | "service" | "install";
+	error?:
+		| "network"
+		| "timeout"
+		| "no-release"
+		| "metadata"
+		| "integrity"
+		| "disk"
+		| "permission"
+		| "rate-limit"
+		| "access"
+		| "busy"
+		| "service"
+		| "install";
+	retryAction?: "check" | "download" | "restart";
 }
 
 export type DesktopUpdateAction =
