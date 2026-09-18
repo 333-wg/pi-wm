@@ -32,11 +32,34 @@ Pi-Wm 把对话、项目文件、Git 改动、终端、浏览器预览和多 Age
 
 ## 界面预览
 
-<p align="center">
-  <img src="docs/images/browser-preview.png" alt="Pi-Wm 桌面工作台：左侧会话列表、中间任务对话、右侧内置浏览器预览" width="1100">
-</p>
+<table>
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/images/login.png"><img src="docs/images/login.png" alt="Pi-Wm 登录页，包含欢迎介绍与访问密码输入框" width="520"></a>
+      <br><strong>登录与欢迎</strong>
+      <br><sub>从欢迎页进入个人工作空间</sub>
+    </td>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/images/workbench.png"><img src="docs/images/workbench.png" alt="Pi-Wm 主工作台，展示项目侧栏、功能导航和新任务输入区" width="520"></a>
+      <br><strong>项目工作台</strong>
+      <br><sub>对话、文件、终端与工具集中在同一界面</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/images/agent-teams.png"><img src="docs/images/agent-teams.png" alt="Agent Teams 协作界面，展示图书管理系统任务的成员、依赖关系与通信流" width="520"></a>
+      <br><strong>Agent Teams 协作</strong>
+      <br><sub>查看成员分工、任务依赖和团队消息</sub>
+    </td>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/images/appearance-settings.png"><img src="docs/images/appearance-settings.png" alt="外观设置界面，展示浅色与深色配色、语言和后台任务通知选项" width="520"></a>
+      <br><strong>外观与偏好</strong>
+      <br><sub>选择配色、界面语言与任务通知</sub>
+    </td>
+  </tr>
+</table>
 
-<p align="center"><sub>桌面端内置浏览器。截图来自本地自动化验证，右侧为测试页面，不代表真实模型任务的执行效果。</sub></p>
+<p align="center"><sub>点击图片查看原图。截图中的模型名称与任务内容仅作界面示例，不代表预置服务或可用额度。</sub></p>
 
 ## 核心功能
 
