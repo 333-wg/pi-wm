@@ -42,6 +42,7 @@ export function BrowserPanel({
 	const requestedUrl = useRef(initialUrl);
 	requestedUrl.current = initialUrl;
 	const active = state?.tabs.find((tab) => tab.id === state.activeId);
+	const zoomOptions = [...new Set([0.5, 0.75, 1, 1.25, 1.5, 2, active?.zoom ?? 1])].sort((a, b) => a - b);
 	const accept = useCallback(
 		(next: BrowserState) => {
 			if (next.workspaceId === workspaceId && next.sessionId === sessionId)
@@ -317,9 +318,9 @@ export function BrowserPanel({
 					value={active?.zoom ?? 1}
 					onChange={(event) => command("zoom", { zoom: Number(event.target.value) })}
 				>
-					{[0.5, 0.75, 1, 1.25, 1.5, 2].map((zoom) => (
+					{zoomOptions.map((zoom) => (
 						<option key={zoom} value={zoom}>
-							{zoom * 100}%
+							{Math.round(zoom * 100)}%
 						</option>
 					))}
 				</select>

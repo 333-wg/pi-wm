@@ -34,6 +34,7 @@
 		"verify:desktop:chrome": "npm run build && node scripts/verify-desktop-chrome.mjs",
 		"verify:desktop:browser": "npm run build && node scripts/verify-desktop-browser.mjs",
 		"verify:desktop:updates": "npm run build && node scripts/verify-desktop-updates.mjs",
+		"verify:desktop:update-flow": "node scripts/verify-desktop-update-flow.mjs",
 		"verify:desktop:release": "node scripts/verify-desktop-release.mjs",
 		"verify:desktop:workflows": "npm run build && node scripts/verify-desktop-workflows.mjs",
 		"verify:desktop:installer": "node scripts/verify-desktop-installer.mjs",

@@ -1,10 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 
+const ZOOM_FACTORS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
 export function browserUrl(value) {
 	if (typeof value !== "string" || value.length > 8192) throw new Error("Invalid browser address");
 	const text = value.trim();
-	const local = /^(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/i.test(text);
-	const url = new URL(local ? "http://" + text : /^[a-z][a-z\d+.-]*:/i.test(text) ? text : "https://" + text);
+	const local = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?=[:/?#]|$)/i.test(text);
+	const hostPort = /^[^\s/:?#]+\.[^\s/:?#]+:\d+(?=[/?#]|$)/u.test(text);
+	const url = new URL(
+		local ? "http://" + text : !hostPort && /^[a-z][a-z\d+.-]*:/i.test(text) ? text : "https://" + text
+	);
 	if (!["http:", "https:"].includes(url.protocol) || url.username || url.password)
 		throw new Error("Only HTTP(S) addresses without credentials are allowed");
 	return url.href;
@@ -17,6 +22,12 @@ export function browserPartition(workspaceId) {
 function identity(value) {
 	if (typeof value !== "string" || !value || value.length > 256) throw new Error("Invalid browser owner");
 	return value;
+}
+
+function currentTabUrl(tab) {
+	if (tab.navigation?.pending) return tab.navigation.url;
+	const url = tab.view.webContents.getURL();
+	return url && url !== "about:blank" ? url : tab.url;
 }
 
 export function browserBounds(value, size, zoom = 1) {
@@ -66,7 +77,7 @@ export class BrowserPreview {
 					const wc = tab.view.webContents;
 					return {
 						id: tab.id,
-						url: wc.getURL() || tab.url,
+						url: currentTabUrl(tab),
 						title: wc.getTitle(),
 						loading: wc.isLoading(),
 						error: tab.error,
@@ -105,21 +116,50 @@ export class BrowserPreview {
 				navigateOnDragDrop: false,
 			},
 		});
-		const tab = { id: randomUUID(), group, view, url, error: undefined };
+		const tab = { id: randomUUID(), group, view, url, error: undefined, navigation: undefined };
 		this.tabs.set(tab.id, tab);
 		group.activeId = tab.id;
 		view.setVisible(false);
 		this.window.contentView.addChildView(view);
 		const wc = view.webContents;
 		const update = () => this.emit(group);
-		for (const name of ["did-stop-loading", "did-navigate", "did-navigate-in-page", "page-title-updated"])
-			wc.on(name, update);
+		wc.on("page-title-updated", update);
+		wc.on("did-navigate-in-page", (_event, target, mainFrame) => {
+			if (!mainFrame) return;
+			tab.url = target;
+			// An old document may change its route while another destination is still pending.
+			if (tab.navigation?.committed) tab.navigation.url = target;
+			update();
+		});
+		wc.on("did-start-navigation", (_event, target, inPlace, mainFrame) => {
+			if (!mainFrame || inPlace) return;
+			if (!tab.navigation || tab.navigation.started || tab.navigation.url !== target)
+				tab.navigation = { url: target, cancelled: false, pending: true, committed: false };
+			tab.navigation.started = true;
+			tab.url = target;
+			tab.error = undefined;
+			update();
+		});
+		for (const name of ["did-redirect-navigation", "did-navigate"])
+			wc.on(name, (_event, target, _inPlace, mainFrame) => {
+				if (name === "did-redirect-navigation" && !mainFrame) return;
+				if (tab.navigation) {
+					tab.navigation.url = target;
+					if (name === "did-navigate") tab.navigation.committed = true;
+				}
+				tab.url = target;
+				update();
+			});
+		wc.on("did-stop-loading", () => {
+			if (tab.navigation) tab.navigation.pending = false;
+			update();
+		});
 		wc.on("did-start-loading", () => {
 			tab.error = undefined;
 			update();
 		});
-		wc.on("did-fail-load", (_event, code, description, _url, mainFrame) => {
-			if (mainFrame && code !== -3) {
+		wc.on("did-fail-load", (_event, code, description, target, mainFrame) => {
+			if (mainFrame && code !== -3 && !tab.navigation?.cancelled && target === tab.navigation?.url) {
 				tab.error = description;
 				update();
 			}
@@ -137,10 +177,15 @@ export class BrowserPreview {
 				}
 			});
 		wc.on("will-attach-webview", (event) => event.preventDefault());
+		wc.on("zoom-changed", (_event, direction) => this.stepZoom(tab, direction));
 		wc.on("before-input-event", (event, input) => {
 			if (input.type !== "keyDown") return;
 			const key = input.key.toLowerCase();
-			if ((input.control || input.meta) && ["l", "r", "w"].includes(key)) {
+			if ((input.control || input.meta) && !input.alt && ["+", "=", "-", "_", "0"].includes(key)) {
+				event.preventDefault();
+				if (key === "0") this.setZoom(tab, 1);
+				else this.stepZoom(tab, key === "-" || key === "_" ? "out" : "in");
+			} else if ((input.control || input.meta) && ["l", "r", "w"].includes(key)) {
 				event.preventDefault();
 				if (key === "l") {
 					this.window.webContents.focus();
@@ -176,6 +221,22 @@ export class BrowserPreview {
 		return tab;
 	}
 
+	setZoom(tab, zoom) {
+		if (!Number.isFinite(zoom) || zoom < 0.5 || zoom > 2) throw new Error("Invalid zoom");
+		tab.view.webContents.setZoomFactor(zoom);
+		// Chromium shares origin zoom across live tabs in the same partition.
+		for (const group of this.groups.values()) this.emit(group);
+	}
+
+	stepZoom(tab, direction) {
+		const current = tab.view.webContents.getZoomFactor();
+		const next =
+			direction === "in"
+				? (ZOOM_FACTORS.find((zoom) => zoom > current + 0.001) ?? 2)
+				: (ZOOM_FACTORS.findLast((zoom) => zoom < current - 0.001) ?? 0.5);
+		this.setZoom(tab, next);
+	}
+
 	remove(tab, destroy = true) {
 		if (!this.tabs.delete(tab.id)) return;
 		if (this.visible?.id === tab.id) {
@@ -206,11 +267,7 @@ export class BrowserPreview {
 		if (action === "state") return this.snapshot(group);
 		if (action === "open") {
 			const url = request.url ? browserUrl(request.url) : "";
-			let tab =
-				url &&
-				[...this.tabs.values()].find(
-					(entry) => entry.group === group && (entry.view.webContents.getURL() || entry.url) === url
-				);
+			let tab = url && [...this.tabs.values()].find((entry) => entry.group === group && currentTabUrl(entry) === url);
 			if (!tab) {
 				tab = this.create(group, url);
 				if (url) this.load(tab, url);
@@ -247,12 +304,17 @@ export class BrowserPreview {
 				else if (tab.url) this.load(tab, tab.url);
 				break;
 			case "stop":
+				if (tab.navigation) {
+					tab.navigation.cancelled = true;
+					tab.navigation.pending = false;
+				}
 				wc.stop();
+				tab.url = wc.getURL() === "about:blank" ? "" : wc.getURL();
+				tab.error = undefined;
 				break;
 			case "zoom":
-				if (!Number.isFinite(request.zoom) || request.zoom < 0.5 || request.zoom > 2) throw new Error("Invalid zoom");
-				wc.setZoomFactor(request.zoom);
-				break;
+				this.setZoom(tab, request.zoom);
+				return this.snapshot(group);
 			case "devtools":
 				wc.openDevTools({ mode: "detach" });
 				break;
@@ -284,8 +346,16 @@ export class BrowserPreview {
 	load(tab, url) {
 		tab.url = url;
 		tab.error = undefined;
+		const navigation = { url, started: false, cancelled: false, pending: true, committed: false };
+		tab.navigation = navigation;
 		void tab.view.webContents.loadURL(url).catch((error) => {
-			if (this.tabs.has(tab.id) && error.code !== "ERR_ABORTED") {
+			if (
+				this.tabs.has(tab.id) &&
+				tab.navigation === navigation &&
+				!navigation.cancelled &&
+				error.code !== "ERR_ABORTED"
+			) {
+				navigation.pending = false;
 				tab.error = error.message;
 				this.emit(tab.group);
 			}

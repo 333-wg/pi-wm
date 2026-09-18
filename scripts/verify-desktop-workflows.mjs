@@ -98,7 +98,7 @@ async function selectSession(id) {
 	);
 	await page.reload();
 	await expect(page.locator(".connection")).toHaveClass(/connected/);
-	await expect(page.locator("h1")).toHaveText(selected.session.name);
+	await expect(page.locator(".session-entry.selected .session-open")).toHaveText(selected.session.name);
 	await expect.poll(async () => page.locator(".composer textarea").isEnabled()).toBe(true);
 }
 async function prompt(scenario) {

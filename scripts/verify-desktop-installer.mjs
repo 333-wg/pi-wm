@@ -50,8 +50,15 @@ try {
 		join(root, "scripts", "verify-desktop-workflows.mjs"),
 		`--packaged=${join(payload, `${productName}.exe`)}`,
 	]);
+	await run(process.execPath, [
+		join(root, "scripts", "verify-desktop-browser.mjs"),
+		`--packaged=${join(payload, `${productName}.exe`)}`,
+	]);
+	report.browserPassed = true;
 	report.passed = true;
-	console.log("Installer payload passed isolated desktop workflows; NSIS installation was not executed.");
+	console.log(
+		"Installer payload passed isolated desktop workflows and browser checks; NSIS installation was not executed."
+	);
 } catch (error) {
 	report.error = error.message;
 	throw error;

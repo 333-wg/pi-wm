@@ -26,7 +26,7 @@ Use Node 22.19+ (Node 22), as required by the existing desktop runtime packaging
 
 1. Increase the desktop version using npm so the lockfile also stays in sync:
 
-   npm version 0.1.3 --workspace @wuming/desktop --no-git-tag-version
+   npm version 0.1.4 --workspace @wuming/desktop --no-git-tag-version
 
 2. Normally no update-source environment variable is needed. To override the default for a dedicated test repository, set it in PowerShell:
 
@@ -68,11 +68,25 @@ The download test uses the real `electron-updater` NSIS implementation against a
 
 The Playwright suite checks recovery actions and desktop/mobile layout. The native Electron check covers the menu and preload IPC in development mode; it is not a production update installation test.
 
+### Packaged In-App Update Verification
+
+After building a newer release, retain the previous version's `win-unpacked` directory and run:
+
+```powershell
+npm run verify:desktop:update-flow -- --baseline="D:\previous-release\win-unpacked\Pi-Wm.exe"
+```
+
+The test relocates both packaged applications outside the source checkout. It uses one disposable profile, a separate updater cache and a loopback update server serving the actual new installer. It drives the About & updates buttons through real preload IPC and Electron networking: missing metadata, cancellation, checksum rejection, retry, verified cached download after restart, declined confirmation, and the NSIS installation handoff. It also opens the new application directly with the old test profile to check session and preference compatibility.
+
+The feed is overridden only in the disposable test process. The real `quitAndInstall` / NSIS argument construction executes, but the final OS process launch is intercepted. **This is not proof that NSIS replaced an installed application.** It never installs on the developer machine, changes registry entries, publishes a release, or modifies an existing user's profile. `test-results/desktop-update-flow/report.json` records these boundaries explicitly. A clean Windows VM still needs an actual N-to-N+1 installation test before public rollout.
+
+For users, the intended path is **Settings > About & updates > Check for updates > Download > Restart & install**. GitHub hosts the files; users do not need to visit its website to download each update. Merely pushing source code is insufficient: the configured public repository needs a published stable release with the matching installer, blockmap and `latest.yml`. Old builds without a configured updater still require one initial manual installation.
+
 ## Publish a Release
 
-Create a draft GitHub Release with a version tag matching the desktop version, for example v0.1.3. Attach the complete generated update set:
+Create a draft GitHub Release with a version tag matching the desktop version, for example v0.1.4. Attach the complete generated update set:
 
-- Pi-Wm-0.1.3-Setup-x64.exe
+- Pi-Wm-0.1.4-Setup-x64.exe
 - The matching .exe.blockmap
 - latest.yml
 
