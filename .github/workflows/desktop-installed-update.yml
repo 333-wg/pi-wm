@@ -27,7 +27,6 @@ jobs:
       UPDATE_RELEASE_ID: ${{ inputs.release_id }}
       UPDATE_BASELINE_VERSION: ${{ inputs.baseline_version }}
       UPDATE_TARGET_VERSION: ${{ inputs.target_version }}
-      UPDATE_FIXTURE_DIRECTORY: ${{ runner.temp }}\desktop-update-fixture
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,8 +38,11 @@ jobs:
         run: node scripts/download-desktop-update-fixture.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          UPDATE_FIXTURE_DIRECTORY: ${{ runner.temp }}\desktop-update-fixture
       - name: Install candidate and exercise actual in-app replacement and restart
         run: node scripts/verify-desktop-installed-update.mjs
+        env:
+          UPDATE_FIXTURE_DIRECTORY: ${{ runner.temp }}\desktop-update-fixture
       - name: Keep upgrade evidence
         if: always()
         uses: actions/upload-artifact@v4
