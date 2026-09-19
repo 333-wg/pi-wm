@@ -110,11 +110,23 @@ No GitHub repository, release, tag or upload is created by this implementation. 
 
 The `Desktop Installed Update` workflow runs only when manually dispatched on an ephemeral GitHub-hosted Windows runner. Its script refuses to run locally or on a self-hosted runner because this test deliberately installs software and updates the Windows registry.
 
-Build the candidate normally, then run `node scripts/build-desktop-update-fixture.mjs` to produce an unpublished higher-version installer from the same application source in `test-results/desktop-update-fixture`. Neither command publishes anything. Keep the candidate assets and the higher-version fixture in a draft release; name the fixture's metadata asset `update-test-latest.yml`. The workflow validates GitHub asset SHA-256 digests before execution.
+For a real release, build the candidate normally and use a lower-version installer with a configured updater as the baseline. Keep both installers, the candidate's blockmap and `latest.yml` in the draft release. Upload a second copy of the candidate's metadata named `update-test-latest.yml` for the test downloader. Dispatch the workflow with the draft release ID, baseline version and candidate target version. The workflow validates GitHub asset SHA-256 digests before execution.
 
-The test installs the real candidate, creates isolated test data, drives its update UI against a loopback server serving the actual higher-version installer, and executes the unmodified NSIS launch with silent/restart flags. It checks replacement of the installed binary, updated Windows registration, automatic restart, and preservation of the session, workspace file and settings. Only the update feed and native confirmation response are automated; installer spawning, installation, quitting and restarting are not mocked.
+The test installs the baseline, creates isolated test data, drives its update UI against a loopback server serving the candidate installer, and executes the unmodified NSIS launch with silent/restart flags. It checks the original Windows process exits, replacement of the installed binary, updated Windows registration, automatic restart, and preservation of the session, workspace file and settings. Only the update feed and native confirmation response are automated; installer spawning, installation, quitting and restarting are not mocked.
 
-Remove all higher-version fixture assets from the draft before publishing the candidate's stable release. Never publish the fixture version or treat it as a product release. The evidence records which two versions were installed; GitHub-hosted download reachability is checked separately after publication. Unsigned test installers still require a signing plan for wider distribution.
+After the gate passes, remove the baseline installer, any baseline blockmap and `update-test-latest.yml` from this draft. Keep the three candidate release files listed above. Do not delete the baseline's original published release. The evidence records which two versions were installed. Unsigned early releases must explicitly disclose their unsigned status and still require a signing plan for wider distribution.
+
+For testing a candidate's updater without a real next release, `node scripts/build-desktop-update-fixture.mjs` can instead create an unpublished higher-version fixture from the same application source. Neither build command publishes anything. In that variant the candidate is the baseline, and all higher-version fixture assets must be removed before publication. Never publish a fixture version as a product release.
+
+### Public Feed Check
+
+After publishing, run the read-only download check with an older packaged app:
+
+```sh
+node scripts/verify-desktop-published-update.mjs --baseline=C:/path/to/older/win-unpacked/Pi-Wm.exe
+```
+
+This launches an isolated profile, keeps the packaged GitHub provider and Electron HTTPS executor, and uses the app UI to discover and download the actual public release without a GitHub token or an external browser. It verifies the downloaded installer against the local candidate metadata. It prohibits installer execution and never overwrites the developer's installed app. Keep `test-results/desktop-published-update/report.json` alongside the Windows installation evidence; the two checks prove different parts of the update path.
 
 ## References
 

@@ -277,8 +277,26 @@ try {
 			{ timeout: 600_000, intervals: [1000] }
 		)
 		.toBe(targetVersion);
+	console.log("Target app.asar is present; waiting for the installer to finish remaining runtime files");
+	let lastInstallationProgress = 0;
 	await expect
-		.poll(() => uninstallEntries().some((entry) => entry.DisplayVersion === targetVersion), { timeout: 60_000 })
+		.poll(
+			() => {
+				const entries = uninstallEntries();
+				if (Date.now() - lastInstallationProgress >= 30_000) {
+					lastInstallationProgress = Date.now();
+					console.log("Upgrade registration:", JSON.stringify(entries));
+					console.log(
+						"Upgrade processes:",
+						powershell(
+							`@(Get-CimInstance Win32_Process | Where-Object { $_.Name -like '*Setup-x64*' -or $_.Name -eq 'Pi-Wm.exe' } | Select-Object ProcessId,Name,ExecutablePath,CommandLine) | ConvertTo-Json -Compress`
+						)
+					);
+				}
+				return entries.some((entry) => entry.DisplayVersion === targetVersion);
+			},
+			{ timeout: 600_000, intervals: [3000] }
+		)
 		.toBe(true);
 	report.installationVerified = true;
 	report.targetRegistration = uninstallEntries();
