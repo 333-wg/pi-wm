@@ -12,6 +12,7 @@ import type {
 } from "@wuming/protocol";
 import { SandboxError } from "./errors.js";
 import { WorkspacePathPolicy } from "./path-policy.js";
+import { gitRepositoryFound } from "./git-diagnostics.js";
 
 export interface WorkspaceInspectorOptions {
 	maxEntries?: number;
@@ -242,7 +243,10 @@ export class WorkspaceInspector {
 
 	async gitStatus(): Promise<GitStatus> {
 		const repository = await this.#runGit(["rev-parse", "--is-inside-work-tree"], 4096);
-		if (repository.exitCode !== 0 || repository.stdout.toString("utf8").trim() !== "true") {
+		if (
+			!gitRepositoryFound(repository.exitCode, repository.stderr.toString("utf8")) ||
+			repository.stdout.toString("utf8").trim() !== "true"
+		) {
 			return { isRepository: false, entries: [], truncated: false };
 		}
 		const branchResult = await this.#runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], 4096);
@@ -349,7 +353,7 @@ export class WorkspaceInspector {
 				shell: false,
 				windowsHide: true,
 				stdio: ["ignore", "pipe", "pipe"],
-				env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+				env: { ...process.env, LC_ALL: "C", LANG: "C", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
 			});
 			const stdout: Buffer[] = [];
 			const stderr: Buffer[] = [];
@@ -357,7 +361,11 @@ export class WorkspaceInspector {
 			let stderrSize = 0;
 			let truncated = false;
 			let settled = false;
-			const timeout = setTimeout(() => child.kill(), this.#gitTimeoutMs);
+			let timedOut = false;
+			const timeout = setTimeout(() => {
+				timedOut = true;
+				child.kill();
+			}, this.#gitTimeoutMs);
 			child.stdout.on("data", (raw: Buffer) => {
 				const appended = appendPrefix(stdout, stdoutSize, raw, maxBytes);
 				stdoutSize = appended.size;
@@ -378,6 +386,7 @@ export class WorkspaceInspector {
 				if (settled) return;
 				settled = true;
 				clearTimeout(timeout);
+				if (timedOut) return reject(new SandboxError("process_timeout", "Git 状态读取超时，请刷新后重试。"));
 				resolveResult({
 					exitCode,
 					stdout: Buffer.concat(stdout, stdoutSize),

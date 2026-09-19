@@ -734,11 +734,12 @@ export class GatewayServer implements AsyncDisposable {
         const workspaceId = this.#decodePathSegment(gitDetails[1] ?? '');
         this.#requirePrincipalWorkspace(principal, workspaceId);
         if (!this.#workspace?.gitDetails) {
-          this.#json(response, 200, { writable: false, isRepository: false, hasCommits: false, ahead: 0, behind: 0, conflicts: 0, remotes: [], blockedReason: 'Git 写操作仅在本地设备模式可用。' });
+          const status = await this.#workspace?.gitStatus(workspaceId);
+          this.#json(response, 200, { writable: false, isRepository: status?.isRepository ?? false, branch: status?.branch, hasCommits: false, ahead: 0, behind: 0, conflicts: 0, remotes: [], blockedReason: 'Git 写操作仅在本地设备模式可用。' });
           return;
         }
         const details = await this.#workspace.gitDetails(workspaceId);
-        if (!hasGatewayPermission(principal, 'workspace.write')) { details.writable = false; details.blockedReason = '当前账号没有工作区写入权限。'; }
+        if (!hasGatewayPermission(principal, 'workspace.write')) { details.writable = false; delete details.trustRequired; details.blockedReason = '当前账号没有工作区写入权限。'; }
         this.#json(response, 200, details);
         return;
       }

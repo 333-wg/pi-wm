@@ -1437,9 +1437,19 @@ async function main(): Promise<void> {
 			gitDiff: (workspaceId, path, staged) => {
 				return workspaceInspectorFor(workspaceId).gitDiff(path, staged);
 			},
+			gitDetails: async (workspaceId: string) => {
+				const details = await new WorkspaceGit(workspaceInspectorFor(workspaceId).root).details();
+				if (!localUserCapabilities) {
+					details.writable = false;
+					delete details.trustRequired;
+					delete details.workspaceRoot;
+					delete details.repositoryRoot;
+					details.blockedReason = "当前为服务器工作区，Git 写操作仅在本地设备模式可用。";
+				}
+				return details;
+			},
 			...(localUserCapabilities
 				? {
-						gitDetails: (workspaceId: string) => new WorkspaceGit(workspaceInspectorFor(workspaceId).root).details(),
 						gitAction: (workspaceId: string, action: import("@wuming/protocol").GitAction) =>
 							new WorkspaceGit(workspaceInspectorFor(workspaceId).root).action(action),
 					}

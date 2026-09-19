@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
 	ArrowDownToLine,
 	ArrowUpFromLine,
 	CloudDownload,
+	FolderGit2,
 	GitCommitHorizontal,
 	LoaderCircle,
 	Minus,
@@ -11,6 +12,7 @@ import {
 	Plus,
 	PlusSquare,
 	Settings2,
+	ShieldCheck,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -67,61 +69,61 @@ export function GitControls({
 	token,
 	workspaceId,
 	status,
+	statusError,
+	details,
+	detailsError,
 	selected,
 	staged,
 	refresh,
+	onBusyChange,
 }: {
 	token: string;
 	workspaceId: string;
 	status: GitStatus | undefined;
+	statusError: string;
+	details: GitDetails | undefined;
+	detailsError: string;
 	selected: GitStatusEntry | undefined;
 	staged: boolean;
 	refresh: () => Promise<void>;
+	onBusyChange: (busy: boolean) => void;
 }) {
-	const [details, setDetails] = useState<GitDetails>();
 	const [busy, setBusy] = useState(false);
 	const busyRef = useRef(false);
 	const mounted = useRef(true);
 	const [error, setError] = useState("");
 	const [notice, setNotice] = useState("");
-	const [dialog, setDialog] = useState<"commit" | "remotes" | "push" | "pull">();
+	const [dialog, setDialog] = useState<"commit" | "remotes" | "push" | "pull" | "trust">();
+	const [trustPath, setTrustPath] = useState("");
 	const [message, setMessage] = useState("");
 	const [remote, setRemote] = useState("");
 	const [branch, setBranch] = useState("");
 	const [remoteName, setRemoteName] = useState("origin");
 	const [remoteUrl, setRemoteUrl] = useState("");
-	const load = useCallback(async () => {
-		const value = await workspaceApi.gitDetails(token, workspaceId);
-		if (!mounted.current) return;
-		setDetails(value);
+	const selectedRemote = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (!details) {
+			setRemote("");
+			return;
+		}
 		setRemote((current) =>
-			value.remotes.some((item) => item.name === current)
+			selectedRemote.current === current && details.remotes.some((item) => item.name === current)
 				? current
-				: value.upstreamRemote && value.remotes.some((item) => item.name === value.upstreamRemote)
-					? value.upstreamRemote
-					: (value.remotes[0]?.name ?? "")
+				: details.upstreamRemote && details.remotes.some((item) => item.name === details.upstreamRemote)
+					? details.upstreamRemote
+					: (details.remotes.find((item) => item.name === "origin")?.name ?? details.remotes[0]?.name ?? "")
 		);
-	}, [token, workspaceId]);
+	}, [details]);
 	useEffect(() => {
 		mounted.current = true;
-		const reload = () => {
-			if (!busyRef.current && document.visibilityState === "visible")
-				void load().catch((cause) => {
-					if (mounted.current) setError(String(cause));
-				});
-		};
-		reload();
-		window.addEventListener("focus", reload);
-		const timer = window.setInterval(reload, 15000);
 		return () => {
 			mounted.current = false;
-			clearInterval(timer);
-			window.removeEventListener("focus", reload);
 		};
-	}, [load]);
+	}, []);
 	const execute = async (action: GitAction, after?: () => void) => {
 		if (busyRef.current) return;
 		busyRef.current = true;
+		onBusyChange(true);
 		setBusy(true);
 		setError("");
 		setNotice("");
@@ -135,17 +137,13 @@ export function GitControls({
 		} finally {
 			if (mounted.current) {
 				await refresh();
-				try {
-					await load();
-				} catch (cause) {
-					if (mounted.current) setError("操作后刷新失败：" + String(cause));
-				}
 				if (mounted.current) setBusy(false);
+				onBusyChange(false);
 			}
 			busyRef.current = false;
 		}
 	};
-	const canWrite = Boolean(details?.writable && status?.isRepository);
+	const canWrite = Boolean(details?.writable && details.isRepository && status?.isRepository);
 	const stagedCount =
 		status?.entries.filter((entry) => entry.indexStatus !== " " && entry.indexStatus !== "?").length ?? 0;
 	const pending =
@@ -156,6 +154,7 @@ export function GitControls({
 		...new Set(entries.flatMap((entry) => [entry.path, ...(entry.originalPath ? [entry.originalPath] : [])])),
 	];
 	const target = details?.remotes.find((item) => item.name === remote);
+	const tracksSelected = Boolean(details?.upstream && details.upstreamRemote === remote);
 	const openSync = (type: "push" | "pull") => {
 		setBranch(
 			details?.upstreamRemote === remote
@@ -182,9 +181,30 @@ export function GitControls({
 	);
 	return (
 		<>
+			{details?.workspaceRoot && (
+				<div className="git-repository-context" aria-label="仓库位置">
+					<FolderGit2 size={14} aria-hidden="true" />
+					<code title={details.workspaceRoot}>{details.workspaceRoot}</code>
+					{details.repositoryRoot && details.repositoryRoot !== details.workspaceRoot && (
+						<code title={details.repositoryRoot}>仓库：{details.repositoryRoot}</code>
+					)}
+				</div>
+			)}
 			<div className="git-commandbar" aria-label="Git 操作" aria-busy={busy}>
 				<div className="git-command-group">
-					{details?.writable && status?.isRepository === false ? (
+					{details?.trustRequired ? (
+						<button
+							className="git-command"
+							disabled={busy}
+							onClick={() => {
+								setTrustPath(details.trustRequired!.path);
+								setDialog("trust");
+							}}
+						>
+							<ShieldCheck size={15} />
+							信任此仓库
+						</button>
+					) : details?.writable && details.isRepository === false && status?.isRepository === false ? (
 						<button className="git-command" disabled={busy} onClick={() => void execute({ type: "init" })}>
 							<Plus size={15} />
 							初始化仓库
@@ -232,10 +252,13 @@ export function GitControls({
 						aria-label="远程仓库"
 						value={remote}
 						disabled={busy || !details?.remotes.length}
-						onChange={(event) => setRemote(event.target.value)}
+						onChange={(event) => {
+							selectedRemote.current = event.target.value;
+							setRemote(event.target.value);
+						}}
 					>
 						<option value="" disabled>
-							未配置远程
+							{details?.trustRequired ? "未信任" : details ? "未配置远程" : detailsError ? "读取失败" : "正在读取"}
 						</option>
 						{details?.remotes.map((item) => (
 							<option key={item.name} value={item.name}>
@@ -245,9 +268,21 @@ export function GitControls({
 					</select>
 					<span
 						className="git-tracking"
-						title={details?.upstream ? details.upstream + "（基于最近获取）" : "尚未关联上游分支"}
+						title={
+							tracksSelected
+								? details?.upstream + "（基于最近获取）"
+								: details
+									? "尚未关联上游分支"
+									: "尚未读取上游分支"
+						}
 					>
-						{details?.upstream ? "↑" + details.ahead + " ↓" + details.behind : "未关联"}
+						{tracksSelected
+							? "↑" + details!.ahead + " ↓" + details!.behind
+							: details?.trustRequired
+								? "--"
+								: details
+									? "未关联"
+									: "--"}
 					</span>
 					<button
 						className="icon-button"
@@ -292,7 +327,19 @@ export function GitControls({
 					</button>
 				</div>
 			</div>
-			{details?.blockedReason && <div className="git-feedback">{details.blockedReason}</div>}
+			{target && (
+				<div className="git-repository-context" aria-label="当前远程地址">
+					<span>{target.name}</span>
+					<code title={target.url}>{target.url}</code>
+					{target.pushUrl !== target.url && <code title={target.pushUrl}>推送：{target.pushUrl}</code>}
+				</div>
+			)}
+			{detailsError && detailsError !== statusError && (
+				<div className="git-feedback git-failure" role="alert">
+					{detailsError}
+				</div>
+			)}
+			{details?.blockedReason && !details.trustRequired && <div className="git-feedback">{details.blockedReason}</div>}
 			{Boolean(details?.conflicts) && (
 				<div className="git-feedback git-failure" role="alert">
 					{details?.conflicts} 个文件存在未解决冲突
@@ -308,11 +355,46 @@ export function GitControls({
 								? "远程仓库"
 								: dialog === "push"
 									? "推送提交"
-									: "拉取更新"
+									: dialog === "trust"
+										? "信任此仓库"
+										: "拉取更新"
 					}
 					busy={busy}
 					close={close}
 				>
+					{dialog === "trust" && (
+						<form
+							onSubmit={(event) => {
+								event.preventDefault();
+								void execute({ type: "trust", path: trustPath }, close);
+							}}
+						>
+							<div className="git-summary">
+								<span>本地目录</span>
+								<code>{trustPath}</code>
+							</div>
+							<p className="git-trust-warning">
+								此目录属于其他系统账号。信任后，Git 将允许读取该仓库的配置，并在相关操作中执行 Git
+								hooks。仅在确认仓库来源可信时继续。
+							</p>
+							<p className="git-trust-warning">
+								仅将此目录加入当前系统用户的 Git 信任列表，不信任其他目录，也不上传或下载代码。
+							</p>
+							{feedback}
+							<footer>
+								<button type="button" className="git-command" disabled={busy} onClick={close}>
+									取消
+								</button>
+								<button
+									className="git-command git-primary"
+									disabled={busy || trustPath !== details?.trustRequired?.path}
+								>
+									<ShieldCheck size={16} />
+									{busy ? "处理中…" : "确认信任此目录"}
+								</button>
+							</footer>
+						</form>
+					)}
 					{dialog === "commit" && (
 						<form
 							onSubmit={(event) => {
@@ -426,6 +508,7 @@ export function GitControls({
 								onSubmit={(event) => {
 									event.preventDefault();
 									void execute({ type: "remote.save", name: remoteName.trim(), url: remoteUrl.trim() }, () => {
+										selectedRemote.current = remoteName.trim();
 										setRemote(remoteName.trim());
 										setRemoteUrl("");
 									});
@@ -445,7 +528,7 @@ export function GitControls({
 									仓库地址
 									<input
 										aria-label="仓库地址"
-										placeholder="https://github.com/owner/repo.git"
+										placeholder="https://git.example.com/team/project.git"
 										value={remoteUrl}
 										maxLength={2000}
 										disabled={busy}

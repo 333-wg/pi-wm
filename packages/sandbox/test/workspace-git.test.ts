@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceGit } from "../src/workspace-git.js";
 import { WorkspaceInspector } from "../src/workspace-inspector.js";
 
@@ -11,6 +11,7 @@ const exec = promisify(execFile);
 const roots: string[] = [];
 const git = (root: string, ...args: string[]) => exec("git", args, { cwd: root, windowsHide: true });
 afterEach(async () => {
+	vi.unstubAllEnvs();
 	for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 async function repository() {
@@ -30,6 +31,85 @@ async function commit(service: WorkspaceGit, root: string, content: string) {
 }
 
 describe("WorkspaceGit", () => {
+	it("discovers external initialization, push and clone without rewriting repository configuration", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wuming-external-git-"));
+		roots.push(root);
+		const service = new WorkspaceGit(root);
+		const inspector = await WorkspaceInspector.create(root);
+		expect(await service.details()).toMatchObject({ isRepository: false });
+		expect(await inspector.gitStatus()).toMatchObject({ isRepository: false });
+		await git(root, "init", "--initial-branch=main");
+		await git(root, "config", "user.name", "External Git");
+		await git(root, "config", "user.email", "external@example.invalid");
+		await git(root, "config", "commit.gpgsign", "false");
+		await writeFile(join(root, "note.txt"), "external commit\n");
+		await git(root, "add", "note.txt");
+		await git(root, "commit", "-m", "External commit");
+		const remote = await mkdtemp(join(tmpdir(), "wuming-external-remote-"));
+		roots.push(remote);
+		await git(remote, "init", "--bare", "--initial-branch=main");
+		await git(root, "remote", "add", "origin", remote);
+		await git(root, "push", "-u", "origin", "main");
+		const config = await readFile(join(root, ".git", "config"), "utf8");
+		expect(await service.details()).toMatchObject({
+			isRepository: true,
+			writable: true,
+			hasCommits: true,
+			branch: "main",
+			upstream: "origin/main",
+			workspaceRoot: await realpath(root),
+			repositoryRoot: await realpath(root),
+			remotes: [{ name: "origin", url: remote }],
+		});
+		expect(await readFile(join(root, ".git", "config"), "utf8")).toBe(config);
+		const clone = await mkdtemp(join(tmpdir(), "wuming-external-clone-"));
+		roots.push(clone);
+		await git(clone, "clone", remote, ".");
+		const cloneConfig = await readFile(join(clone, ".git", "config"), "utf8");
+		const cloneService = new WorkspaceGit(clone);
+		expect(await cloneService.details()).toMatchObject({
+			isRepository: true,
+			writable: true,
+			branch: "main",
+			upstream: "origin/main",
+		});
+		await writeFile(join(clone, "note.txt"), "edited clone\n");
+		expect(await (await WorkspaceInspector.create(clone)).gitStatus()).toMatchObject({
+			entries: [{ path: "note.txt", worktreeStatus: "M" }],
+		});
+		expect(await readFile(join(clone, ".git", "config"), "utf8")).toBe(cloneConfig);
+	}, 30000);
+
+	it.each([
+		"https://github.com/team/project.git",
+		"https://gitlab.com/team/subgroup/project.git",
+		"https://git.company.example:8443/team/project.git",
+		"ssh://git@git.company.example:2222/team/project.git",
+		"git@company-git:team/project.git",
+		"git@gitee.com:team/project.git",
+	])("reads pre-existing remote configuration for %s", async (url) => {
+		const { root, service } = await repository();
+		await git(root, "remote", "add", "origin", url);
+		expect((await service.details()).remotes).toEqual([{ name: "origin", url, pushUrl: url }]);
+		await git(root, "remote", "set-url", "origin", url + "-changed");
+		expect((await service.details()).remotes[0]?.url).toBe(url + "-changed");
+	});
+
+	it.each(["core.sshCommand", "GIT_SSH_COMMAND", "GIT_SSH"])("preserves the existing %s transport", async (source) => {
+		const { root, service } = await repository();
+		vi.stubEnv("GIT_SSH", undefined);
+		vi.stubEnv("GIT_SSH_COMMAND", undefined);
+		vi.stubEnv("GIT_SSH_VARIANT", "ssh");
+		const script = join(root, "ssh-probe.sh").replaceAll("\\", "/");
+		await writeFile(script, "#!/bin/sh\nprintf CUSTOM_SSH_TRANSPORT >&2\nexit 1\n", { mode: 0o755 });
+		if (source === "core.sshCommand") await git(root, "config", source, '"' + script + '"');
+		else vi.stubEnv(source, source === "GIT_SSH" ? script : '"' + script + '"');
+		await git(root, "remote", "add", "origin", "git@example.invalid:team/project.git");
+		await expect(service.action({ type: "fetch", remote: "origin", branch: "main" })).rejects.toThrow(
+			"CUSTOM_SSH_TRANSPORT"
+		);
+	});
+
 	it("reports unresolved conflicts and handles staged renames without deleting files", async () => {
 		const { root, service } = await repository();
 		await commit(service, root, "base\n");

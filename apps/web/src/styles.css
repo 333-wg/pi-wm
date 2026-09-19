@@ -4248,6 +4248,10 @@ button {
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
+.git-repository-context { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); color: var(--text-soft); font-size: 11px; flex-shrink: 0; min-width: 0; }
+.git-repository-context svg { flex-shrink: 0; }
+.git-repository-context code { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.git-trust-warning { margin: 0; color: var(--text-soft); font-size: 12px; line-height: 1.7; }
 .git-command-group { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .git-command { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); font-size: 12px; cursor: pointer; }
 .git-command:disabled, .git-commandbar button:disabled, .git-dialog button:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -4553,6 +4557,14 @@ button {
 	background: var(--red-soft);
 	color: var(--red);
 	font-size: 11px;
+}
+.review-error {
+	display: block;
+	flex-shrink: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 240px;
+	overflow: auto;
 }
 .tools-workbench {
 	min-width: 0;

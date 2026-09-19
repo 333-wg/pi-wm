@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
 	ArrowDown,
 	ArrowUp,
@@ -11,72 +11,37 @@ import {
 	Search,
 	WrapText,
 } from "lucide-react";
-import type { GitDiff, GitStatus } from "@wuming/protocol";
+import type { GitDiff } from "@wuming/protocol";
 import { workspaceApi } from "../workspace-api";
 import { countChanges, parseUnifiedDiff } from "../lib/diff";
 import { DiffStat, UnifiedDiff } from "./DiffView";
 import { GitControls } from "./GitControls";
+import { useGitWorkspace } from "../use-git-workspace";
 
 export function ChangesView(props: { token: string; workspaceId: string }) {
 	return <ReviewPanel key={props.workspaceId + props.token} {...props} />;
 }
 
 function ReviewPanel({ token, workspaceId }: { token: string; workspaceId: string }) {
-	const [status, setStatus] = useState<GitStatus>();
+	const {
+		status,
+		details,
+		statusError,
+		detailsError,
+		loading: statusLoading,
+		refreshing,
+		revision,
+		refresh: refreshStatus,
+		onBusyChange,
+	} = useGitWorkspace(token, workspaceId);
 	const [path, setPath] = useState("");
 	const [staged, setStaged] = useState(false);
 	const [query, setQuery] = useState("");
 	const [split, setSplit] = useState(false);
 	const [wrap, setWrap] = useState(false);
 	const [result, setResult] = useState<{ key: string; diff: GitDiff }>();
-	const [refreshing, setRefreshing] = useState(false);
-	const [statusLoading, setStatusLoading] = useState(true);
-	const [statusError, setStatusError] = useState("");
 	const [diffError, setDiffError] = useState<{ key: string; message: string }>();
 	const [reviewed, setReviewed] = useState<Record<string, string>>({});
-	const mounted = useRef(true);
-
-	useEffect(() => {
-		mounted.current = true;
-		return () => {
-			mounted.current = false;
-		};
-	}, []);
-
-	const refreshStatus = useCallback(
-		async (quiet = false) => {
-			if (!quiet) setRefreshing(true);
-			if (!quiet) setStatusLoading(true);
-			setStatusError("");
-			try {
-				const value = await workspaceApi.status(token, workspaceId);
-				if (mounted.current) setStatus(value);
-			} catch (cause) {
-				if (mounted.current) setStatusError(String(cause));
-			} finally {
-				if (mounted.current) {
-					setRefreshing(false);
-					setStatusLoading(false);
-				}
-			}
-		},
-		[token, workspaceId]
-	);
-
-	useEffect(() => {
-		void refreshStatus();
-		const refreshWhenVisible = () => {
-			if (document.visibilityState === "visible") void refreshStatus(true);
-		};
-		const timer = window.setInterval(refreshWhenVisible, 3000);
-		window.addEventListener("focus", refreshWhenVisible);
-		document.addEventListener("visibilitychange", refreshWhenVisible);
-		return () => {
-			window.clearInterval(timer);
-			window.removeEventListener("focus", refreshWhenVisible);
-			document.removeEventListener("visibilitychange", refreshWhenVisible);
-		};
-	}, [refreshStatus]);
 	const entries = useMemo(
 		() =>
 			(status?.entries ?? []).filter(
@@ -96,7 +61,10 @@ function ReviewPanel({ token, workspaceId }: { token: string; workspaceId: strin
 			workspaceApi
 				.diff(token, workspaceId, selectedPath, staged)
 				.then((diff) => {
-					if (active) setResult({ key, diff });
+					if (active) {
+						setResult({ key, diff });
+						setDiffError(undefined);
+					}
 				})
 				.catch((cause) => {
 					if (active) setDiffError({ key, message: String(cause) });
@@ -104,7 +72,7 @@ function ReviewPanel({ token, workspaceId }: { token: string; workspaceId: strin
 		return () => {
 			active = false;
 		};
-	}, [token, workspaceId, selectedPath, staged, key]);
+	}, [token, workspaceId, selectedPath, staged, key, revision]);
 	const diff = result?.key === key ? result.diff : undefined;
 	const error = statusError || (diffError?.key === key ? diffError.message : "");
 	const loading = statusLoading || Boolean(selectedPath && !diff && !error);
@@ -170,19 +138,21 @@ function ReviewPanel({ token, workspaceId }: { token: string; workspaceId: strin
 					))}
 				</div>
 				<div className="workbench-notice">
-					{status && !status.isRepository
-						? "当前工作区不是 Git 仓库"
-						: statusLoading
-							? "正在读取 Git 更改..."
-							: refreshing
-								? "正在刷新更改..."
-								: entries.length
-									? entries.length + " 个文件"
-									: query
-										? "没有匹配的文件"
-										: staged
-											? "没有已暂存更改"
-											: "没有未暂存更改"}
+					{statusError
+						? "Git 状态读取失败"
+						: status && !status.isRepository
+							? "当前工作区不是 Git 仓库"
+							: statusLoading
+								? "正在读取 Git 更改..."
+								: refreshing
+									? "正在刷新更改..."
+									: entries.length
+										? entries.length + " 个文件"
+										: query
+											? "没有匹配的文件"
+											: staged
+												? "没有已暂存更改"
+												: "没有未暂存更改"}
 				</div>
 				{status?.truncated && <div className="workbench-notice">状态列表已截断</div>}
 			</aside>
@@ -191,9 +161,13 @@ function ReviewPanel({ token, workspaceId }: { token: string; workspaceId: strin
 					token={token}
 					workspaceId={workspaceId}
 					status={status}
+					statusError={statusError}
+					details={details}
+					detailsError={detailsError}
 					selected={selected}
 					staged={staged}
 					refresh={refreshStatus}
+					onBusyChange={onBusyChange}
 				/>
 				<div className="editor-heading review-heading">
 					<GitCompareArrows size={15} />
@@ -267,7 +241,7 @@ function ReviewPanel({ token, workspaceId }: { token: string; workspaceId: strin
 					</button>
 				</div>
 				{error && (
-					<div className="workbench-error" role="alert">
+					<div className="workbench-error review-error" role="alert">
 						{error}
 					</div>
 				)}
@@ -293,11 +267,13 @@ function ReviewPanel({ token, workspaceId }: { token: string; workspaceId: strin
 											: "工作区干净"}
 						</strong>
 						<span>
-							{query
-								? "没有文件匹配当前筛选条件。"
-								: staged
-									? "暂存文件后，差异会显示在这里。"
-									: "修改或新增文件后，差异会显示在这里。"}
+							{status?.isRepository === false
+								? "此目录尚未初始化 Git。"
+								: query
+									? "没有文件匹配当前筛选条件。"
+									: staged
+										? "暂存文件后，差异会显示在这里。"
+										: "修改或新增文件后，差异会显示在这里。"}
 						</span>
 					</div>
 				)}

@@ -994,6 +994,7 @@ export type GitDiff = Static<typeof GitDiffSchema>;
 
 export const GitActionSchema = Type.Union([
 	StrictObject({ type: Type.Literal("init") }),
+	StrictObject({ type: Type.Literal("trust"), path: Type.String({ minLength: 1, maxLength: 4000 }) }),
 	StrictObject({
 		type: Type.Union([Type.Literal("stage"), Type.Literal("unstage")]),
 		paths: Type.Array(Type.String({ minLength: 1, maxLength: 4000 }), { minItems: 1, maxItems: 2000 }),
@@ -1016,6 +1017,9 @@ export type GitAction = Static<typeof GitActionSchema>;
 export interface GitDetails {
 	writable: boolean;
 	isRepository: boolean;
+	workspaceRoot?: string;
+	repositoryRoot?: string;
+	trustRequired?: { path: string };
 	branch?: string;
 	hasCommits: boolean;
 	upstream?: string;

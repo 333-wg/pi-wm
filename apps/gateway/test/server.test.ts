@@ -525,12 +525,16 @@ describe("GatewayServer", () => {
 			});
 		expect((await sendAction("bad", '{"type":"init"}')).status).toBe(401);
 		expect((await sendAction("reader", '{"type":"init"}')).status).toBe(403);
+		expect((await sendAction("reader", JSON.stringify({ type: "trust", path: root }))).status).toBe(403);
+		expect((await sendAction("writer", JSON.stringify({ type: "trust", path: root }), "other")).status).toBe(403);
+		expect((await sendAction("writer", JSON.stringify({ type: "trust", path: "*" }))).status).toBe(409);
 		expect((await sendAction("writer", '{"type":"init"}', "other")).status).toBe(403);
 		expect((await sendAction("writer", '{"type":"init"}', workspace.id, "https://evil.invalid")).status).toBe(403);
 		for (const body of [
 			"bad-json",
 			'{"type":"push","remote":"origin","branch":"main","force":true}',
 			'{"type":"stage","paths":[]}',
+			'{"type":"trust"}',
 			'{"type":"shell","command":"whoami"}',
 		])
 			expect((await sendAction("writer", body)).status).toBe(400);

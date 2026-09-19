@@ -1,18 +1,14 @@
 import { spawn } from "node:child_process";
-import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GitAction, GitActionResult, GitDetails } from "@wuming/protocol";
 import { WorkspaceInspector } from "./workspace-inspector.js";
+import { gitRepositoryFound, isGitOwnershipError, redactGitOutput as redact } from "./git-diagnostics.js";
 
 const activeRoots = new Set<string>();
 const fail = (message: string, httpStatus = 400): Error => Object.assign(new Error(message), { httpStatus });
-const redact = (text: string): string =>
-	text
-		.replace(/(https?:\/\/)[^\s/@]+(?::[^\s/@]*)?@/gi, "$1[redacted]@")
-		.replace(/(ssh:\/\/[^\s/:@]+:)[^\s@]+@/gi, "$1[redacted]@")
-		.replace(/([?&](?:token|access_token|private_token|password)=)[^\s&]+/gi, "$1[redacted]");
 
-/** Explicit local-user Git actions. Server deployments must not expose this service. */
+/** Repository inspection plus explicit Git mutations, which must remain local-device-only. */
 export class WorkspaceGit {
 	constructor(
 		readonly root: string,
@@ -20,9 +16,34 @@ export class WorkspaceGit {
 	) {}
 
 	async details(): Promise<GitDetails> {
+		const workspaceRoot = await realpath(this.root);
 		const top = await this.run(["rev-parse", "--show-toplevel"], true);
-		if (top.code !== 0)
-			return { writable: true, isRepository: false, hasCommits: false, ahead: 0, behind: 0, conflicts: 0, remotes: [] };
+		if (top.code !== 0 && isGitOwnershipError(top.stderr) && (await this.hasGitMarker())) {
+			return {
+				writable: false,
+				isRepository: true,
+				workspaceRoot,
+				trustRequired: { path: workspaceRoot },
+				hasCommits: false,
+				ahead: 0,
+				behind: 0,
+				conflicts: 0,
+				remotes: [],
+				blockedReason: "Git 因目录所有者不同而拒绝访问，请确认仓库来源后再信任。",
+			};
+		}
+		if (!gitRepositoryFound(top.code, top.stderr))
+			return {
+				writable: true,
+				isRepository: false,
+				workspaceRoot,
+				hasCommits: false,
+				ahead: 0,
+				behind: 0,
+				conflicts: 0,
+				remotes: [],
+			};
+		const repositoryRoot = await realpath(top.output.trim());
 		const writable = await this.isRoot(top.output.trim());
 		const branch = (await this.run(["symbolic-ref", "--quiet", "--short", "HEAD"], true)).output.trim();
 		const hasCommits = (await this.run(["rev-parse", "--verify", "HEAD"], true)).code === 0;
@@ -53,6 +74,8 @@ export class WorkspaceGit {
 		return {
 			writable,
 			isRepository: true,
+			workspaceRoot,
+			repositoryRoot,
 			hasCommits,
 			...(branch ? { branch } : {}),
 			...(upstream ? { upstream } : {}),
@@ -79,6 +102,20 @@ export class WorkspaceGit {
 	}
 
 	private async perform(action: GitAction): Promise<GitActionResult> {
+		if (action.type === "trust") {
+			const root = await realpath(this.root);
+			// Only the exact project root shown in the confirmation may be trusted, never an ancestor or wildcard.
+			if (action.path !== root || root.includes("*") || !(await this.hasGitMarker()))
+				throw fail("仓库路径已变化或不是仓库根目录，请刷新后重新确认。", 409);
+			const probe = await this.run(["rev-parse", "--show-toplevel"], true);
+			if (probe.code === 0) return { message: "此仓库已可访问。" };
+			if (!isGitOwnershipError(probe.stderr)) {
+				gitRepositoryFound(probe.code, probe.stderr);
+				throw fail("当前目录不需要添加信任配置。", 409);
+			}
+			await this.run(["config", "--global", "--add", "safe.directory", root.split(sep).join("/")]);
+			return { message: "已信任此仓库，未修改项目文件或远程配置。" };
+		}
 		const info = await this.details();
 		if (!info.writable) throw fail(info.blockedReason!, 409);
 		if (action.type === "init") {
@@ -242,26 +279,41 @@ export class WorkspaceGit {
 		return relative(await realpath(this.root), await realpath(top)) === "";
 	}
 
-	private run(
+	private async hasGitMarker(): Promise<boolean> {
+		try {
+			const marker = await lstat(join(this.root, ".git"));
+			return !marker.isSymbolicLink() && (marker.isDirectory() || marker.isFile());
+		} catch {
+			return false;
+		}
+	}
+
+	private async run(
 		args: string[],
 		allowFailure = false,
 		input?: string,
 		network = false
-	): Promise<{ code: number | null; output: string }> {
+	): Promise<{ code: number | null; output: string; stderr: string }> {
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			LC_ALL: "C",
+			LANG: "C",
+			GIT_TERMINAL_PROMPT: "0",
+			GCM_INTERACTIVE: "Never",
+			GIT_EDITOR: "true",
+			GIT_MERGE_AUTOEDIT: "no",
+		};
+		if (network && !env.GIT_SSH_COMMAND && !env.GIT_SSH) {
+			const configured = await this.run(["config", "--get", "core.sshCommand"], true);
+			if (configured.code !== 0) env.GIT_SSH_COMMAND = "ssh -o BatchMode=yes";
+		}
 		return new Promise((resolveResult, reject) => {
 			const child = spawn("git", ["--literal-pathspecs", "-c", "core.quotepath=false", ...args], {
 				cwd: this.root,
 				shell: false,
 				windowsHide: true,
 				stdio: ["pipe", "pipe", "pipe"],
-				env: {
-					...process.env,
-					GIT_TERMINAL_PROMPT: "0",
-					GCM_INTERACTIVE: "Never",
-					GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
-					GIT_EDITOR: "true",
-					GIT_MERGE_AUTOEDIT: "no",
-				},
+				env,
 			});
 			const out: Buffer[] = [],
 				err: Buffer[] = [];
@@ -309,8 +361,9 @@ export class WorkspaceGit {
 						)
 					);
 				const output = Buffer.concat(out).toString("utf8");
-				if (code === 0 || allowFailure) return resolveResult({ code, output });
-				const error = redact(Buffer.concat(err).toString("utf8") + "\n" + output).trim();
+				const stderr = Buffer.concat(err).toString("utf8");
+				if (code === 0 || allowFailure) return resolveResult({ code, output, stderr });
+				const error = redact(stderr + "\n" + output).trim();
 				let hint = "Git 操作失败。";
 				if (
 					/Authentication failed|Permission denied|could not read Username|terminal prompts disabled|Host key verification failed|repository not found/i.test(
