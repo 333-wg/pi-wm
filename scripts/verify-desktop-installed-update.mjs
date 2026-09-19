@@ -249,9 +249,20 @@ try {
 	await expect(button("重启并安装")).toBeEnabled();
 	await rpc.close();
 	rpc = undefined;
-	const closed = desktop.waitForEvent("close", { timeout: 90_000 });
+	const originalPid = desktop.process().pid;
+	report.originalPid = originalPid;
+	desktop.process().stdout.on("data", (data) => console.log("App stdout:", data.toString()));
+	desktop.process().stderr.on("data", (data) => console.log("App stderr:", data.toString()));
+	desktop.on("close", () => console.log("Playwright observed application close"));
 	await button("重启并安装").click();
-	await closed;
+	// Verify the OS process, not an automation transport's close notification.
+	await expect
+		.poll(() => applicationProcesses().some((process) => process.ProcessId === originalPid), {
+			timeout: 600_000,
+			intervals: [3000],
+		})
+		.toBe(false);
+	passed("Original installed application process exited after update confirmation");
 	desktop = undefined;
 	report.handoff = JSON.parse(await readFile(handoffPath, "utf8"));
 	await expect
@@ -300,6 +311,13 @@ try {
 	report.passed = true;
 } catch (error) {
 	report.error = error.stack;
+	report.failureProcesses = applicationProcesses();
+	try {
+		report.failureInstalledVersion = installedVersion();
+		report.failureRegistration = uninstallEntries();
+	} catch (diagnosticError) {
+		report.diagnosticError = diagnosticError.message;
+	}
 	if (page && !page.isClosed()) report.failureState = await status().catch(() => undefined);
 	throw error;
 } finally {
