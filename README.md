@@ -233,4 +233,8 @@ Pi-Wm 是桌面产品名称。内部 `@wuming/*` 包名、协议名称和已有 
 - **[cc-haha](https://github.com/NanmiCoder/cc-haha)**：为 README 信息组织、多 Agent 协作和部分桌面能力提供参考。团队头像与部分 Computer Use 代码的复用说明见 [Agent Teams](docs/agent-teams.md) 和 [Computer Use](docs/computer-use.md)。
 - **React、Electron、Playwright 等开源项目**：提供界面、桌面宿主与自动化测试基础。
 
-已复用的 cc-haha 资源保留其 [MIT 许可证文本](apps/web/public/third-party/cc-haha-LICENSE.txt)，桌面运行时代码另有[第三方许可证副本](packages/sandbox/runtime/CC-HAHA-LICENSE.txt)。这些第三方许可不代表 Pi-Wm 整体采用同一许可证；本仓库尚未提供根目录 `LICENSE`，项目整体许可仍待明确。
+已复用的 cc-haha 资源保留其 [MIT 许可证文本](apps/web/public/third-party/cc-haha-LICENSE.txt)，桌面运行时代码另有[第三方许可证副本](packages/sandbox/runtime/CC-HAHA-LICENSE.txt)。第三方代码与资源继续遵循各自的许可证和版权声明。
+
+## 许可证
+
+Pi-Wm 采用 [MIT 许可证](LICENSE)，版权声明为 `Copyright (c) 2026 333-wg`。使用、修改和分发时，请保留相应的版权声明与许可证文本；第三方组件的许可要求不因本项目采用 MIT 而改变。
