@@ -1,17 +1,18 @@
 import { spawn } from "node:child_process";
-import { cp, copyFile, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, copyFile, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { INVENTORY_NAME, runtimeFiles } from "./lib/runtime-inventory.mjs";
 import { pruneDesktopRuntime } from "./lib/prune-desktop-runtime.mjs";
 import { verifyDesktopPathBudget } from "./lib/desktop-path-budget.mjs";
+import { desktopTarget } from "./lib/desktop-target.mjs";
+import { runtimeNodeName } from "../apps/desktop/src/runtime-paths.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const staging = resolve(root, ".desktop-stage");
 const runtime = join(staging, "runtime");
-if (process.platform !== "win32" || process.arch !== "x64")
-	throw new Error("Build the Windows x64 package on Windows x64");
+desktopTarget();
 if (Number(process.versions.node.split(".")[0]) !== 22)
 	throw new Error("Build with Node 22.19+ to preserve the tested native ABI");
 const npmCli = process.env.npm_execpath;
@@ -71,10 +72,11 @@ await run([
 	"--include-workspace-root=false",
 	"--omit=dev",
 	"--ignore-scripts",
+	"--no-bin-links",
 	"--no-audit",
 	"--no-fund",
 ]);
-await run([npmCli, "rebuild", "node-pty"]);
+await run([npmCli, "rebuild", "node-pty", "--no-bin-links"]);
 // Workspace links must not retain absolute build-machine paths in the package.
 for (const workspace of workspaces) {
 	const link = join(runtime, "node_modules", ...workspace.name.split("/"));
@@ -91,17 +93,20 @@ for (const workspace of workspaces) {
 	await rm(link, { recursive: true, force: true });
 	await cp(workspace.target, link, { recursive: true, dereference: true });
 }
-await copyFile(process.execPath, join(runtime, "node.exe"));
+const nodeExecutable = join(runtime, runtimeNodeName());
+await copyFile(process.execPath, nodeExecutable);
+if (process.platform !== "win32") await chmod(nodeExecutable, 0o755);
 const license = await fetch(`https://raw.githubusercontent.com/nodejs/node/v${process.versions.node}/LICENSE`);
 if (!license.ok) throw new Error("Unable to fetch the bundled Node license");
 await writeFile(join(runtime, "NODE-LICENSE.txt"), await license.text());
-const browserCache = join(root, "release", "browser-cache");
+const browserCache = join(root, "release", `browser-cache-${process.platform}-${process.arch}`);
 await run([join(runtime, "node_modules", "playwright", "cli.js"), "install", "--only-shell", "chromium"], {
 	...process.env,
 	PLAYWRIGHT_BROWSERS_PATH: browserCache,
 });
 await cp(browserCache, join(runtime, "browsers"), {
 	recursive: true,
+	dereference: true,
 	filter: (path) => !path.split(sep).includes(".links"),
 });
 const pruning = await pruneDesktopRuntime(runtime);
@@ -133,6 +138,6 @@ await writeFile(
 	)
 );
 const files = await runtimeFiles(runtime);
-verifyDesktopPathBudget(files.map((path) => `resources/runtime/${path}`));
+if (process.platform === "win32") verifyDesktopPathBudget(files.map((path) => `resources/runtime/${path}`));
 await writeFile(join(runtime, INVENTORY_NAME), JSON.stringify({ files }, null, 2));
 console.log(`Desktop runtime staged at ${runtime}`);

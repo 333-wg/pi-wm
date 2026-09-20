@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { releaseEnvironment } from "./desktop-release.mjs";
+import { runtimeNodeName } from "../../apps/desktop/src/runtime-paths.mjs";
 
 export async function verifyBundledRuntime(runtime) {
 	const code = `
@@ -30,7 +31,7 @@ try {
 }
 process.stdout.write('Bundled Chromium, PDF extraction, native canvas, and SQLite passed\\n', () => process.exit(0));
 `;
-	const { stdout } = await promisify(execFile)(join(runtime, "node.exe"), ["--input-type=module", "-e", code], {
+	const { stdout } = await promisify(execFile)(join(runtime, runtimeNodeName()), ["--input-type=module", "-e", code], {
 		cwd: runtime,
 		env: { ...releaseEnvironment(process.env), PLAYWRIGHT_BROWSERS_PATH: join(runtime, "browsers") },
 		windowsHide: true,

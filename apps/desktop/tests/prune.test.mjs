@@ -5,6 +5,33 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pruneDesktopRuntime, runtimePruneReason } from "../../../scripts/lib/prune-desktop-runtime.mjs";
 
+test("each Mac architecture retains its own PTY binary and spawn helper", () => {
+	for (const arch of ["arm64", "x64"]) {
+		for (const file of ["pty.node", "spawn-helper"]) {
+			assert.equal(
+				runtimePruneReason(`node_modules/node-pty/prebuilds/darwin-${arch}/${file}`, "darwin", arch),
+				undefined
+			);
+			assert.equal(
+				runtimePruneReason(
+					`node_modules/node-pty/prebuilds/darwin-${arch}/${file}`,
+					"darwin",
+					arch === "x64" ? "arm64" : "x64"
+				),
+				"otherPlatforms"
+			);
+		}
+		assert.equal(
+			runtimePruneReason("node_modules/node-pty/prebuilds/win32-x64/pty.node", "darwin", arch),
+			"otherPlatforms"
+		);
+		assert.equal(
+			runtimePruneReason("node_modules/node-pty/third_party/conpty/1/win10-x64/conpty.dll", "darwin", arch),
+			"otherPlatforms"
+		);
+	}
+});
+
 test("pruning removes development-only assets and non-target PTY platforms", async () => {
 	const parent = await realpath(tmpdir());
 	const root = await mkdtemp(join(parent, "wuming-prune-test-"));
@@ -33,7 +60,7 @@ test("pruning removes development-only assets and non-target PTY platforms", asy
 			await mkdir(dirname(join(root, file)), { recursive: true });
 			await writeFile(join(root, file), "fixture");
 		}
-		const result = await pruneDesktopRuntime(root);
+		const result = await pruneDesktopRuntime(root, "win32", "x64");
 		assert.equal(result.removedFiles, remove.length);
 		assert.equal(result.removedBytes, remove.length * 7);
 		for (const file of remove) await assert.rejects(access(join(root, file)), { code: "ENOENT" });

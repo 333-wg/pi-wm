@@ -1,6 +1,6 @@
 # Pi-Wm Desktop
 
-The first desktop distribution is Windows x64. Electron hosts the existing
+Desktop packaging targets Windows x64 and native macOS arm64/x64. Electron hosts the existing
 production React workbench; a separate, bundled Node 22 process owns the Gateway,
 SQLite, user tools, PTYs, and browser automation. No Vite server, system Node,
 npm, or source checkout is needed to open the distributed application.
@@ -14,7 +14,8 @@ continues to use its separate random Gateway token, which is not saved in web
 storage. The browser version still validates the configured `WUMING_TOKEN`
 server-side (the development default is `wuming`).
 
-Requires Windows x64 and Node 22.19 or newer in the Node 22 series for packaging.
+Packaging requires Windows x64 or macOS arm64/x64 and native Node 22.19 or newer
+in the Node 22 series. Native dependencies and Chromium must match the build host.
 
 ```sh
 npm ci
@@ -57,17 +58,68 @@ the `wuming://app/` origin, `@wuming/*` internal packages, storage keys, and the
 existing `%APPDATA%/Wuming` profile for update and data compatibility. It installs
 only the Gateway workspace's production dependency graph. Frontend dependencies
 are already bundled by Vite and do not need a second raw runtime installation.
-Source maps, PDB debugger symbols, and non-Windows-x64 node-pty prebuilds are
-removed from staging with a bounded allowlist. Package licenses, declarations,
+Source maps, type declarations, PDB debugger symbols, and non-target node-pty prebuilds are
+removed from staging with a bounded allowlist. Package licenses,
 runtime assets, PDF support, the browser, and standalone Node remain intact.
 Electron language resources are limited to English and Simplified/Traditional
 Chinese. `runtime-manifest.json` records pruning counts and uncompressed bytes.
 
 The installer is an **unsigned internal-test build** unless a signing identity
 is supplied to electron-builder. Windows may warn about an unknown publisher.
-There is no automatic updater in this increment. A newer installer can replace
-the application; do not treat that as verified database migration or rollback.
-The default Electron icon is temporary.
+Windows update behavior and release gates are documented in [desktop updates](desktop-updates.md).
+Do not treat installer replacement as verified database migration or rollback.
+The product icon is included in both Windows and macOS builds.
+
+## macOS Build and Release
+
+Run `npm run desktop:dist` on a Mac using native Node 22. The same command selects
+DMG and ZIP instead of NSIS. Apple Silicon uses arm64; Intel uses x64. Do not
+cross-build or run Node under Rosetta: the bundled Node, node-pty, native canvas,
+and Playwright browser are installed for the current Node architecture.
+
+- `release/Pi-Wm-<version>-mac-arm64.dmg` and `.zip`: Apple Silicon.
+- `release/Pi-Wm-<version>-mac-x64.dmg` and `.zip`: Intel.
+- `release/mac-arm64/Pi-Wm.app` or `release/mac/Pi-Wm.app`: unpacked application.
+
+The Mac application uses `Contents/Resources/runtime/node`, executable permissions,
+and matching native dependencies. Its data is in `~/Library/Application Support/Wuming`,
+outside the app bundle. Closing the last window quits the app, as on Windows.
+Computer Use's Windows desktop driver remains unavailable on macOS.
+
+These are **internal-test, ad-hoc-signed builds**, not Developer ID-signed or
+Apple-notarized distributions. Gatekeeper can block downloaded builds. Do not
+disable Gatekeeper system-wide. Wider distribution requires a separate Developer ID,
+hardened runtime/entitlements and notarization rollout. Mac automatic updates remain
+disabled until signing and actual installation/upgrade behavior have been verified.
+For now, quit the app and replace it with the new `.app`; keep the data directory.
+
+In GitHub Actions, manually run **Desktop macOS**. It uses native `macos-15` arm64
+and `macos-15-intel` x64 runners and Node 22.23.2. Pull requests touching the packaging
+path also run the workflow but cannot upload releases. Each runner builds, runs
+desktop tests, verifies the DMG and extracted ZIP signature, checks the bundled
+Node architecture, relocates the app outside the checkout, exercises Chromium,
+PDF extraction, native canvas and SQLite, and launches the packaged UI and PTY.
+Successful runs retain installers and SHA-256 files as Actions artifacts for 14 days.
+`node scripts/verify-desktop-macos.mjs` runs the same package gate locally on a Mac.
+
+Release attachment is opt-in: select `upload_to_release` when dispatching the workflow.
+Both architectures must pass. It attaches the two DMGs, two ZIPs and their checksum
+files to the existing `v<apps/desktop/package.json version>` release in
+`desktopUpdateRepository` (currently `333-wg/pi-wm`). It does not create/publish a
+release, overwrite assets, or modify Windows update metadata. The generated
+`latest-mac.yml` is deliberately not uploaded while Mac auto-update is disabled.
+
+In `333-wg/pi-wm`, the default `github.token` has the upload job's **Contents: write**
+permission; no extra secret is needed. The former `333-wg/wuming-agent` repository URL
+redirects to this repository. If the workflow is moved to a different source repository,
+configure its Actions secret `DESKTOP_RELEASE_TOKEN` with a fine-grained token authorized
+for **Contents: write** on the release repository. No release token is passed to build
+or pull-request jobs. Build-only runs do not need this secret. Missing permissions fail
+the upload job while leaving verified installers available as workflow artifacts.
+
+Do not announce Mac downloads until the native gates pass and the assets actually
+appear in the release. CI smoke tests do not replace testing the downloaded DMG on
+a clean Mac with Gatekeeper enabled.
 
 ## Lifecycle and Data
 

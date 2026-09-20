@@ -1,0 +1,106 @@
+name: Desktop macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: Attach verified Mac installers to the existing versioned release
+        required: true
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-macos.yml"
+      - "apps/desktop/**"
+      - "scripts/*desktop*"
+      - "scripts/lib/*desktop*"
+      - "scripts/lib/runtime-inventory.mjs"
+      - "scripts/lib/verify-bundled-runtime.mjs"
+      - "package*.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          architecture: ${{ matrix.arch }}
+          cache: npm
+      - name: Require native architecture
+        run: node -e "require('node:assert/strict').equal(process.arch, process.env.EXPECTED_ARCH)"
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+      - run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Build native DMG and ZIP (ad-hoc signed, not notarized)
+        run: npm run desktop:dist
+      - run: npm run test:desktop
+      - name: Verify archive, native runtime and packaged application
+        run: node scripts/verify-desktop-macos.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-${{ matrix.arch }}
+          path: |
+            release/Pi-Wm-*-mac-${{ matrix.arch }}.dmg
+            release/Pi-Wm-*-mac-${{ matrix.arch }}.zip
+            release/Pi-Wm-*-mac-${{ matrix.arch }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Keep smoke test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-evidence-${{ matrix.arch }}
+          path: test-results/desktop-packaged
+          if-no-files-found: warn
+          retention-days: 14
+
+  upload:
+    if: github.event_name == 'workflow_dispatch' && inputs.upload_to_release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-macos-*
+          path: artifacts
+      - name: Attach installers without replacing Windows assets or publishing drafts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.DESKTOP_RELEASE_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          repository=$(node -p "require('./apps/desktop/package.json').desktopUpdateRepository")
+          tag="v$version"
+          gh release view "$tag" --repo "$repository" >/dev/null
+          files=()
+          for arch in arm64 x64; do
+            prefix="Pi-Wm-$version-mac-$arch"
+            directory="artifacts/desktop-macos-$arch"
+            (cd "$directory" && sha256sum --check "$prefix.sha256")
+            for ext in dmg zip sha256; do
+              files+=("$directory/$prefix.$ext")
+            done
+          done
+          gh release upload "$tag" "${files[@]}" --repo "$repository"

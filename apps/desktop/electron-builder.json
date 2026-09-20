@@ -12,6 +12,15 @@
 	"afterPack": "scripts/verify-desktop-package.mjs",
 	"asar": true,
 	"npmRebuild": false,
+	"mac": {
+		"icon": "apps/web/src/assets/wuming-clover.png",
+		"category": "public.app-category.developer-tools",
+		"target": ["dmg", "zip"],
+		"artifactName": "Pi-Wm-${version}-mac-${arch}.${ext}",
+		"identity": "-",
+		"hardenedRuntime": false,
+		"notarize": false
+	},
 	"win": {
 		"icon": "apps/desktop/resources/icon.ico",
 		"target": [{ "target": "nsis", "arch": ["x64"] }],

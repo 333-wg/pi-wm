@@ -86,53 +86,60 @@ try {
 		return result.status;
 	}, api.body.project.id);
 	assert.equal(completed, 200);
-	await page.evaluate(async () => {
-		const connection = await window.wumingDesktop.connect();
-		await new Promise((resolve, reject) => {
-			const bearer = btoa(connection.token).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-			const ws = new WebSocket(connection.websocketUrl, ["wuming.v1", `wuming.bearer.${bearer}`]);
-			const timer = setTimeout(() => finish(new Error("Native terminal did not respond")), 15_000);
-			let output = "";
-			let closing = false;
-			const finish = (error) => {
-				clearTimeout(timer);
-				ws.close();
-				if (error) reject(error);
-				else resolve();
-			};
-			const send = (message) => ws.send(JSON.stringify(message));
-			ws.onerror = () => finish(new Error("Terminal connection failed"));
-			ws.onopen = () =>
-				send({ type: "hello", protocolVersion: 1, clientId: "desktop-terminal-test", capabilities: [] });
-			ws.onmessage = ({ data }) => {
-				const message = JSON.parse(data);
-				if (message.type === "hello")
-					send({
-						type: "terminal.create",
-						requestId: "create",
-						terminalId: "desktop-test-terminal",
-						workspaceId: "local-workspace",
-						cols: 80,
-						rows: 24,
-					});
-				if (message.type === "terminal.ready")
-					send({
-						type: "terminal.input",
-						terminalId: message.terminalId,
-						data: `node -e "console.log('WUMING'+'-PTY-OK')"\r`,
-					});
-				if (message.type === "terminal.error") finish(new Error(message.message));
-				if (message.type === "terminal.output") {
-					output += message.data;
-					if (!closing && output.includes("WUMING-PTY-OK")) {
-						closing = true;
-						send({ type: "terminal.close", requestId: "close", terminalId: message.terminalId });
+	await page.evaluate(
+		async (shellId) => {
+			const connection = await window.wumingDesktop.connect();
+			await new Promise((resolve, reject) => {
+				const bearer = btoa(connection.token).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+				const ws = new WebSocket(connection.websocketUrl, ["wuming.v1", `wuming.bearer.${bearer}`]);
+				const timer = setTimeout(
+					() => finish(new Error(`Native terminal did not respond: ${output.slice(-2000)}`)),
+					15_000
+				);
+				let output = "";
+				let closing = false;
+				const finish = (error) => {
+					clearTimeout(timer);
+					ws.close();
+					if (error) reject(error);
+					else resolve();
+				};
+				const send = (message) => ws.send(JSON.stringify(message));
+				ws.onerror = () => finish(new Error("Terminal connection failed"));
+				ws.onopen = () =>
+					send({ type: "hello", protocolVersion: 1, clientId: "desktop-terminal-test", capabilities: [] });
+				ws.onmessage = ({ data }) => {
+					const message = JSON.parse(data);
+					if (message.type === "hello")
+						send({
+							type: "terminal.create",
+							requestId: "create",
+							terminalId: "desktop-test-terminal",
+							workspaceId: "local-workspace",
+							shellId,
+							cols: 80,
+							rows: 24,
+						});
+					if (message.type === "terminal.ready")
+						send({
+							type: "terminal.input",
+							terminalId: message.terminalId,
+							data: `node -e "console.log('WUMING'+'-PTY-OK')"\r`,
+						});
+					if (message.type === "terminal.error") finish(new Error(message.message));
+					if (message.type === "terminal.output") {
+						output += message.data;
+						if (!closing && output.includes("WUMING-PTY-OK")) {
+							closing = true;
+							send({ type: "terminal.close", requestId: "close", terminalId: message.terminalId });
+						}
 					}
-				}
-				if (message.type === "terminal.closed") finish();
-			};
-		});
-	});
+					if (message.type === "terminal.closed") finish();
+				};
+			});
+		},
+		process.platform === "win32" ? "cmd" : "sh"
+	);
 	await page.reload();
 	await expect(page.locator(".connection")).toHaveClass(/connected/);
 	await expect(page.getByText("Desktop verification", { exact: true }).first()).toBeVisible();

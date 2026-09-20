@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync, renameSync, statSync, existsSync, readFileSy
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GatewayHost } from "./gateway-host.mjs";
+import { runtimeNodeName } from "./runtime-paths.mjs";
 import { APP_URL, createAppProtocol, isAppUrl } from "./app-protocol.mjs";
 import electronUpdater from "electron-updater";
 import { DesktopUpdates, readUpdatePreferences, saveUpdatePreferences } from "./updates.mjs";
@@ -82,7 +83,7 @@ async function boot() {
 		}
 	};
 	host = new GatewayHost({
-		nodeExecutable: app.isPackaged ? join(runtimeRoot, "node.exe") : process.env.WUMING_DESKTOP_NODE,
+		nodeExecutable: app.isPackaged ? join(runtimeRoot, runtimeNodeName()) : process.env.WUMING_DESKTOP_NODE,
 		entry: join(runtimeRoot, "apps", "gateway", "dist", "main.js"),
 		dataDirectory,
 		workspace,

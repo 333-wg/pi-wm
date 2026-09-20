@@ -28,7 +28,7 @@ Pi-Wm 把对话、项目文件、Git 改动、终端、浏览器预览和多 Age
 
 **本地优先，不等于离线运行。** 工作区操作和会话状态由本机服务管理；使用远程模型时，请求及相关上下文仍会发送到你配置的服务商。
 
-> **项目状态：持续开发 / 内测。** 当前桌面打包目标为 Windows x64。安装包签名、干净系统上的安装升级验证等仍需完善；请先在测试项目中体验，不要将内测构建视为已完成生产验收的正式版本。
+> **项目状态：持续开发 / 内测。** 桌面打包支持 Windows x64 和 macOS（Apple Silicon / Intel）；macOS 安装包须通过独立 CI 验证后上传，下载时以 Release 实际附件为准。签名公证、干净系统上的安装升级验证等仍需完善；请先在测试项目中体验，不要将内测构建视为已完成生产验收的正式版本。
 
 ## 界面预览
 
@@ -95,7 +95,7 @@ Pi-Wm 把对话、项目文件、Git 改动、终端、浏览器预览和多 Age
 
 ### 1. 安装依赖
 
-准备 Git 和 **Node.js 22.19 或更高版本**。如果要打包 Windows 桌面端，请使用 **Windows x64 + Node.js 22.19+ 的 22.x 版本**。
+准备 Git 和 **Node.js 22.19 或更高版本**。桌面打包须使用对应平台与芯片的系统（Windows x64 / macOS arm64 / macOS x64）及 **Node.js 22.19+ 的 22.x 版本**，不跨平台打包原生依赖。
 
 克隆本仓库后，在仓库根目录执行：
 
@@ -142,13 +142,17 @@ npm run test:e2e:install
 > 开发默认口令仅适合本机回环访问，不要把本地 Gateway 暴露到公网。桌面端的欢迎页不是安全边界，桌面 Gateway 使用单独生成的随机令牌。
 
 <details>
-<summary><strong>构建 Windows 安装包</strong></summary>
+<summary><strong>构建 Windows / macOS 安装包</strong></summary>
 
 ```sh
 npm run desktop:dist
 ```
 
 安装包输出到 `release/`。只需要免安装目录时，使用 `npm run desktop:pack`。
+
+Windows 输出 `.exe`；Mac 输出对应芯片的 `.dmg` 和 `.zip`，文件名中的 `arm64` 对应 Apple Silicon，`x64` 对应 Intel。GitHub Actions 的 **Desktop macOS** 工作流会分别构建并验证两种芯片；验证成功后可选择附加到现有版本的 Release。
+
+macOS 当前仅使用 ad-hoc 本地签名，未完成 Apple Developer ID 签名与公证，可能被 Gatekeeper 拦截。不提供 macOS 自动更新，升级时手动替换应用；Computer Use 桌面控制仍仅支持 Windows。Mac 构建与发布权限配置见[桌面端文档](docs/desktop.md#macos-build-and-release)。
 
 打包后的应用包含运行所需的 Node 和浏览器组件，用户无需安装 Node.js 或 npm；Computer Use 所需的 Python 仍需单独准备。未配置签名的安装包可能触发 Windows 未知发布者提示。
 

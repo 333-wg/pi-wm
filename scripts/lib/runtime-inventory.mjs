@@ -1,5 +1,6 @@
-import { access, lstat, readFile, readdir } from "node:fs/promises";
+import { access, constants, lstat, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { runtimeNodeName } from "../../apps/desktop/src/runtime-paths.mjs";
 
 export const INVENTORY_NAME = "runtime-files.json";
 
@@ -19,7 +20,7 @@ export async function runtimeFiles(root) {
 	return files.filter((path) => path !== INVENTORY_NAME).sort();
 }
 
-export async function verifyRuntimeFiles(root) {
+export async function verifyRuntimeFiles(root, platform = process.platform) {
 	const { files } = JSON.parse(await readFile(join(root, INVENTORY_NAME), "utf8"));
 	if (!Array.isArray(files) || files.length === 0) throw new Error("Runtime file inventory is empty");
 	const missing = [];
@@ -44,12 +45,13 @@ export async function verifyRuntimeFiles(root) {
 		throw new Error(`Packaged runtime is missing ${missing.length} file(s):\n${missing.slice(0, 20).join("\n")}`);
 	// These files are mandatory even if a malformed staging inventory omits them.
 	for (const file of [
-		"node.exe",
+		runtimeNodeName(platform),
 		"apps/gateway/dist/main.js",
 		"apps/web/dist/index.html",
 		"node_modules/@wuming/artifacts/package.json",
 		"node_modules/node-pty/package.json",
 	])
 		await access(join(root, file));
+	if (platform !== "win32") await access(join(root, runtimeNodeName(platform)), constants.X_OK);
 	return files.length;
 }
