@@ -5,6 +5,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { INVENTORY_NAME, runtimeFiles } from "./lib/runtime-inventory.mjs";
 import { pruneDesktopRuntime } from "./lib/prune-desktop-runtime.mjs";
+import { verifyDesktopPathBudget } from "./lib/desktop-path-budget.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const staging = resolve(root, ".desktop-stage");
@@ -131,5 +132,7 @@ await writeFile(
 		2
 	)
 );
-await writeFile(join(runtime, INVENTORY_NAME), JSON.stringify({ files: await runtimeFiles(runtime) }, null, 2));
+const files = await runtimeFiles(runtime);
+verifyDesktopPathBudget(files.map((path) => `resources/runtime/${path}`));
+await writeFile(join(runtime, INVENTORY_NAME), JSON.stringify({ files }, null, 2));
 console.log(`Desktop runtime staged at ${runtime}`);

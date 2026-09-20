@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 export function runtimePruneReason(path) {
 	if (!/^(node_modules|apps|packages)\//.test(path)) return undefined;
 	if (/\.(?:[cm]?js|css|[cm]?ts)\.map$/.test(path)) return "sourceMaps";
+	if (/\.d\.(?:ts|cts|mts)$/.test(path)) return "typeDeclarations";
 	if (/\.pdb$/i.test(path)) return "debugSymbols";
 	const prebuild = /(?:^|\/)node_modules\/node-pty\/prebuilds\/([^/]+)\//.exec(path);
 	if (prebuild && prebuild[1] !== "win32-x64") return "otherPlatforms";

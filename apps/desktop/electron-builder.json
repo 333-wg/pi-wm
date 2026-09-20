@@ -19,6 +19,7 @@
 		"artifactName": "Pi-Wm-${version}-Setup-${arch}.${ext}"
 	},
 	"nsis": {
+		"include": "apps/desktop/installer/installer.nsh",
 		"oneClick": false,
 		"perMachine": false,
 		"allowToChangeInstallationDirectory": true,

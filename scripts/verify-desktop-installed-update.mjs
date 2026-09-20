@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, mkdir, readFile, realpath, writeFile, copyFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, writeFile, copyFile, cp } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, relative, isAbsolute } from "node:path";
 import { load } from "js-yaml";
@@ -23,6 +23,14 @@ const {
 } = process.env;
 for (const version of [baselineVersion, targetVersion]) assert.match(version ?? "", /^\d+\.\d+\.\d+$/);
 const temporary = await realpath(process.env.RUNNER_TEMP);
+const pathScenario = process.env.UPDATE_PATH_SCENARIO ?? "standard";
+assert.ok(["standard", "long-temp"].includes(pathScenario));
+let updateTemporary = process.env.TEMP;
+if (pathScenario === "long-temp") {
+	updateTemporary = join(temporary, "long-user-temp", "Administrator-\u7528\u6237");
+	while (updateTemporary.length < 100) updateTemporary = join(updateTemporary, "nested-temporary-directory");
+	await mkdir(updateTemporary, { recursive: true });
+}
 const fixtures = await realpath(directory);
 const rel = relative(temporary, fixtures);
 assert.ok(rel && !rel.startsWith("..") && !isAbsolute(rel), "Fixtures must be inside RUNNER_TEMP");
@@ -51,6 +59,8 @@ const report = {
 	feed: "loopback HTTP serving verified unpublished fixture",
 	installerLaunchMocked: false,
 	checks: [],
+	pathScenario,
+	updateTemporary,
 };
 const server = createServer((req, res) => {
 	const path = new URL(req.url, "http://127.0.0.1").pathname;
@@ -73,6 +83,8 @@ const env = releaseEnvironment(
 	)
 );
 let desktop, page, rpc;
+env.TEMP = updateTemporary;
+env.TMP = updateTemporary;
 function passed(name) {
 	report.checks.push(name);
 	console.log("PASS:", name);
@@ -348,5 +360,8 @@ try {
 		() => {}
 	);
 	await copyFile(join(profile, "logs", "gateway.log"), join(output, "gateway.log")).catch(() => {});
+	await cp(join(process.env.LOCALAPPDATA, "Pi-Wm", "installer-logs"), join(output, "installer-logs"), {
+		recursive: true,
+	}).catch(() => {});
 	// The GitHub-hosted VM is destroyed after the job. Do not add reusable-machine cleanup here.
 }

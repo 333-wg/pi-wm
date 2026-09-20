@@ -108,6 +108,8 @@ No GitHub repository, release, tag or upload is created by this implementation. 
 
 ## Actual Installation Gate
 
+The Windows job runs both a standard temporary-directory scenario and a long-TEMP scenario with Unicode path components. Both must pass; the latter deliberately exceeds the old uninstaller's 260-character rollback path threshold. Evidence artifacts are named `desktop-installed-update-evidence-standard` and `desktop-installed-update-evidence-long-temp`, and include installer logs when present. For the legacy-path repair release, dispatch this gate separately with 0.1.5 and 0.1.6 as baselines.
+
 The `Desktop Installed Update` workflow runs only when manually dispatched on an ephemeral GitHub-hosted Windows runner. Its script refuses to run locally or on a self-hosted runner because this test deliberately installs software and updates the Windows registry.
 
 For a real release, build the candidate normally and use a lower-version installer with a configured updater as the baseline. Keep both installers, the candidate's blockmap and `latest.yml` in the draft release. Upload a second copy of the candidate's metadata named `update-test-latest.yml` for the test downloader. Dispatch the workflow with the draft release ID, baseline version and candidate target version. The workflow validates GitHub asset SHA-256 digests before execution.
@@ -127,6 +129,20 @@ node scripts/verify-desktop-published-update.mjs --baseline=C:/path/to/older/win
 ```
 
 This launches an isolated profile, keeps the packaged GitHub provider and Electron HTTPS executor, and uses the app UI to discover and download the actual public release without a GitHub token or an external browser. It verifies the downloaded installer against the local candidate metadata. It prohibits installer execution and never overwrites the developer's installed app. Keep `test-results/desktop-published-update/report.json` alongside the Windows installation evidence; the two checks prove different parts of the update path.
+
+## Legacy Uninstaller Path Compatibility
+
+The 0.1.5/0.1.6 NSIS uninstaller stages old files beneath its temporary `old-install` directory. Deep dependency paths can exceed the legacy Windows path limit, causing `Rename` to fail and the uninstaller to abort with exit code 2. This is not necessarily a running-process problem. Fixing only the new application's JavaScript or pruning only the new package cannot repair files in an already-installed old version.
+
+The custom NSIS include preserves electron-builder's process checks, then prepares the child environment immediately before invoking the old uninstaller and after any elevation. It passes the existing effective TEMP directory in Windows extended-path form (`\\?\...`, or `\\?\UNC\...` for UNC paths). The directory and its permissions do not change. No public short directory, drive mapping, global environment change, or registry long-path switch is used. The old uninstaller itself already supports this form, including its plugin loading and rollback operations.
+
+TEMP and TMP are saved separately and restored before the new application is launched, on handled failures, and when the installer closes. Preparation failures, unreadable paths, unsupported source lengths, and reparse points stop before old-file removal. The original installed-file traversal still needs ordinary source paths that the legacy uninstaller can read; this fix does not claim unlimited installation-directory lengths.
+
+Each installer attempt writes a local UTF-16LE diagnostic file under `%LOCALAPPDATA%\Pi-Wm\installer-logs`, preserving Unicode directory names. It records the package version, old installation root, longest path, preparation errors, old-uninstaller exit/launch result, and completion phase. A failure dialog points to that file. Logs from an old uninstaller do not expose its internal Windows error or exact failed-file trace, so an exit code alone must not be labelled as a file lock.
+
+Staging removes type declarations from the generated application runtime, not from user projects. Staging and `afterPack` also reject packaged relative paths longer than 190 UTF-16 code units. The installer rejects installation roots longer than 68 code units before removing the old version, keeping the complete source path within 259 code units including its separator. Keep these two limits in sync. Actual path and native-runtime checks remain separate gates.
+
+`apps/desktop/tests/installer-paths.test.mjs` compiles a registry-free legacy NSIS fixture using the installed builder's real recursive move/restore functions. It verifies the original failure, the parent-to-child compatibility fix, PowerShell/plugin startup, genuine locked-file rollback, cancellation, missing TEMP, reparse rejection, path normalization, and restoration of distinct TEMP/TMP values. It never invokes the product uninstaller or changes an installed application. This regression test does not replace the disposable Windows installation gate above.
 
 ## References
 
