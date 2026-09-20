@@ -45,8 +45,8 @@ export function browserBounds(value, size, zoom = 1) {
 
 // Preview pages never inherit the workbench preload, session, or credentials.
 export class BrowserPreview {
-	constructor({ window, WebContentsView, session, shell }) {
-		Object.assign(this, { window, WebContentsView, session, shell });
+	constructor({ window, WebContentsView, session, shell, contextMenu = () => {} }) {
+		Object.assign(this, { window, WebContentsView, session, shell, contextMenu });
 		this.tabs = new Map();
 		this.groups = new Map();
 		this.partitions = new Set();
@@ -122,6 +122,7 @@ export class BrowserPreview {
 		view.setVisible(false);
 		this.window.contentView.addChildView(view);
 		const wc = view.webContents;
+		this.contextMenu(wc);
 		const update = () => this.emit(group);
 		wc.on("page-title-updated", update);
 		wc.on("did-navigate-in-page", (_event, target, mainFrame) => {

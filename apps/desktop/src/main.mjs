@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, session, dialog, globalShortcut, ipcMain, Menu, Notification, protocol, shell } from "electron";
+import { app, BrowserWindow, WebContentsView, session, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, protocol, shell } from "electron";
 import { appendFileSync, mkdirSync, renameSync, statSync, existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { DesktopUpdates, readUpdatePreferences, saveUpdatePreferences } from "./
 import { installDesktopUpdate } from "./install-update.mjs";
 import { TaskNotifications } from "./notifications.mjs";
 import { BrowserPreview } from "./browser-preview.mjs";
+import { externalLink, installContextMenu } from "./context-menu.mjs";
 
 protocol.registerSchemesAsPrivileged([
 	{
@@ -43,12 +44,10 @@ function focusWindow() {
 }
 
 function openExternal(value) {
-	try {
-		const url = new URL(value);
-		if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password) void shell.openExternal(url.href);
-	} catch {
-		/* Unknown protocols must not reach the operating system. */
-	}
+	const url = externalLink(value);
+	if (url) void shell.openExternal(url).catch(() => {
+		if (window && !window.isDestroyed()) dialog.showErrorBox("无法打开链接", "请复制链接地址后，在外部浏览器中打开。");
+	});
 }
 
 async function fail(error) {
@@ -146,7 +145,12 @@ async function boot() {
 			spellcheck: false,
 		},
 	});
-	const browserPreview = new BrowserPreview({ window, WebContentsView, session, shell });
+	const contextMenu = (contents) => installContextMenu(contents, {
+		window, Menu, clipboard, openExternal,
+		onCopyError: () => dialog.showErrorBox("复制失败", "剪贴板暂时不可用，请稍后重试。"),
+	});
+	contextMenu(window.webContents);
+	const browserPreview = new BrowserPreview({ window, WebContentsView, session, shell, contextMenu });
 	ipcMain.handle("desktop:browser", (event, request) => {
 		if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !isAppUrl(event.senderFrame.url))
 			throw new Error("Forbidden");

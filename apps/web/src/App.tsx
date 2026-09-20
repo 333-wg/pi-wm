@@ -4577,6 +4577,7 @@ function ProjectNavigationItem({
 			<div
 				className="project-row-wrap"
 				onContextMenu={(event) => {
+					if (renaming) return;
 					event.preventDefault();
 					if (!disabled && !busy && !renaming) setMenuOpen(true);
 				}}
