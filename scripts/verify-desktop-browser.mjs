@@ -327,7 +327,12 @@ try {
 	await page.evaluate(() => document.querySelector("#browser-test-dialog").remove());
 	await expect.poll(visibleCount).toBe(1);
 	for (const width of [1360, 800]) {
-		await desktop.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 900), width);
+		await desktop.evaluate(({ BrowserWindow }, width) => {
+			const window = BrowserWindow.getAllWindows()[0];
+			if (window.isMinimized()) window.restore();
+			if (window.isMaximized()) window.unmaximize();
+			window.setContentSize(width, 900);
+		}, width);
 		await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
 		await expect.poll(visibleCount).toBe(1);
 		assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);

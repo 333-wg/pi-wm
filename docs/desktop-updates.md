@@ -144,6 +144,12 @@ Staging removes type declarations from the generated application runtime, not fr
 
 `apps/desktop/tests/installer-paths.test.mjs` compiles a registry-free legacy NSIS fixture using the installed builder's real recursive move/restore functions. It verifies the original failure, the parent-to-child compatibility fix, PowerShell/plugin startup, genuine locked-file rollback, cancellation, missing TEMP, reparse rejection, path normalization, and restoration of distinct TEMP/TMP values. It never invokes the product uninstaller or changes an installed application. This regression test does not replace the disposable Windows installation gate above.
 
+## 安装文件完整性（0.1.8）
+
+NSIS 默认先在 `$PLUGINSDIR/7z-out` 解压，再复制到安装目录。长 TEMP 路径可能使临时解压漏掉深层依赖，而后续复制仍返回成功。0.1.8 在启动应用前使用自带 Node 校验完整运行时文件清单。发现缺失时，直接向已经通过路径长度检查的安装目录重新解压，并再次校验；仍不完整则记录诊断、返回错误且不启动应用。该恢复不修改用户数据，也不宣称提供安装回滚。
+
+真实升级验证在检查 Windows 版本注册信息之后，还会逐项核对安装后的运行时清单，防止只验证主程序版本却遗漏依赖文件。
+
 ## References
 
 - electron-builder auto-update documentation: https://www.electron.build/auto-update.html

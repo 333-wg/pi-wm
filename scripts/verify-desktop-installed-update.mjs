@@ -10,6 +10,7 @@ import { load } from "js-yaml";
 import { extractFile, uncache } from "@electron/asar";
 import { openDesktopRpc } from "./lib/desktop-rpc.mjs";
 import { releaseEnvironment } from "./lib/desktop-release.mjs";
+import { verifyRuntimeFiles } from "./lib/runtime-inventory.mjs";
 
 // This test really installs/uninstalls software and changes the runner's registry.
 // Never permit it on a developer machine or persistent/self-hosted runner.
@@ -311,6 +312,7 @@ try {
 		)
 		.toBe(true);
 	report.installationVerified = true;
+	report.installedRuntimeFiles = await verifyRuntimeFiles(join(installDirectory, "resources", "runtime"));
 	report.targetRegistration = uninstallEntries();
 	passed("Real updater launched NSIS, replaced the installed binary and updated Windows registration");
 	await expect

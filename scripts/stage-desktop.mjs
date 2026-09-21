@@ -95,6 +95,8 @@ for (const workspace of workspaces) {
 }
 const nodeExecutable = join(runtime, runtimeNodeName());
 await copyFile(process.execPath, nodeExecutable);
+if (process.platform === "win32")
+	await copyFile(join(root, "apps/desktop/installer/verify-runtime.cjs"), join(runtime, "verify-install.cjs"));
 if (process.platform !== "win32") await chmod(nodeExecutable, 0o755);
 const license = await fetch(`https://raw.githubusercontent.com/nodejs/node/v${process.versions.node}/LICENSE`);
 if (!license.ok) throw new Error("Unable to fetch the bundled Node license");

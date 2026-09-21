@@ -97,6 +97,31 @@ FunctionEnd
 !macroend
 
 !macro customInstall
+  ; The builder's temporary extraction can silently omit long paths before CopyFiles.
+  ; Verify all staged files and recover directly into the bounded installation root.
+  nsExec::ExecToStack /TIMEOUT=120000 '"$INSTDIR\resources\runtime\node.exe" "$INSTDIR\resources\runtime\verify-install.cjs"'
+  Pop $R0
+  Pop $R1
+  Push "runtime-inventory-exit=$R0; details=$R1"
+  Call PiWmLog
+  ${if} $R0 != 0
+    Push "runtime-repair=direct-extraction"
+    Call PiWmLog
+    SetOutPath "$INSTDIR"
+    ClearErrors
+    Nsis7z::Extract "$PLUGINSDIR\app-$packageArch.7z"
+    nsExec::ExecToStack /TIMEOUT=120000 '"$INSTDIR\resources\runtime\node.exe" "$INSTDIR\resources\runtime\verify-install.cjs"'
+    Pop $R0
+    Pop $R1
+    Push "runtime-repair-exit=$R0; details=$R1"
+    Call PiWmLog
+    ${if} $R0 != 0
+      Call PiWmCloseLog
+      MessageBox MB_OK|MB_ICONSTOP "Application files are incomplete. Please run the installer again.$\r$\nDiagnostic log: $piWmLogPath"
+      SetErrorLevel 22
+      Quit
+    ${endif}
+  ${endif}
   Push "installation-completed"
   Call PiWmLog
   ; Do not pass extended TEMP syntax to the restarted app or its future tools.

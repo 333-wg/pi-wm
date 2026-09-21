@@ -160,6 +160,9 @@ try {
 	);
 	await page.reload();
 	await expect(page.locator(".connection")).toHaveClass(/connected/);
+	const restoredActivity = page.locator('.tool-group-summary[aria-expanded="false"]').first();
+	await expect(restoredActivity).toBeVisible();
+	await restoredActivity.click();
 	await expect(page.locator(".transcript")).toContainText("input.txt");
 	await passed("in-flight tool history survives renderer reload before approval");
 	await approve(copied);
