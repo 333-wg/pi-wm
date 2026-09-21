@@ -52,6 +52,10 @@ async function launch() {
 		timeout: 60_000,
 	});
 	page = await desktop.firstWindow();
+	// Keep fixture layout updates running when another desktop app obscures this window.
+	await desktop.evaluate(({ BrowserWindow }) => {
+		for (const window of BrowserWindow.getAllWindows()) window.webContents.setBackgroundThrottling(false);
+	});
 	assert.equal(await desktop.evaluate(({ app }) => app.isPackaged), Boolean(packaged));
 	assert.equal(await desktop.evaluate(({ app }) => app.getPath("userData")), profile);
 	page.setDefaultTimeout(15_000);
@@ -373,6 +377,12 @@ try {
 	console.log(
 		"PASS: real native pages, login persistence across restart, navigation/stop, popup tabs, isolation, native zoom, phone width, modal hiding, close/reopen, responsive layout and load errors."
 	);
+} catch (error) {
+	if (page && !page.isClosed()) {
+		await writeFile(join(output, "failure-dom.txt"), await page.locator("body").innerText()).catch(() => {});
+		await page.screenshot({ path: join(output, "failure.png") }).catch(() => {});
+	}
+	throw error;
 } finally {
 	await desktop?.close();
 	fixture.closeAllConnections();
