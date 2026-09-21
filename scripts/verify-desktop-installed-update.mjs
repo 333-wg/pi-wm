@@ -153,7 +153,8 @@ async function waitStatus(value) {
 }
 const button = (name) => page.locator("#settings-panel-updates").getByRole("button", { name, exact: true });
 async function stopObservedProcess(pid) {
-	assert.ok(applicationProcesses().some((p) => p.ProcessId === pid));
+	assert.ok(report.installationVerified && report.autoRestartObserved);
+	assert.ok(applicationProcesses().some((p) => p.ProcessId === pid && p.CommandLine.includes("--updated")));
 	await expect
 		.poll(
 			() =>
@@ -163,10 +164,13 @@ async function stopObservedProcess(pid) {
 			{ timeout: 60_000, intervals: [1000] }
 		)
 		.not.toBe("0");
+	// CloseMainWindow hides tray-enabled apps. The real restart is already proven;
+	// stop only this verified runner process so Playwright can relaunch and inspect saved data.
 	powershell(
-		`$p = Get-Process -Id ([int]$env:UPDATE_RESTART_PID); if (-not $p.CloseMainWindow()) { throw 'Cannot close verified restarted application' }; $p.WaitForExit(45000) | Out-Null; if (-not $p.HasExited) { throw 'Restarted application did not close' }`,
+		`$id = [int]$env:UPDATE_RESTART_PID; $observed = Get-CimInstance Win32_Process -Filter "ProcessId = $id"; if ($observed.ExecutablePath -ne $env:UPDATE_INSTALL_EXE -or $observed.CommandLine -notmatch '--updated' -or $observed.CommandLine -match '--type=') { throw 'Refusing to stop an unverified process' }; $p = Get-Process -Id $id; Stop-Process -Id $id -Force; $p.WaitForExit(45000) | Out-Null; if (-not $p.HasExited) { throw 'Verified test process did not stop' }`,
 		{ UPDATE_RESTART_PID: String(pid) }
 	);
+	report.restartedProcessCleanup = "terminated verified restarted runner process before automation reattachment";
 }
 try {
 	assert.deepEqual(uninstallEntries(), [], "Runner must not have a prior Pi-Wm installation");
