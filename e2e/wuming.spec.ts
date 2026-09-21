@@ -2,6 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { createTestSubagent } from "./subagent-fixture.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import WebSocket from "ws";
+import type { ServerMessage } from "@wuming/protocol";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -68,14 +70,51 @@ async function stopService(child: ChildProcess): Promise<void> {
 }
 
 async function createSession(page: Page): Promise<void> {
-	const navigation = page.getByRole("navigation", { name: "会话" });
-	const sessions = navigation.locator(".session-entry");
-	// The connection banner can appear before the initial session list settles.
-	// Every caller in this shared-server spec already has an attached session.
-	await expect(navigation.locator(".session-entry.selected")).toHaveCount(1);
-	const previousCount = await sessions.count();
-	await page.getByRole("button", { name: "新对话" }).click();
-	await expect(sessions).toHaveCount(previousCount + 1);
+	// New Chat intentionally stays a draft until the first prompt. Seed an empty
+	// persisted session for tests that exercise rename, archive or settings first.
+	const name = `E2E ${crypto.randomUUID()}`;
+	const url = new URL("/api/ws", webUrl);
+	url.protocol = "ws:";
+	const socket = new WebSocket(url, ["wuming.v1", `wuming.bearer.${Buffer.from(token).toString("base64url")}`]);
+	try {
+		await once(socket, "open", { signal: AbortSignal.timeout(10_000) });
+		const hello = once(socket, "message", { signal: AbortSignal.timeout(10_000) });
+		socket.send(JSON.stringify({ type: "hello", protocolVersion: 1, clientId: crypto.randomUUID(), capabilities: [] }));
+		await hello;
+		await new Promise<void>((resolve, reject) => {
+			const requestId = crypto.randomUUID();
+			const timer = setTimeout(() => reject(new Error("Session fixture timed out")), 10_000);
+			socket.on("message", (raw) => {
+				const message = JSON.parse(raw.toString()) as ServerMessage;
+				if (message.type !== "response" || message.requestId !== requestId) return;
+				clearTimeout(timer);
+				if (message.ok && message.result.type === "session.created") resolve();
+				else reject(new Error(message.ok ? "Unexpected fixture response" : message.error.message));
+			});
+			socket.send(
+				JSON.stringify({
+					type: "request",
+					requestId,
+					idempotencyKey: requestId,
+					command: {
+						type: "session.create",
+						workspaceId: "local-workspace",
+						name,
+						model: { provider: "demo", id: "wuming-demo" },
+						thinkingLevel: "medium",
+						sandboxMode: "workspace_write",
+						approvalPolicy: "on_risk",
+					},
+				})
+			);
+		});
+	} finally {
+		socket.close();
+	}
+	await page.reload();
+	await page.getByRole("navigation", { name: "会话" }).getByRole("button", { name, exact: true }).click();
+	if (!(await page.locator(".right-rail").isVisible()))
+		await page.getByRole("button", { name: "显示或隐藏运行面板" }).click();
 	await expect(page.getByRole("textbox", { name: "消息" })).toBeEnabled();
 }
 
@@ -370,6 +409,7 @@ for (const viewport of [
 
 test("branches a session from a message and resends an edited prompt", async ({ page }) => {
 	await createSession(page);
+	const originalName = await page.locator(".session-entry.selected .session-open span").innerText();
 	await sendMessage(page, "第一问");
 	await expect(page.getByText("Demo runtime received: 第一问")).toBeVisible();
 	// Streamed assistant text can become visible just before the durable turn has
@@ -396,7 +436,7 @@ test("branches a session from a message and resends an edited prompt", async ({ 
 	await page.getByRole("textbox", { name: "消息", exact: true }).fill("改写的第二问");
 	// `exact` matters: every other message still offers 编辑并重新发送.
 	await page.getByRole("button", { name: "发送", exact: true }).click();
-	await expect(page.getByRole("button", { name: "第一问 (fork)", exact: true })).toBeVisible();
+	await expect(page.getByRole("button", { name: `${originalName} (fork)`, exact: true })).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 改写的第二问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第一问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第二问")).toHaveCount(0);
@@ -467,10 +507,11 @@ test("shows the thinking control as unavailable on a model without reasoning", a
 	// hiding it is how the feature became invisible in the first place — but pinned
 	// to 关闭 and explaining itself. `thinking.spec.ts` covers the live control.
 	const trigger = page.locator(".thinking-trigger");
-	await expect(trigger).toHaveText("关闭");
-	await expect(trigger).toBeDisabled();
+	await expect(trigger.locator(".thinking-trigger-effort")).toHaveText("关闭");
+	await expect(trigger).toBeEnabled();
 	await expect(trigger).toHaveAttribute("title", "该模型不支持思考强度");
-	await trigger.click({ force: true });
+	await trigger.click();
+	await expect(page.locator(".thinking-menu-item")).toBeDisabled();
 	await expect(page.getByRole("menu", { name: "思考强度" })).toBeHidden();
 });
 
@@ -480,7 +521,7 @@ test("drives the shell from the keyboard and reports context occupancy", async (
 	await expect(page.getByText(/Demo runtime received: Report context usage for the meter/)).toBeVisible();
 	// The meter is estimated from reported usage, so it only appears once a turn
 	// has been accounted for.
-	const meter = page.getByRole("img", { name: /上下文约占 \d+%/ });
+	const meter = page.locator(".composer").getByRole("button", { name: /上下文约占 \d+%/ });
 	await expect(meter).toBeVisible();
 
 	// The palette runs the same registry the composer does, so a command with an
@@ -505,7 +546,8 @@ test("drives the shell from the keyboard and reports context occupancy", async (
 	await page.keyboard.press("Escape");
 	await expect(shortcuts).toBeHidden();
 	await page.keyboard.press("Control+Shift+b");
-	await expect(meter).toBeHidden();
+	await expect(page.locator(".right-rail")).toBeHidden();
+	await expect(meter).toBeVisible();
 });
 
 test("shows a trajectory evaluation without mobile overflow", async ({ page }) => {
@@ -547,15 +589,15 @@ test("retains and physically forgets a durable session memory", async ({ page })
 test("shows a thinking activity before the first model event", async ({ page }) => {
 	await createSession(page);
 	await sendMessage(page, "/inject");
-	const thinking = page.getByRole("status", { name: "正在思考" });
+	const thinking = page.getByRole("status", { name: "正在处理请求" });
 	await expect(thinking).toBeVisible();
-	await expect(thinking.locator(".thinking-bars i")).toHaveCount(4);
+	await expect(thinking).toHaveText("正在处理请求");
 	await page.getByRole("button", { name: "停止任务" }).click();
 	await expect(thinking).toBeHidden();
 });
 
 test("shows progress and compact live activity with command details on demand", async ({ page }) => {
-	await page.locator(".sidebar-new-chat").click();
+	await createSession(page);
 	await sendMessage(page, "/demo-live-tool");
 
 	const transcript = page.locator(".transcript");
@@ -582,8 +624,8 @@ test("shows automatic retry progress and recovery in the conversation", async ({
 	const retry = page.getByRole("status", { name: "正在自动重试" });
 	await expect(retry).toBeVisible();
 	await expect(retry).toContainText("模型网络故障");
-	await expect(retry).toContainText("第 1 次尝试失败，正在进行第 2/3 次尝试");
-	await expect(retry).toContainText("750ms 后重试");
+	await expect(retry).toContainText("第 2/3 次");
+	await expect(retry).toContainText("750ms 后自动重试");
 
 	await waitForIdle(page);
 	await expect(retry).toHaveCount(0);

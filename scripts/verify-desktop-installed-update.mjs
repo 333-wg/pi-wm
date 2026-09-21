@@ -311,19 +311,20 @@ try {
 			{ timeout: 600_000, intervals: [3000] }
 		)
 		.toBe(true);
-	report.installationVerified = true;
-	report.installedRuntimeFiles = await verifyRuntimeFiles(join(installDirectory, "resources", "runtime"));
 	report.targetRegistration = uninstallEntries();
 	passed("Real updater launched NSIS, replaced the installed binary and updated Windows registration");
 	await expect
 		.poll(() => applicationProcesses().filter((p) => p.CommandLine.includes("--updated")).length, {
-			timeout: 120_000,
+			timeout: 240_000,
 			intervals: [1000],
 		})
 		.toBe(1);
 	const restarted = applicationProcesses().find((p) => p.CommandLine.includes("--updated"));
 	report.autoRestartObserved = true;
 	report.restartedProcess = restarted;
+	// Registration precedes customInstall; automatic restart follows its repair/verification gate.
+	report.installedRuntimeFiles = await verifyRuntimeFiles(join(installDirectory, "resources", "runtime"));
+	report.installationVerified = true;
 	passed("The installer automatically restarted the installed application without a manual launch");
 	await stopObservedProcess(restarted.ProcessId);
 	await launch();
