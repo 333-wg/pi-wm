@@ -1539,7 +1539,13 @@ export function useWumingClient() {
 		): Promise<CommandResult> => {
 			const result = await requestRef.current?.(command);
 			if (!result) throw new Error("网关未连接");
-			if (result.type === "mcp.updated" || result.type === "mcp.removed") {
+			if (result.type === "mcp.removed") {
+				if (mcpWorkspaceRef.current !== command.workspaceId || result.workspaceId !== command.workspaceId)
+					return result;
+				await refreshMcp(command.workspaceId);
+				return result;
+			}
+			if (result.type === "mcp.updated") {
 				if (mcpWorkspaceRef.current !== command.workspaceId || result.workspaceId !== command.workspaceId)
 					return result;
 				++mcpListRevision.current;
@@ -1547,13 +1553,7 @@ export function useWumingClient() {
 				setState((current) => {
 					if (current.selectedWorkspaceId !== command.workspaceId || result.workspaceId !== command.workspaceId)
 						return current;
-					if (result.type === "mcp.removed")
-						return {
-							...current,
-							mcpServers: current.mcpServers.filter((server) => server.id !== result.serverId),
-							selectedMcpServer:
-								current.selectedMcpServer?.id === result.serverId ? undefined : current.selectedMcpServer,
-						};
+
 					return {
 						...current,
 						mcpServers: current.mcpServers.some((server) => server.id === result.server.id)
@@ -1568,7 +1568,7 @@ export function useWumingClient() {
 			}
 			return result;
 		},
-		[]
+		[refreshMcp]
 	);
 
 	const getMcp = useCallback(async (workspaceId: string, serverId: string) => {

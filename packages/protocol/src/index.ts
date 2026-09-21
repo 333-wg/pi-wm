@@ -243,6 +243,15 @@ export const VideoProtocolPreferenceSchema = Type.Union([
 	Type.Literal("openai-json"),
 	Type.Literal("agnes"),
 	Type.Literal("agnes-v2.5"),
+	Type.Literal("seedance"),
+	Type.Literal("jimeng"),
+	Type.Literal("kling"),
+	Type.Literal("wan"),
+	Type.Literal("minimax"),
+	Type.Literal("vidu"),
+	Type.Literal("google-veo"),
+	Type.Literal("google-omni"),
+	Type.Literal("grok"),
 ]);
 export type VideoProtocolPreference = Static<typeof VideoProtocolPreferenceSchema>;
 export const VideoReferenceFormatSchema = Type.Union([Type.Literal("auto"), Type.Literal("data-url")]);
@@ -265,6 +274,7 @@ export const MediaModelConfigSchema = StrictObject({
 		Type.Array(Type.String({ minLength: 1, maxLength: 200 }), { minItems: 1, maxItems: 50, uniqueItems: true })
 	),
 	apiKey: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
+	apiSecret: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
 });
 export type MediaModelConfig = Static<typeof MediaModelConfigSchema>;
 export const ImageModelOptionSchema = StrictObject({
@@ -912,9 +922,13 @@ export const McpToolSummarySchema = StrictObject({
 });
 export type McpToolSummary = Static<typeof McpToolSummarySchema>;
 
+export const McpScopeSchema = Type.Union([Type.Literal("workspace"), Type.Literal("global")]);
+export type McpScope = Static<typeof McpScopeSchema>;
+
 export const McpServerSummarySchema = StrictObject({
 	id: Id,
 	workspaceId: Id,
+	scope: Type.Optional(McpScopeSchema),
 	name: Type.String({ minLength: 1, maxLength: 200 }),
 	transport: McpTransportSchema,
 	readOnly: Type.Boolean(),
@@ -1558,6 +1572,8 @@ export const CommandSchema = Type.Union([
 	StrictObject({
 		type: Type.Literal("mcp.configure"),
 		workspaceId: Id,
+		scope: Type.Optional(McpScopeSchema),
+		previousScope: Type.Optional(McpScopeSchema),
 		config: McpServerConfigurationSchema,
 	}),
 	StrictObject({ type: Type.Literal("mcp.trust"), workspaceId: Id, serverId: Id }),

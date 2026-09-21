@@ -1507,7 +1507,7 @@ export class GatewayServer implements AsyncDisposable {
         const workspaceRoot = this.#workspacePath(command.workspaceId);
         const server =
           command.type === 'mcp.configure'
-            ? await this.#mcp.configureServer(command.workspaceId, workspaceRoot, command.config)
+            ? await this.#mcp.configureServer(command.workspaceId, workspaceRoot, command.config, command.scope, command.previousScope)
             : command.type === 'mcp.trust'
               ? await this.#mcp.trustServer(command.workspaceId, workspaceRoot, command.serverId)
               : await this.#mcp.untrustServer(command.workspaceId, workspaceRoot, command.serverId);

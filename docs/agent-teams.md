@@ -55,6 +55,21 @@ poll indefinitely or fabricate workers. The reminder survives gateway restarts.
 Explicit retry resets that bounded attempt. Worker task activation ends the
 startup check; provider failures still follow the existing manual retry flow.
 
+Delegation continues after startup. Every lead turn includes a workload snapshot
+and dependency/scope-ready pending tasks, with instructions to reassess staffing
+before substantial local implementation and after results or phase changes.
+For build requests, teammates should own actual implementation, repairs and
+verification, not just preliminary research. Suitable retained sessions receive
+owned follow-up tasks; the lead proactively creates members when useful parallel
+work needs capacity or expertise, subject to user roster constraints, tool policies
+and the existing eight-member limit. Small integration edits and genuinely serial
+blockers may remain with the lead. Research-only objectives need no invented code.
+Worker completion/failure notifications include a follow-up delegation checkpoint
+in the existing durable result message. This adds no polling turns or extra wakeups.
+An all-completed board prompts an objective check, not automatic acceptance.
+These are model-facing collaboration policies, not a hard implementation quota or
+a semantic proof that every requested deliverable is present.
+
 The built-in skill excludes questions about the feature, quoted mentions, and
 ordinary solo work. Team creation follows explicit task intent, not keyword
 matching. Teams have their own IDs, workspace ownership and lifetimes. The same

@@ -18,7 +18,7 @@ const families: Record<MediaKind, RegExp> = {
 	image:
 		/(?:^|[/:._-])(?:agnes-image|gpt-image(?:-\d+)?|dall-e|flux|stable-diffusion|sdxl|sd3(?:\.\d+)?|imagen|ideogram|recraft|seedream|qwen-image|hunyuan-image|hunyuanimage|nano-banana)(?:$|[/:._-])|(?:^|\/)gemini-[\w.-]*-image(?:$|-)/i,
 	video:
-		/(?:^|[/:._-])(?:agnes-video|sora|veo(?:\d)?|kling|seedance|hailuo|hunyuan-video|hunyuanvideo|cogvideo[x]?|ltx-video|vidu|pika|wan(?:\d+(?:\.\d+)?)?|ray-[23]|runway-gen[\w.-]*)(?:$|[/:._-])/i,
+		/(?:^|[/:._-])(?:agnes-video|jimeng|gemini-omni|grok-imagine-video|sora|veo(?:\d)?|kling|seedance|hailuo|hunyuan-video|hunyuanvideo|cogvideo[x]?|ltx-video|vidu|pika|wan(?:\d+(?:\.\d+)?)?|ray-[23]|runway-gen[\w.-]*)(?:$|[/:._-])/i,
 };
 
 /** Prefer declared output capabilities; image/video input alone is never generation. */

@@ -886,6 +886,7 @@ async function main(): Promise<void> {
 	);
 	const trustedMcpServers = configuredMcpTrust();
 	const mcpCatalog = new FileMcpCatalog({
+		globalRoot: dataDir,
 		resolveWorkspace: workspacePathFor,
 		isTrusted: (workspaceId, serverId) => trustedMcpServers.has(`${workspaceId}\0${serverId}`),
 	});

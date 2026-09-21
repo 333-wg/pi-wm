@@ -385,6 +385,83 @@ test("persists default media settings without returning keys", async ({ page }, 
 	).toBe(false);
 });
 
+test("configures native video services and hides saved dual credentials on desktop/mobile", async ({
+	page,
+}, testInfo) => {
+	await openApp(page, webUrl);
+	await page.getByRole("button", { name: "设置", exact: true }).click();
+	await page.locator(".settings-navigation button").filter({ hasText: "模型" }).click();
+	const settings = page.getByRole("region", { name: "图片与视频生成模型" });
+	const profiles = [
+		{
+			protocol: "google-veo",
+			model: "veo-3.1-generate-preview",
+			host: "generativelanguage.googleapis.com",
+			pair: false,
+		},
+		{ protocol: "google-omni", model: "gemini-omni-1.1-flash", host: "generativelanguage.googleapis.com", pair: false },
+		{ protocol: "grok", model: "grok-imagine-video-1.5", host: "api.x.ai", pair: false },
+		{ protocol: "seedance", model: "doubao-seedance-1-5-pro-251215", host: "ark.cn-beijing.volces.com", pair: false },
+		{ protocol: "jimeng", model: "jimeng_ti2v_v30_pro", host: "visual.volcengineapi.com", pair: true },
+		{ protocol: "kling", model: "kling-v2-6", host: "api-beijing.klingai.com", pair: true },
+		{ protocol: "wan", model: "wan2.6-t2v", host: "dashscope.aliyuncs.com", pair: false },
+		{ protocol: "minimax", model: "MiniMax-H3", host: "api.minimaxi.com", pair: false },
+		{ protocol: "vidu", model: "viduq3-pro", host: "api.vidu.cn", pair: false },
+	];
+	const before = requests.length;
+	for (const profile of profiles) {
+		await settings.locator("summary").filter({ hasText: "手动添加视频服务" }).click();
+		const form = settings.locator("form").filter({ hasText: "添加视频服务" });
+		await form.getByLabel("接口协议").selectOption(profile.protocol);
+		expect(new URL(await form.getByLabel("Base URL").inputValue()).hostname).toBe(profile.host);
+		await form.getByLabel(profile.protocol === "jimeng" ? "模型 req_key" : "模型 ID").fill(profile.model);
+		await form.getByLabel(profile.pair ? "Access Key" : "API Key", { exact: true }).fill("native-fixture-access-key");
+		if (profile.pair) await form.getByLabel("Secret Key", { exact: true }).fill("native-fixture-secret-key");
+		await form.getByRole("button", { name: "保存", exact: true }).click();
+		await expect(form).toHaveCount(0);
+		await expect(settings.getByRole("button", { name: "配置视频模型：" + profile.model, exact: true })).toBeVisible();
+	}
+	await page.reload();
+	await page.getByRole("button", { name: "设置", exact: true }).click();
+	await page.locator(".settings-navigation button").filter({ hasText: "模型" }).click();
+	await settings.getByRole("button", { name: "配置视频模型：gemini-omni-1.1-flash", exact: true }).click();
+	const googleForm = settings.locator("form").filter({ hasText: "视频模型配置" });
+	await expect(googleForm.getByLabel("接口协议")).toHaveValue("google-omni");
+	await expect(googleForm.getByLabel("API Key", { exact: true })).toHaveValue("");
+	await googleForm.scrollIntoViewIfNeeded();
+	await page.screenshot({ path: testInfo.outputPath("google-video-settings-desktop.png") });
+	await page.setViewportSize({ width: 390, height: 844 });
+	await googleForm.scrollIntoViewIfNeeded();
+	for (const input of await googleForm.locator("input, select").all()) {
+		const box = (await input.boundingBox())!;
+		expect(box.x).toBeGreaterThanOrEqual(0);
+		expect(box.x + box.width).toBeLessThanOrEqual(390);
+	}
+	await page.screenshot({ path: testInfo.outputPath("google-video-settings-mobile.png") });
+	await page.setViewportSize({ width: 1280, height: 720 });
+	await settings.getByRole("button", { name: "配置视频模型：jimeng_ti2v_v30_pro", exact: true }).click();
+	const form = settings.locator("form").filter({ hasText: "视频模型配置" });
+	await expect(form.getByLabel("接口协议")).toHaveValue("jimeng");
+	await expect(form.getByLabel("Access Key", { exact: true })).toHaveValue("");
+	await expect(form.getByLabel("Secret Key", { exact: true })).toHaveValue("");
+	await form.scrollIntoViewIfNeeded();
+	await page.screenshot({ path: testInfo.outputPath("native-video-settings-desktop.png") });
+	await page.setViewportSize({ width: 390, height: 844 });
+	await form.scrollIntoViewIfNeeded();
+	for (const input of await form.locator("input, select").all()) {
+		const box = (await input.boundingBox())!;
+		expect(box.x).toBeGreaterThanOrEqual(0);
+		expect(box.x + box.width).toBeLessThanOrEqual(390);
+	}
+	await page.screenshot({ path: testInfo.outputPath("native-video-settings-mobile.png") });
+	expect(requests.length).toBe(before);
+	for (const profile of profiles) {
+		page.once("dialog", (dialog) => dialog.accept());
+		await settings.getByRole("button", { name: "移除模型：" + profile.model, exact: true }).click();
+		await expect(settings.getByRole("button", { name: "移除模型：" + profile.model, exact: true })).toHaveCount(0);
+	}
+});
+
 test("fetches only matching media candidates using saved or unsaved connections", async ({ page }, testInfo) => {
 	await openApp(page, webUrl);
 	await page.getByRole("button", { name: "设置", exact: true }).click();

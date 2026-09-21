@@ -1,5 +1,8 @@
 # Image and Video Generation
 
+Google and Grok native video setup and verification boundaries are documented in
+[Google 与 Grok 视频适配](international-video-adapters.md).
+
 Settings > Models provides independent default image and video connections.
 Each accepts a Base URL, API key, and an exact provider model ID. Media models
 are not added to the conversational model picker. A saved key is never returned
@@ -128,6 +131,12 @@ user direction.
 
 ## Video Adapters and References
 
+Native domestic providers are now supported: Seedance, Jimeng Visual, Kling,
+Wan, MiniMax/Hailuo (including H3 V2), and Vidu. See
+[国内视频模型原生适配](native-video-adapters.md) for exact endpoints, credentials,
+model/mode restrictions and verification scope. The entries below describe the
+existing OpenAI-compatible and Agnes adapters; they are not the complete list.
+
 Video settings default to automatic protocol selection. The registry in
 `apps/gateway/src/media-video.ts` owns capabilities, validation, serialization,
 remote task IDs, polling paths and result normalization. Extend that registry
@@ -135,12 +144,12 @@ for a documented provider contract, rather than branching in tool execution.
 
 - Official Agnes v2.0 uses the legacy adapter. Official Agnes 2.5 and 2.5 Flash
   automatically use the new `agnes-v2.5` adapter.
-- Other endpoints retain OpenAI Videos-compatible transport. Known Sora models
+- Other unrecognized endpoints retain OpenAI Videos-compatible transport. Known Sora models
   receive their duration and size limits; unrelated models do not inherit them.
   Unknown native Agnes models fail before submission.
 - Settings can override transport once per service: OpenAI multipart, OpenAI
   JSON, Agnes v2.0 or Agnes 2.5. A relay's model name does not prove its protocol.
-  Custom native APIs still need dedicated adapters. This is not universal
+  Additional custom native APIs still need dedicated adapters. This is not universal
   compatibility with arbitrary vendor APIs. Detection never creates paid jobs.
 
 The status tool and host policy expose the actual video model and secret-free

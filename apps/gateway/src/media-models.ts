@@ -15,6 +15,10 @@ import {
 	type MediaModelOption,
 } from "@wuming/protocol";
 import { parseMediaModelCatalog } from "./media-model-discovery.js";
+import { videoProtocol } from "./media-video.js";
+import { validateVideoCredentials } from "./media-video-auth.js";
+import { nativeVideoAdapters } from "./media-video-native.js";
+import { internationalVideoAdapters } from "./media-video-international.js";
 
 export type MediaConnection = Omit<MediaModelConfig, "apiKey"> & { apiKey: string };
 const checkConfig = Compile(MediaModelConfigSchema);
@@ -32,7 +36,15 @@ function videoKey(model: ModelRef): string {
 }
 export function mediaConnectionHash(config: MediaConnection): string {
 	return createHash("sha256")
-		.update(JSON.stringify({ kind: config.kind, baseUrl: config.baseUrl, model: config.model, apiKey: config.apiKey }))
+		.update(
+			JSON.stringify({
+				kind: config.kind,
+				baseUrl: config.baseUrl,
+				model: config.model,
+				apiKey: config.apiKey,
+				...(config.apiSecret ? { apiSecret: config.apiSecret } : {}),
+			})
+		)
 		.digest("hex");
 }
 function localProvider(baseUrl: string): string {
@@ -40,6 +52,8 @@ function localProvider(baseUrl: string): string {
 }
 
 function selectedModels(config: MediaModelConfig): string[] {
+	if (config.kind !== "video" && config.apiSecret !== undefined)
+		throw new Error("Secret Key applies only to native video models");
 	if (config.kind !== "video" && (config.videoProtocol !== undefined || config.videoReferenceFormat !== undefined))
 		throw new Error("Video protocol applies only to video models");
 	const models = (config.models ?? [config.model]).map((model) => model.trim());
@@ -124,6 +138,7 @@ export class MediaModelRegistry {
 				baseUrl: config.baseUrl,
 				model: config.model,
 				apiKey: config.apiKey,
+				...(config.apiSecret ? { apiSecret: config.apiSecret } : {}),
 				...(config.kind === "image" ? { models } : {}),
 				...(config.kind === "video" && config.videoProtocol && config.videoProtocol !== "auto"
 					? { videoProtocol: config.videoProtocol }
@@ -380,6 +395,10 @@ export class MediaModelRegistry {
 			baseUrl: config.baseUrl,
 			model: selected.id,
 			apiKey: config.apiKey,
+			...(config.apiSecret ? { apiSecret: config.apiSecret } : {}),
+			...(selected.custom && this.#videoModels.get(videoKey(selected))?.config.apiSecret
+				? { apiSecret: this.#videoModels.get(videoKey(selected))!.config.apiSecret! }
+				: {}),
 			...(selected.videoProtocol ? { videoProtocol: selected.videoProtocol } : {}),
 			...(selected.videoReferenceFormat ? { videoReferenceFormat: selected.videoReferenceFormat } : {}),
 		};
@@ -449,6 +468,7 @@ export class MediaModelRegistry {
 			const apiKey = selected?.custom ? resolved?.apiKey : config.apiKey?.trim() || previous?.apiKey || service?.apiKey;
 			if (!apiKey) throw new Error("API Key is required for a new or changed Media Base URL");
 			const protocol = config.videoProtocol ?? previous?.videoProtocol;
+			const apiSecret = config.apiSecret?.trim() || previous?.apiSecret || service?.apiSecret;
 			const format = config.videoReferenceFormat ?? previous?.videoReferenceFormat;
 			const saved: MediaConnection = {
 				kind: "video",
@@ -456,13 +476,15 @@ export class MediaModelRegistry {
 				baseUrl,
 				model,
 				apiKey,
+				...(apiSecret ? { apiSecret } : {}),
 				...(protocol && protocol !== "auto" ? { videoProtocol: protocol } : {}),
 				...(format === "data-url" ? { videoReferenceFormat: format } : {}),
 			};
-			if (!selected?.custom && config.apiKey?.trim()) {
+			validateVideoCredentials(saved, videoProtocol(saved));
+			if (!selected?.custom && (config.apiKey?.trim() || config.apiSecret?.trim())) {
 				for (const [key, entry] of videos)
 					if (!entry.custom && entry.config.provider === provider)
-						videos.set(key, { ...entry, config: { ...entry.config, apiKey } });
+						videos.set(key, { ...entry, config: { ...entry.config, apiKey, ...(apiSecret ? { apiSecret } : {}) } });
 			}
 			videos.set(videoKey({ provider, id: model }), { custom: selected?.custom ?? false, config: saved });
 			if (!currentDefault || (currentDefault.provider === provider && currentDefault.id === model))
@@ -523,6 +545,11 @@ export class MediaModelRegistry {
 	async discover(connection: MediaModelDiscoveryConnection) {
 		if (!checkDiscovery.Check(connection)) throw new Error("生成模型连接参数无效");
 		const baseUrl = connection.baseUrl.trim().replace(/\/+$/, "");
+		if (
+			connection.kind === "video" &&
+			[...nativeVideoAdapters, ...internationalVideoAdapters].some((adapter) => adapter.matches({ baseUrl, model: "" }))
+		)
+			throw new Error("此原生视频服务不使用 OpenAI 模型列表；请填写供应商控制台的模型 ID（即梦填写 req_key）");
 		const url = mediaResourceUrl(baseUrl, "models");
 		let saved = this.#configs.get(connection.kind);
 		if (connection.kind === "video") {

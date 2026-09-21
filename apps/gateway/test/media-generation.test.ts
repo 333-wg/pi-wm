@@ -52,7 +52,10 @@ async function fixture(imageModels?: CustomModelRegistry) {
 	const approvals = { authorize: vi.fn().mockResolvedValue(undefined), completeAuthorization: vi.fn() };
 	const services: MediaGenerationService[] = [];
 	const service = (
-		timing: Pick<ConstructorParameters<typeof MediaGenerationService>[0], "pollMs" | "now" | "wait"> & {
+		timing: Pick<
+			ConstructorParameters<typeof MediaGenerationService>[0],
+			"pollMs" | "now" | "wait" | "maxVideoBytes"
+		> & {
 			models?: MediaModelRegistry;
 		} = {}
 	) => {
@@ -105,6 +108,414 @@ async function fixture(imageModels?: CustomModelRegistry) {
 	};
 	return { root, options, models, artifacts, fetchMock, download, approvals, service, invoke, configure };
 }
+
+describe("Google and Grok video service lifecycle", () => {
+	const googleBase = "https://generativelanguage.googleapis.com/v1beta";
+	const uri = googleBase + "/files/video-123";
+	const googleCompleted = {
+		done: true,
+		response: { generateVideoResponse: { generatedSamples: [{ video: { uri: uri + ":download?alt=media" } }] } },
+	};
+	const omniCompleted = {
+		status: "completed",
+		steps: [{ type: "model_output", content: [{ type: "video", uri, mime_type: "video/mp4" }] }],
+	};
+	const cases = [
+		{
+			protocol: "google-veo",
+			baseUrl: googleBase,
+			model: "veo-3.1-generate-preview",
+			submitted: { name: "models/veo-3.1-generate-preview/operations/task-123" },
+			completed: googleCompleted,
+			path: "/v1beta/models/veo-3.1-generate-preview:predictLongRunning",
+		},
+		{
+			protocol: "google-omni",
+			baseUrl: googleBase,
+			model: "gemini-omni-1.1-flash",
+			submitted: { id: "v1_" + "x".repeat(300), status: "in_progress" },
+			completed: omniCompleted,
+			path: "/v1beta/interactions",
+		},
+		{
+			protocol: "grok",
+			baseUrl: "https://api.x.ai/v1",
+			model: "grok-imagine-video-1.5",
+			submitted: { request_id: "request-123" },
+			completed: { status: "done", video: { url: "https://cdn.example/video.mp4", respect_moderation: true } },
+			path: "/v1/videos/generations",
+		},
+	] as const;
+	for (const useImage of [false, true]) {
+		it.each(cases)(
+			"resumes $protocol " + (useImage ? "image" : "text") + " tasks after reload and a protocol preference change",
+			async (entry) => {
+				const f = await fixture();
+				await f.models.set({ kind: "video", baseUrl: entry.baseUrl, model: entry.model, apiKey: "private-video-key" });
+				const ref = useImage
+					? (await f.artifacts.create({ workspaceId: "workspace", ownerId: "user", name: "image.png", content: png }))
+							.ref
+					: undefined;
+				f.fetchMock.mockResolvedValueOnce(json(entry.submitted)).mockResolvedValueOnce(json(entry.completed));
+				if (entry.protocol === "google-omni")
+					f.fetchMock.mockResolvedValueOnce(json({ state: "ACTIVE", name: "files/video-123" }));
+				if (entry.protocol !== "grok") f.fetchMock.mockResolvedValueOnce(new Response(new Uint8Array(mp4)));
+				f.download.mockResolvedValue(mp4);
+				const submitted = await f.invoke("generate_video", {
+					prompt: "scene",
+					...(ref ? { referenceArtifactId: ref.id } : {}),
+				});
+				const jobId = (submitted.details as { jobId: string }).jobId;
+				await f.models.set({ kind: "video", baseUrl: entry.baseUrl, model: entry.model, videoProtocol: "openai-json" });
+				const loaded = new MediaModelRegistry(f.options);
+				await loaded.load();
+				const resumed = f.service({ models: loaded });
+				const result = await f.invoke("get_generated_video", { jobId }, snapshot(), undefined, resumed);
+				expect((await f.artifacts.read((result.details as { artifact: ArtifactRef }).artifact.id)).content).toEqual(
+					mp4
+				);
+				expect(new URL(String(f.fetchMock.mock.calls[0]![0])).pathname).toBe(entry.path);
+				if (useImage) expect(String(f.fetchMock.mock.calls[0]![1]?.body)).toContain(png.toString("base64"));
+				expect(f.fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+				for (const [url, init] of f.fetchMock.mock.calls) {
+					const headers = new Headers(init?.headers);
+					expect(String(url)).not.toContain("private-video-key");
+					if (entry.protocol === "grok") expect(headers.get("authorization")).toBe("Bearer private-video-key");
+					else {
+						expect(headers.get("x-goog-api-key")).toBe("private-video-key");
+						expect(headers.has("authorization")).toBe(false);
+					}
+				}
+				if (entry.protocol === "grok")
+					expect(f.download).toHaveBeenCalledWith(
+						"https://cdn.example/video.mp4",
+						expect.objectContaining({ maxBytes: 100 * 1024 * 1024 })
+					);
+				else expect(f.download).not.toHaveBeenCalled();
+				expect(JSON.stringify(submitted)).not.toContain(png.toString("base64"));
+				const count = f.fetchMock.mock.calls.length;
+				await f.invoke("get_generated_video", { jobId }, snapshot(), undefined, resumed);
+				expect(f.fetchMock).toHaveBeenCalledTimes(count);
+			}
+		);
+	}
+	it("follows a Google file CDN redirect without forwarding API credentials", async () => {
+		const f = await fixture();
+		await f.configure("video", googleBase, cases[0].model);
+		f.fetchMock
+			.mockResolvedValueOnce(json(cases[0].submitted))
+			.mockResolvedValueOnce(json(googleCompleted))
+			.mockResolvedValueOnce(
+				new Response(null, { status: 302, headers: { Location: "https://cdn.example/signed.mp4?signature=fixture" } })
+			);
+		f.download.mockResolvedValue(mp4);
+		const submitted = await f.invoke("generate_video", { prompt: "scene" });
+		await f.invoke("get_generated_video", { jobId: (submitted.details as { jobId: string }).jobId });
+		expect(f.fetchMock).toHaveBeenCalledTimes(3);
+		expect(f.fetchMock.mock.calls[2]![1]?.redirect).toBe("manual");
+		expect(f.download).toHaveBeenCalledWith("https://cdn.example/signed.mp4?signature=fixture", {
+			maxBytes: 100 * 1024 * 1024,
+			signal: expect.any(AbortSignal),
+		});
+	});
+	it.each([googleBase + "/models/private", "https://cdn.example/video.mp4?key=private-media-key"])(
+		"rejects unsafe authenticated output URL %s",
+		async (url) => {
+			const f = await fixture();
+			await f.configure("video", googleBase, cases[0].model);
+			f.fetchMock
+				.mockResolvedValueOnce(json(cases[0].submitted))
+				.mockResolvedValueOnce(
+					json({ done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: url } }] } } })
+				);
+			const submitted = await f.invoke("generate_video", { prompt: "scene" });
+			await expect(
+				f.invoke("get_generated_video", { jobId: (submitted.details as { jobId: string }).jobId })
+			).rejects.toThrow();
+			expect(f.fetchMock).toHaveBeenCalledTimes(2);
+			expect(f.download).not.toHaveBeenCalled();
+		}
+	);
+	it("waits for Omni Files API processing without creating another interaction", async () => {
+		const f = await fixture();
+		await f.configure("video", googleBase, cases[1].model);
+		let now = Date.UTC(2026, 8, 21);
+		const instance = f.service({
+			now: () => now,
+			wait: async (ms) => {
+				now += ms;
+			},
+		});
+		f.fetchMock
+			.mockResolvedValueOnce(json(cases[1].submitted))
+			.mockResolvedValueOnce(json(omniCompleted))
+			.mockResolvedValueOnce(json({ state: "PROCESSING" }))
+			.mockResolvedValueOnce(json(omniCompleted))
+			.mockResolvedValueOnce(json({ state: "ACTIVE" }))
+			.mockResolvedValueOnce(new Response(new Uint8Array(mp4)));
+		const submitted = await f.invoke("generate_video", { prompt: "scene" }, snapshot(), undefined, instance);
+		expect(
+			(
+				await f.invoke(
+					"get_generated_video",
+					{ jobId: (submitted.details as { jobId: string }).jobId },
+					snapshot(),
+					undefined,
+					instance
+				)
+			).details
+		).toHaveProperty("artifact");
+		expect(f.fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+		expect(f.fetchMock).toHaveBeenCalledTimes(6);
+	});
+	it("handles Omni inline video larger than the normal JSON cap without exposing Base64", async () => {
+		const f = await fixture();
+		await f.configure("video", googleBase, cases[1].model);
+		const video = Buffer.concat([mp4, Buffer.alloc(1100000)]);
+		f.fetchMock.mockResolvedValueOnce(json(cases[1].submitted)).mockResolvedValueOnce(
+			json({
+				status: "completed",
+				steps: [
+					{
+						type: "model_output",
+						content: [{ type: "video", mime_type: "video/mp4", data: video.toString("base64") }],
+					},
+				],
+			})
+		);
+		const submitted = await f.invoke("generate_video", { prompt: "scene" });
+		const result = await f.invoke("get_generated_video", { jobId: (submitted.details as { jobId: string }).jobId });
+		const saved = await f.artifacts.read((result.details as { artifact: ArtifactRef }).artifact.id);
+		expect(saved.content.equals(video)).toBe(true);
+		expect(JSON.stringify(result).length).toBeLessThan(2000);
+		expect(f.download).not.toHaveBeenCalled();
+	});
+	it("rejects oversized Omni inline responses using the configured video limit", async () => {
+		const f = await fixture();
+		await f.configure("video", googleBase, cases[1].model);
+		const instance = f.service({ maxVideoBytes: 16 });
+		f.fetchMock
+			.mockResolvedValueOnce(json(cases[1].submitted))
+			.mockResolvedValueOnce(
+				json({ status: "completed", output_video: { mime_type: "video/mp4", data: mp4.toString("base64") } })
+			);
+		const submitted = await f.invoke("generate_video", { prompt: "scene" }, snapshot(), undefined, instance);
+		await expect(
+			f.invoke(
+				"get_generated_video",
+				{ jobId: (submitted.details as { jobId: string }).jobId },
+				snapshot(),
+				undefined,
+				instance
+			)
+		).rejects.toThrow("size limit");
+		expect(f.fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+	});
+});
+
+describe("native video service lifecycle", () => {
+	const cases = [
+		{
+			protocol: "minimax",
+			baseUrl: "https://api.minimaxi.com/v1",
+			model: "MiniMax-H3",
+			submitted: { task_id: "task-123", base_resp: { status_code: 0 } },
+			completed: { task: { status: "succeeded", content: { url: "https://cdn.example/video.mp4" } } },
+			path: "/v2/video_generation",
+		},
+		{
+			protocol: "seedance",
+			baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+			model: "doubao-seedance-1-5-pro-251215",
+			submitted: { id: "task-123" },
+			completed: { status: "succeeded", content: { video_url: "https://cdn.example/video.mp4" } },
+			path: "/api/v3/contents/generations/tasks",
+		},
+		{
+			protocol: "jimeng",
+			baseUrl: "https://visual.volcengineapi.com",
+			model: "jimeng_ti2v_v30_pro",
+			submitted: { code: 10000, data: { task_id: "task-123" } },
+			completed: { code: 10000, data: { status: "done", video_url: "https://cdn.example/video.mp4" } },
+			path: "/",
+		},
+		{
+			protocol: "kling",
+			baseUrl: "https://api-beijing.klingai.com/v1",
+			model: "kling-v2-6",
+			submitted: { code: 0, data: { task_id: "task-123" } },
+			completed: {
+				code: 0,
+				data: { task_status: "succeed", task_result: { videos: [{ url: "https://cdn.example/video.mp4" }] } },
+			},
+			path: "/v1/videos/text2video",
+		},
+		{
+			protocol: "wan",
+			baseUrl: "https://dashscope.aliyuncs.com/api/v1",
+			model: "wan2.6-t2v",
+			submitted: { output: { task_id: "task-123" } },
+			completed: { output: { task_status: "SUCCEEDED", video_url: "https://cdn.example/video.mp4" } },
+			path: "/api/v1/services/aigc/video-generation/video-synthesis",
+		},
+		{
+			protocol: "minimax",
+			baseUrl: "https://api.minimaxi.com/v1",
+			model: "MiniMax-Hailuo-2.3",
+			submitted: { task_id: "task-123", base_resp: { status_code: 0 } },
+			completed: { status: "Success", file_id: "123456", base_resp: { status_code: 0 } },
+			path: "/v1/video_generation",
+		},
+		{
+			protocol: "vidu",
+			baseUrl: "https://api.vidu.cn/ent/v2",
+			model: "viduq2",
+			submitted: { task_id: "task-123" },
+			completed: { state: "success", creations: [{ url: "https://cdn.example/video.mp4" }] },
+			path: "/ent/v2/text2video",
+		},
+	] as const;
+	for (const useImage of [false, true]) {
+		it.each(cases)(
+			"submits and resumes $protocol " + (useImage ? "image" : "text") + " generation after reload",
+			async (entry) => {
+				const f = await fixture();
+				const model =
+					entry.protocol === "wan" && useImage
+						? "wan2.6-i2v"
+						: entry.protocol === "vidu" && useImage
+							? "viduq2-pro"
+							: entry.model;
+				await f.models.set({
+					kind: "video",
+					baseUrl: entry.baseUrl,
+					model,
+					videoProtocol: entry.protocol,
+					apiKey: "private-native-key",
+					...(["jimeng", "kling"].includes(entry.protocol) ? { apiSecret: "private-native-secret" } : {}),
+				});
+				const ref = useImage
+					? (await f.artifacts.create({ workspaceId: "workspace", ownerId: "user", name: "ref.png", content: png })).ref
+					: undefined;
+				f.fetchMock.mockResolvedValueOnce(json(entry.submitted)).mockResolvedValueOnce(json(entry.completed));
+				const fileLookup = entry.protocol === "minimax" && entry.model !== "MiniMax-H3";
+				if (fileLookup)
+					f.fetchMock.mockResolvedValueOnce(
+						json({ file: { download_url: "https://cdn.example/video.mp4" }, base_resp: { status_code: 0 } })
+					);
+				f.download.mockResolvedValue(mp4);
+				const submitted = await f.invoke("generate_video", {
+					prompt: "scene",
+					...(ref ? { referenceArtifactId: ref.id } : {}),
+				});
+				const { jobId } = submitted.details as { jobId: string };
+				const [url, init] = f.fetchMock.mock.calls[0]!;
+				const expectedPath =
+					useImage && entry.protocol === "kling"
+						? "/v1/videos/image2video"
+						: useImage && entry.protocol === "vidu"
+							? "/ent/v2/img2video"
+							: entry.path;
+				expect(new URL(String(url)).pathname).toBe(expectedPath);
+				expect(init?.method).toBe("POST");
+				const headers = new Headers(init?.headers);
+				if (entry.protocol === "jimeng")
+					expect(headers.get("authorization")).toContain("HMAC-SHA256 Credential=private-native-key/");
+				else if (entry.protocol === "kling") expect(headers.get("authorization")).toMatch(/^Bearer eyJ/);
+				else
+					expect(headers.get("authorization")).toBe(
+						(entry.protocol === "vidu" ? "Token " : "Bearer ") + "private-native-key"
+					);
+				if (entry.protocol === "wan") expect(headers.get("x-dashscope-async")).toBe("enable");
+				if (useImage) expect(String(init?.body)).toContain(png.toString("base64"));
+				expect(JSON.stringify(submitted)).not.toContain(png.toString("base64"));
+				expect(JSON.stringify(f.models.list())).not.toContain("private-native");
+				expect(await readFile(f.options.filePath, "utf8")).not.toContain("private-native");
+				const loaded = new MediaModelRegistry(f.options);
+				await loaded.load();
+				const resumed = f.service({ models: loaded });
+				const complete = await f.invoke("get_generated_video", { jobId }, snapshot(), undefined, resumed);
+				expect(complete.details).toHaveProperty("artifact");
+				expect((await f.artifacts.read((complete.details as { artifact: ArtifactRef }).artifact.id)).content).toEqual(
+					mp4
+				);
+				expect(f.download).toHaveBeenCalledWith(
+					"https://cdn.example/video.mp4",
+					expect.objectContaining({ maxBytes: 100 * 1024 * 1024 })
+				);
+				const [, pollInit] = f.fetchMock.mock.calls[1]!;
+				expect(pollInit?.method).toBe(entry.protocol === "jimeng" ? "POST" : "GET");
+				if (entry.protocol === "jimeng")
+					expect(String(f.fetchMock.mock.calls[1]![0])).toContain("Action=CVSync2AsyncGetResult");
+				if (entry.protocol === "kling")
+					expect(String(f.fetchMock.mock.calls[1]![0])).toContain(
+						(useImage ? "image2video" : "text2video") + "/task-123"
+					);
+				expect(f.fetchMock).toHaveBeenCalledTimes(fileLookup ? 3 : 2);
+				await f.invoke("get_generated_video", { jobId }, snapshot(), undefined, resumed);
+				expect(f.fetchMock).toHaveBeenCalledTimes(fileLookup ? 3 : 2);
+			}
+		);
+	}
+	it("backs off Jimeng POST retrieval on 429 without resubmitting a generation", async () => {
+		const f = await fixture();
+		const entry = cases.find((value) => value.protocol === "jimeng")!;
+		await f.models.set({
+			kind: "video",
+			baseUrl: entry.baseUrl,
+			model: entry.model,
+			videoProtocol: "jimeng",
+			apiKey: "ak",
+			apiSecret: "sk",
+		});
+		let now = Date.UTC(2026, 8, 21);
+		const instance = f.service({
+			now: () => now,
+			wait: async (ms) => {
+				now += ms;
+			},
+		});
+		f.fetchMock
+			.mockResolvedValueOnce(json(entry.submitted))
+			.mockResolvedValueOnce(new Response("rate limited", { status: 429, headers: { "Retry-After": "120" } }))
+			.mockResolvedValueOnce(json(entry.completed));
+		f.download.mockResolvedValue(mp4);
+		const submitted = await f.invoke("generate_video", { prompt: "scene" }, snapshot(), undefined, instance);
+		const jobId = (submitted.details as { jobId: string }).jobId;
+		const pending = await f.invoke("get_generated_video", { jobId }, snapshot(), undefined, instance);
+		expect(JSON.stringify(pending)).toContain("pending");
+		now += 120000;
+		expect((await f.invoke("get_generated_video", { jobId }, snapshot(), undefined, instance)).details).toHaveProperty(
+			"artifact"
+		);
+		expect(
+			f.fetchMock.mock.calls.filter(([url]) => String(url).includes("Action=CVSync2AsyncSubmitTask"))
+		).toHaveLength(1);
+	});
+	it("preserves secret on blank edits, rotates it across a service and binds pending jobs to it", async () => {
+		const f = await fixture();
+		const entry = cases.find((value) => value.protocol === "kling")!;
+		await expect(
+			f.models.set({ kind: "video", baseUrl: entry.baseUrl, model: entry.model, apiKey: "ak" })
+		).rejects.toThrow("Secret Key");
+		await f.models.set({
+			kind: "video",
+			baseUrl: entry.baseUrl,
+			model: entry.model,
+			apiKey: "ak",
+			apiSecret: "secret-one",
+		});
+		await f.models.set({ kind: "video", baseUrl: entry.baseUrl, model: entry.model });
+		expect(f.models.resolve("video").apiSecret).toBe("secret-one");
+		f.fetchMock.mockResolvedValueOnce(json(entry.submitted));
+		const submitted = await f.invoke("generate_video", { prompt: "scene" });
+		await f.models.set({ kind: "video", baseUrl: entry.baseUrl, model: entry.model, apiSecret: "secret-two" });
+		await expect(
+			f.invoke("get_generated_video", { jobId: (submitted.details as { jobId: string }).jobId })
+		).rejects.toThrow("restore");
+		expect(f.fetchMock).toHaveBeenCalledTimes(1);
+	});
+});
 
 describe("media model settings", () => {
 	it("routes added video models independently and retrieves jobs from their original service after restart", async () => {

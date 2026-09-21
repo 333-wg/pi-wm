@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, session, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, protocol, shell } from "electron";
+import { app, BrowserWindow, WebContentsView, session, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, protocol, shell, Tray } from "electron";
 import { appendFileSync, mkdirSync, renameSync, statSync, existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import { installDesktopUpdate } from "./install-update.mjs";
 import { TaskNotifications } from "./notifications.mjs";
 import { BrowserPreview } from "./browser-preview.mjs";
 import { externalLink, installContextMenu } from "./context-menu.mjs";
+import { installTray } from "./tray.mjs";
 
 protocol.registerSchemesAsPrivileged([
 	{
@@ -32,6 +33,7 @@ let bootPromise;
 let failureDialog = false;
 let connection;
 let updates;
+let desktopTray;
 const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(here, "../../..");
 const runtimeRoot = app.isPackaged ? join(process.resourcesPath, "runtime") : repositoryRoot;
@@ -146,6 +148,18 @@ async function boot() {
 			spellcheck: false,
 		},
 	});
+	if (process.platform === "win32") {
+		try {
+			desktopTray = installTray({
+				app, window, Tray, Menu,
+				icon: join(here, "../resources/icon.ico"),
+				focusWindow,
+				isQuitting: () => quitting || allowQuit,
+			});
+		} catch (error) {
+			log(`System tray unavailable; closing the window will exit: ${error.message}\n`);
+		}
+	}
 	const contextMenu = (contents) => installContextMenu(contents, {
 		window, Menu, clipboard, openExternal,
 		onCopyError: () => dialog.showErrorBox("复制失败", "剪贴板暂时不可用，请稍后重试。"),
@@ -283,6 +297,8 @@ async function boot() {
 	});
 	window.once("ready-to-show", focusWindow);
 	window.on("closed", () => {
+		desktopTray?.dispose();
+		desktopTray = undefined;
 		window = undefined;
 	});
 	Menu.setApplicationMenu(
@@ -299,7 +315,7 @@ async function boot() {
 					},
 					{ label: "Open logs", click: () => void shell.openPath(logs) },
 					{ type: "separator" },
-					{ role: "quit" },
+					{ label: "退出", role: "quit" },
 				],
 			},
 			{ role: "editMenu" },

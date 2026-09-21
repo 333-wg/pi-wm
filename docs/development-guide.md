@@ -335,6 +335,14 @@ the same session permission policy as other process operations.
 ### Configure MCP servers
 
 In local-device mode, open the **MCP** tab and use **+** to add a server.
+新增服务默认选择全局，也可选择仅当前工作区。编辑已有服务可切换范围；
+切换后需要重新授权，不会自动扩大原授权范围。全局服务在所有项目、每日
+工作区和新对话中可用，同名工作区配置优先（包括已停用的配置）。
+全局配置和授权分别保存在应用数据目录（`WUMING_DATA_DIR` 或默认数据目录）
+下的 `.wuming/mcp.json` 与 `.wuming/mcp-permissions.json`。全局启停、
+编辑、撤销授权和删除影响所有工作区；不同范围已有同名服务时拒绝迁移，
+不会覆盖目标配置。通过界面保存的全局本地进程保留保存时的工作目录，
+跨工作区使用时不会改变相对参数的解析位置。
 The dialog accepts manual fields or a JSON configuration; for a multi-server
 JSON document, select the server to import. Saving does not grant local trust.
 Select the saved server, choose **Authorize and connect**, and confirm before
@@ -350,13 +358,13 @@ tool set; stale or revoked MCP tools are rejected at execution time.
 Environment variables and HTTP header values are password inputs. Reading a
 configuration for editing returns null placeholders, never the stored values;
 unchanged placeholders preserve credentials, removing a key deletes it, and a
-new string replaces it. These values are still stored in the workspace JSON
+new string replaces it. These values are still stored in the selected scope's JSON
 file, not an encrypted credential store. Do not commit that file with secrets
 or paste secret values into a conversation. OAuth/keychain integration remains
 outside this implementation.
 
-The gateway discovers MCP servers from the workspace-local
-`.wuming/mcp.json`. It accepts the original `servers` array and the
+The gateway merges the workspace-local `.wuming/mcp.json` with the application
+data directory's global `.wuming/mcp.json`. It accepts the original `servers` array and the
 `mcpServers`/`mcp_servers` map used by common MCP clients. `stdio` and modern
 `streamable-http` transports are supported. Tools are listed in the Web MCP
 tab and exposed to Pi with a stable `mcp__<server>__<tool>` name; names that

@@ -54,8 +54,15 @@ The server stores successful state-changing results by idempotency key for a
 bounded retention period. Reusing a key with a different command is an error.
 Acceptance of a prompt means it was durably queued, not that the turn completed.
 
-`mcp.configure`, `mcp.trust`, and `mcp.untrust` are workspace-scoped
-state-changing commands for a local-device Gateway. `mcp.configure` validates
+`mcp.configure`, `mcp.trust`, and `mcp.untrust` are state-changing commands
+for a local-device Gateway. All retain a workspace context for authorization.
+`mcp.configure` accepts optional `scope` (`workspace` by default, or `global`)
+and `previousScope` for an explicit move. Moving rejects destination ID conflicts
+and revokes prior trust. Global files live under the application data directory;
+workspace files remain in the project. Lists merge both, with workspace IDs
+overriding global IDs. Summaries expose optional `scope`; legacy clients may
+treat its absence as `workspace`. Get, trust, enable, untrust, and remove operate
+on the effective entry's original store. `mcp.configure` validates
 and writes one server entry into `.wuming/mcp.json` and clears any local trust
 for that server; it returns `mcp.updated` with the untrusted server summary.
 `mcp.trust` records trust in `.wuming/mcp-permissions.json`, verifies the server

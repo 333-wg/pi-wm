@@ -27,14 +27,18 @@ async function fixture(script?: (sessionId: string, content: string, signal: Abo
 	const directory = mkdtempSync(join(tmpdir(), "wuming-agent-team-"));
 	const sessions = new SqliteOrchestratorStore(join(directory, "sessions.db"));
 	const store = new AgentTeamStore(join(directory, "teams.db"));
-	const calls: Array<{ sessionId: string; content: string }> = [];
+	const calls: Array<{ sessionId: string; content: string; runtimeContent: string }> = [];
 	const runtime: AgentRuntime = {
 		async executeTurn(input) {
 			const content = input.operation.payload.content
 				.filter((value) => value.type === "text")
 				.map((value) => value.text)
 				.join("\n");
-			calls.push({ sessionId: input.operation.sessionId, content });
+			const runtimeContent = (input.operation.payload.runtimeContent ?? input.operation.payload.content)
+				.filter((value) => value.type === "text")
+				.map((value) => value.text)
+				.join("\n");
+			calls.push({ sessionId: input.operation.sessionId, content, runtimeContent });
 			await script?.(input.operation.sessionId, content, input.signal);
 			return {
 				items: [
@@ -202,6 +206,13 @@ describe("persistent Agent Teams", () => {
 			"never silently substitute",
 			"Add further members",
 			"at least one teammate task executable now",
+			"Continuous delegation policy",
+			"do not use teammates only for preliminary research",
+			"Proactively call Agent",
+			"additional capacity or expertise, even after startup",
+			"edit files directly",
+			"assign repairs back to the owner",
+			"For research-only objectives",
 		])
 			expect(context).toContain(rule);
 		const team = await f.service.start(
@@ -215,6 +226,85 @@ describe("persistent Agent Teams", () => {
 		).rejects.toThrow(/Unknown Agent template/);
 		expect(f.service.get(team.id)?.members).toHaveLength(1);
 	});
+
+	it("refreshes lead workload and ready tasks without treating idle owners or blocked scopes as available", async () => {
+		const f = await fixture();
+		const a = await f.service.addMember(f.lead, "developer", "Implement feature", "developer");
+		const b = await f.service.addMember(f.lead, "tester", "Verify feature", "tester");
+		const active = f.service.createTask(f.lead, { ...taskInput(a.id), writePaths: ["src"] }, "active");
+		f.service.updateTask(a.sessionId, { taskId: active.id, status: "in_progress" }, "claim");
+		const conflict = f.service.createTask(f.lead, { ...taskInput(b.id), writePaths: ["src/file.ts"] }, "conflict");
+		const dependent = f.service.createTask(f.lead, { ...taskInput(b.id), dependsOn: [active.id] }, "dependent");
+		const ready = f.service.createTask(f.lead, { ...taskInput(a.id), writePaths: ["docs"] }, "ready");
+		const context = f.service.context(f.lead);
+		const workload = JSON.parse(
+			context
+				.split("\n")
+				.find((line) => line.startsWith("Collaboration workload"))!
+				.split(": ")
+				.slice(1)
+				.join(": ")
+		);
+		expect(workload).toContainEqual({ id: a.id, state: "idle", activeTasks: [active.id], pendingTasks: [ready.id] });
+		expect(workload).toContainEqual({
+			id: b.id,
+			state: "idle",
+			activeTasks: [],
+			pendingTasks: [conflict.id, dependent.id],
+		});
+		const readiness = context.split("\n").find((line) => line.startsWith("Dependency/scope-ready pending tasks"))!;
+		expect(readiness).toContain(ready.id);
+		expect(readiness).not.toContain(conflict.id);
+		expect(readiness).not.toContain(dependent.id);
+		expect(context).not.toContain("All currently recorded tasks are completed");
+		expect(f.service.context(a.sessionId)).not.toContain("Continuous delegation policy");
+		f.service.updateTask(
+			a.sessionId,
+			{ taskId: active.id, status: "completed", result: "Scripted implementation verified" },
+			"done"
+		);
+		const refreshed = f.service
+			.context(f.lead)
+			.split("\n")
+			.find((line) => line.startsWith("Dependency/scope-ready pending tasks"))!;
+		expect(refreshed).toContain(conflict.id);
+		expect(refreshed).toContain(dependent.id);
+	});
+
+	it.each(["completed", "failed"] as const)(
+		"persists one bounded %s delegation checkpoint on result replay",
+		async (status) => {
+			const f = await fixture();
+			const member = await f.service.addMember(f.lead, "developer", "Implement feature", "developer");
+			const task = f.service.createTask(f.lead, taskInput(member.id), "task");
+			await rounds(f.service);
+			const input = { taskId: task.id, status, result: "x".repeat(20_000) };
+			f.service.updateTask(member.sessionId, input, "result");
+			f.service.updateTask(member.sessionId, input, "result");
+			const results = f.service.get(f.lead)!.messages.filter((message) => message.kind === "result");
+			expect(results).toHaveLength(1);
+			expect(results[0]!.text.length).toBeLessThanOrEqual(20_000);
+			expect(results[0]!.text).toContain("Collaboration checkpoint");
+			expect(results[0]!.text).toContain(
+				status === "failed" ? "Route diagnosis and repair" : "Research completion is not project completion"
+			);
+			expect(f.service.get(f.lead)!.tasks[0]!.result).toHaveLength(20_000);
+			f.service.pause();
+			const recovered = new AgentTeamService(f.store, f.runner);
+			cleanups.push(async () => {
+				recovered.pause();
+				await recovered.settled();
+			});
+			await recovered.recover();
+			await rounds(recovered, 8);
+			expect(f.calls.filter((call) => call.sessionId === f.lead)).toHaveLength(1);
+			expect(f.calls.find((call) => call.sessionId === f.lead)!.runtimeContent).toContain(
+				"Continuous delegation policy"
+			);
+			expect(recovered.get(f.lead)!.messages.filter((message) => message.kind === "result")).toHaveLength(1);
+			expect(f.errors).toEqual([]);
+		}
+	);
 
 	it.each(["no-custom", "irrelevant", "suitable", "explicit-only"])(
 		"executes scripted staffing decisions with %s templates through the real tools",
@@ -1024,6 +1114,110 @@ describe("persistent Agent Teams", () => {
 					(message) => message.from !== "lead" && message.to !== "lead" && message.text.startsWith("API contract")
 				)
 		).toBe(true);
+		expect(f.errors).toEqual([]);
+	});
+
+	it("continues delegation from research through implementation, late staffing, repair and acceptance", async () => {
+		let f: Awaited<ReturnType<typeof fixture>>;
+		let stage = 0;
+		let developer: Record<string, string>;
+		let reviewer: Record<string, string>;
+		let verificationId: string;
+		const invoke = async (sessionId: string, name: string, args: Record<string, unknown>, key: string) => {
+			const tool = createAgentTeamTools(sessionId, f.service).find((value) => value.name === name)!;
+			const result = await tool.execute(key, args, new AbortController().signal, undefined, undefined as never);
+			return JSON.parse((result.content[0] as { text: string }).text) as Record<string, string>;
+		};
+		const assign = (sessionId: string, owner: string, title: string, writePaths: string[], dependsOn: string[] = []) =>
+			invoke(
+				sessionId,
+				"TaskCreate",
+				{ owner, title, description: title + ": produce changes and check evidence", writePaths, dependsOn },
+				title
+			);
+		f = await fixture(async (sessionId, content) => {
+			const team = f.service.get(f.lead)!;
+			if (sessionId === f.lead) {
+				await invoke(sessionId, "TaskList", {}, "board-" + stage);
+				if (stage === 0) {
+					developer = await invoke(
+						sessionId,
+						"Agent",
+						{ name: "developer", role: "Research, implement and repair src/feature.ts; report paths and checks" },
+						"developer"
+					);
+					await assign(sessionId, developer.id!, "Research", []);
+				} else {
+					expect(content).toContain("Collaboration checkpoint");
+					if (stage === 1) {
+						expect(f.service.context(sessionId)).toContain("a research-only board does not satisfy a build request");
+						await assign(sessionId, developer.id!, "Implementation", ["src/feature.ts"], [team.tasks[0]!.id]);
+					} else if (stage === 2) {
+						reviewer = await invoke(
+							sessionId,
+							"Agent",
+							{ name: "verifier", role: "Independently verify the feature; own test/feature.test.ts" },
+							"verifier"
+						);
+						verificationId = (
+							await assign(sessionId, reviewer.id!, "Verification", ["test/feature.test.ts"], [team.tasks[1]!.id])
+						).id!;
+					} else if (stage === 3) {
+						expect(content).toContain("Route diagnosis and repair");
+						await assign(sessionId, developer.id!, "Repair", ["src/feature.ts"], [team.tasks[1]!.id]);
+					} else if (stage === 4) {
+						await invoke(sessionId, "TaskUpdate", { taskId: verificationId, status: "pending" }, "reverify");
+					} else {
+						await invoke(
+							sessionId,
+							"TeamFinish",
+							{ result: "Scripted acceptance: implementation, repair and independent re-verification inspected" },
+							"accept"
+						);
+					}
+				}
+				stage += 1;
+				return;
+			}
+			const member = team.members.find((value) => value.sessionId === sessionId)!;
+			const task = team.tasks.find((value) => value.owner === member.id && value.status === "in_progress")!;
+			await invoke(sessionId, "TaskGet", { taskId: task.id }, "get-" + stage);
+			const failed = task.title === "Verification" && !team.tasks.some((value) => value.title === "Repair");
+			await invoke(
+				sessionId,
+				"TaskUpdate",
+				{
+					taskId: task.id,
+					status: failed ? "failed" : "completed",
+					result: failed
+						? "Scripted validation found an edge case; return to developer"
+						: task.title + ": scripted output and checks",
+				},
+				"done-" + stage
+			);
+		});
+		f.service.send(f.lead, "lead", "Build the requested feature with the team", "start", true);
+		await rounds(f.service, 20);
+		const team = f.service.get(f.lead)!;
+		expect(team.members.map((member) => ({ name: member.name, error: member.error }))).toEqual([
+			{ name: team.members[0]!.name, error: undefined },
+			{ name: "developer", error: undefined },
+			{ name: "verifier", error: undefined },
+		]);
+		expect(team.status).toBe("completed");
+		expect(team.members).toHaveLength(3);
+		expect(team.tasks).toHaveLength(4);
+		expect(team.tasks.every((task) => task.status === "completed" && task.owner !== "lead")).toBe(true);
+		expect(f.calls.filter((call) => call.sessionId === developer.sessionId)).toHaveLength(3);
+		expect(f.calls.filter((call) => call.sessionId === reviewer.sessionId)).toHaveLength(2);
+		expect(
+			f.calls
+				.filter((call) => call.sessionId === f.lead)
+				.every((call) => call.runtimeContent.includes("Continuous delegation policy"))
+		).toBe(true);
+		const turns = f.calls.length;
+		await rounds(f.service, 5);
+		expect(f.calls).toHaveLength(turns);
 		expect(f.errors).toEqual([]);
 	});
 

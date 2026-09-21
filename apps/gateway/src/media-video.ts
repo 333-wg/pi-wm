@@ -1,45 +1,18 @@
-import type { MediaModelSettings } from "@wuming/protocol";
-
-export type VideoProtocol = "openai" | "openai-json" | "agnes" | "agnes-v2.5";
-type VideoConnection = Pick<MediaModelSettings, "baseUrl" | "model" | "videoProtocol" | "videoReferenceFormat">;
-export interface VideoParams {
-	prompt: string;
-	size?: string;
-	seconds?: number;
-	aspectRatio?: string;
-	referenceArtifactId?: string;
-	referenceImageUrl?: string;
-}
-export interface VideoReference {
-	content: Uint8Array<ArrayBuffer>;
-	mimeType: string;
-	name: string;
-}
-export interface VideoCapabilities {
-	protocol: VideoProtocol;
-	validation: "documented" | "verified" | "compatibility";
-	durations?: number[];
-	seconds?: { min: number; max: number; default: number };
-	sizes?: string[];
-	aspectRatios?: string[];
-	referenceInputs: Array<"artifact" | "public-url">;
-	artifactTransport?: "multipart" | "data-url";
-	note?: string;
-}
-interface VideoRequest {
-	protocol: VideoProtocol;
-	body: BodyInit;
-	json: boolean;
-	parameters: Record<string, string | number>;
-}
-interface VideoAdapter {
-	protocol: VideoProtocol;
-	matches: (config: VideoConnection) => boolean;
-	capabilities: (config: VideoConnection) => VideoCapabilities;
-	request: (config: VideoConnection, params: VideoParams, reference?: VideoReference) => VideoRequest;
-	resultResource: (config: VideoConnection, id: string) => string | URL;
-	remoteId: (payload: Record<string, unknown>) => unknown;
-}
+import type {
+	VideoProtocol,
+	VideoConnection,
+	VideoParams,
+	VideoReference,
+	VideoCapabilities,
+	VideoRequest,
+	VideoAdapter,
+	VideoJobContext,
+	VideoHttpRequest,
+	VideoResult,
+} from "./media-video-types.js";
+import { nativeVideoAdapters } from "./media-video-native.js";
+import { internationalVideoAdapters } from "./media-video-international.js";
+export type { VideoProtocol, VideoParams, VideoReference, VideoCapabilities } from "./media-video-types.js";
 
 const ratios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 const officialAgnes = (config: VideoConnection) => {
@@ -100,7 +73,9 @@ function validateReference(params: VideoParams, capabilities: VideoCapabilities)
 		throw new Error("Choose referenceArtifactId or referenceImageUrl, not both");
 	if (params.referenceArtifactId && !capabilities.referenceInputs.includes("artifact"))
 		throw new Error(
-			"This video API requires a public referenceImageUrl and cannot upload local attachments. Do not silently switch to text-only generation or publish the image to a third party. Use an existing public image URL or a model supporting artifact input."
+			capabilities.referenceInputs.includes("public-url")
+				? "This video API requires a public referenceImageUrl and cannot upload local attachments. Do not silently switch to text-only generation or publish the image to a third party. Use an existing public image URL or a model supporting artifact input."
+				: "This video model does not support reference images. Choose an image-to-video model; do not silently discard the reference."
 		);
 	if (params.referenceImageUrl) {
 		if (!capabilities.referenceInputs.includes("public-url"))
@@ -321,7 +296,14 @@ const compatible = (protocol: "openai" | "openai-json"): VideoAdapter => ({
 });
 
 // Transport selection is local and deterministic. Never probe by creating paid jobs.
-const adapters: VideoAdapter[] = [legacyAgnes, modernAgnes, compatible("openai"), compatible("openai-json")];
+const adapters: VideoAdapter[] = [
+	...internationalVideoAdapters,
+	...nativeVideoAdapters,
+	legacyAgnes,
+	modernAgnes,
+	compatible("openai"),
+	compatible("openai-json"),
+];
 export function videoProtocol(config: VideoConnection): VideoProtocol {
 	if (config.videoProtocol && config.videoProtocol !== "auto") return config.videoProtocol;
 	return adapters.find((adapter) => adapter.matches(config))?.protocol ?? "openai";
@@ -357,27 +339,46 @@ export function validateVideoRequest(config: VideoConnection, params: VideoParam
 		);
 	validateReference(params, videoCapabilities(config));
 	// Parameter validation is shared with serialization, before approval or file reads.
-	const { referenceArtifactId: _artifact, ...parameters } = params;
-	adapterFor(videoProtocol(config)).request(config, parameters);
+	// Native image-only models must see artifact intent even before the file is read.
+	const adapter = adapterFor(videoProtocol(config));
+	if (adapter.result) adapter.request(config, params);
+	else {
+		const { referenceArtifactId: _artifact, ...parameters } = params;
+		adapter.request(config, parameters);
+	}
 }
 export function videoRequest(config: VideoConnection, params: VideoParams, reference?: VideoReference): VideoRequest {
 	validateVideoRequest(config, params);
+	if (params.referenceArtifactId && !reference) throw new Error("Reference image must be resolved before submission");
 	return adapterFor(videoProtocol(config)).request(config, params, reference);
 }
 export function videoRemoteId(protocol: VideoProtocol, payload: Record<string, unknown>): string {
-	const id = adapterFor(protocol).remoteId(payload);
-	if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id))
+	const adapter = adapterFor(protocol);
+	const id = adapter.remoteId(payload);
+	if (
+		typeof id !== "string" ||
+		!(adapter.validRemoteId ? adapter.validRemoteId(id) : /^[A-Za-z0-9_-]{1,200}$/.test(id))
+	)
 		throw new Error("Unsupported video response: expected a video task id. Do not resubmit automatically.");
 	return id;
 }
 export function videoResultResource(config: VideoConnection, protocol: VideoProtocol, remoteId: string): string | URL {
 	return adapterFor(protocol).resultResource(config, remoteId);
 }
-export function videoResult(
+export function videoPollRequest(
+	config: VideoConnection,
 	protocol: VideoProtocol,
-	payload: Record<string, unknown>
-): { status: "completed" | "pending" | "failed"; url?: string } {
-	adapterFor(protocol);
+	remoteId: string,
+	context?: VideoJobContext
+): VideoHttpRequest {
+	const adapter = adapterFor(protocol);
+	return (
+		adapter.pollRequest?.(config, remoteId, context) ?? { resource: adapter.resultResource(config, remoteId, context) }
+	);
+}
+export function videoResult(protocol: VideoProtocol, payload: Record<string, unknown>): VideoResult {
+	const adapter = adapterFor(protocol);
+	if (adapter.result) return adapter.result(payload);
 	const status = String(payload.status).toLowerCase();
 	if (["failed", "cancelled", "canceled", "error"].includes(status)) return { status: "failed" };
 	const agnes = protocol === "agnes" || protocol === "agnes-v2.5";

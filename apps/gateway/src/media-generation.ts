@@ -19,12 +19,17 @@ import {
 	videoRequest,
 	videoRemoteId,
 	videoResult,
-	videoResultResource,
+	videoPollRequest,
+	videoProtocol,
 	type VideoProtocol,
 	type VideoReference,
 } from "./media-video.js";
 import { mediaErrorDetail, mediaResponseError } from "./media-errors.js";
 import { VideoPollSchedule } from "./media-video-polling.js";
+import type { VideoHttpRequest, VideoJobContext } from "./media-video-types.js";
+import { videoAuthHeaders, validateVideoCredentials } from "./media-video-auth.js";
+import { minimaxFileRequest, minimaxFileUrl } from "./media-video-native.js";
+import { isGoogleVideo, googleVideoFile, decodeInlineVideo } from "./media-video-international.js";
 
 type Json = Record<string, unknown>;
 interface ImageJob {
@@ -44,6 +49,7 @@ interface VideoJob {
 	protocol: VideoProtocol;
 	provider: string | null;
 	model: string | null;
+	request_context: string | null;
 }
 const object = (value: unknown): Json =>
 	value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
@@ -100,6 +106,8 @@ export class MediaGenerationService {
 			this.#db.exec("ALTER TABLE media_video_jobs ADD COLUMN provider TEXT");
 		if (!columns.some((column) => column.name === "model"))
 			this.#db.exec("ALTER TABLE media_video_jobs ADD COLUMN model TEXT");
+		if (!columns.some((column) => column.name === "request_context"))
+			this.#db.exec("ALTER TABLE media_video_jobs ADD COLUMN request_context TEXT");
 		this.#fetch = options.fetch ?? fetch;
 		const web = new SafeWebClient({ timeoutMs: 120_000 });
 		this.#download = options.download ?? ((url, limits) => web.download(url, { ...limits, resolveProxyHttp: true }));
@@ -171,19 +179,30 @@ export class MediaGenerationService {
 		resource: string | URL,
 		signal: AbortSignal,
 		body?: BodyInit,
-		json = false
+		json = false,
+		options: {
+			headers?: Record<string, string>;
+			submission?: boolean;
+			defaultAuthorization?: boolean;
+			manualRedirect?: boolean;
+		} = {}
 	): Promise<Response> {
 		signal.throwIfAborted();
 		const url = resource instanceof URL ? resource.toString() : mediaResourceUrl(config.baseUrl, resource);
 		if (new URL(url).origin !== new URL(config.baseUrl).origin)
 			throw new Error("Media API requests must stay on the configured origin");
+		const submission = options.submission ?? body !== undefined;
 		let response: Response;
 		try {
 			response = await this.#fetch(url, {
 				method: body === undefined ? "GET" : "POST",
-				redirect: "error",
+				redirect: options.manualRedirect ? "manual" : "error",
 				signal,
-				headers: { Authorization: `Bearer ${config.apiKey}`, ...(json ? { "Content-Type": "application/json" } : {}) },
+				headers: {
+					...(options.defaultAuthorization === false ? {} : { Authorization: `Bearer ${config.apiKey}` }),
+					...(json ? { "Content-Type": "application/json" } : {}),
+					...options.headers,
+				},
 				...(body === undefined ? {} : { body }),
 			});
 		} catch {
@@ -193,17 +212,80 @@ export class MediaGenerationService {
 					"Media service connection failed. Do not automatically resubmit a generation: the provider may already have accepted and billed it."
 				),
 				{
-					code: body === undefined ? "media_retrieval_failed" : "media_submission_failed",
-					details: { retryable: body === undefined },
+					code: submission ? "media_submission_failed" : "media_retrieval_failed",
+					details: { retryable: !submission },
 				}
 			);
 		}
+		if (options.manualRedirect && [301, 302, 303, 307, 308].includes(response.status)) return response;
 		if (!response.ok) {
-			const error = await mediaResponseError(response, config, body !== undefined);
+			const error = await mediaResponseError(response, config, submission);
 			signal.throwIfAborted();
 			throw error;
 		}
 		return response;
+	}
+
+	async #videoRequest(
+		config: MediaConnection,
+		protocol: VideoProtocol,
+		request: VideoHttpRequest,
+		signal: AbortSignal,
+		submission = false
+	): Promise<Response> {
+		const headers = { ...request.headers, ...videoAuthHeaders(config, protocol, request, this.#now()) };
+		return this.#request(config, request.resource, signal, request.body, request.json, {
+			headers,
+			submission,
+			defaultAuthorization: !isGoogleVideo(protocol),
+		});
+	}
+
+	#videoJsonLimit(protocol: VideoProtocol): number {
+		return protocol === "google-omni" ? Math.ceil(this.#maxVideoBytes / 3) * 4 + 1024 * 1024 : 1024 * 1024;
+	}
+
+	async #googleVideoContent(
+		config: MediaConnection,
+		protocol: VideoProtocol,
+		value: string,
+		signal: AbortSignal
+	): Promise<Buffer | undefined> {
+		const rejectSecretUrl = (url: string) => {
+			if (url.includes(config.apiKey) || url.includes(encodeURIComponent(config.apiKey)))
+				throw new Error("Refusing to forward API credentials in a video URL");
+		};
+		rejectSecretUrl(value);
+		const file = googleVideoFile(config, value);
+		if (!file) return this.#download(value, { maxBytes: this.#maxVideoBytes, signal });
+		if (protocol === "google-omni" && !new URL(value).pathname.endsWith(":download")) {
+			const metadata = await this.#json(
+				await this.#videoRequest(config, protocol, { resource: file.metadata }, signal)
+			);
+			if (metadata.state === "PROCESSING") return undefined;
+			if (metadata.state !== "ACTIVE")
+				throw new Error("Generated Google file is not active; retrieve the same job later, do not resubmit");
+		}
+		let download = file.download;
+		for (let hop = 0; hop < 3; hop++) {
+			const response = await this.#request(config, download, signal, undefined, false, {
+				headers: videoAuthHeaders(config, protocol, { resource: download }),
+				defaultAuthorization: false,
+				manualRedirect: true,
+				submission: false,
+			});
+			if (response.ok) return readMediaBody(response, this.#maxVideoBytes);
+			const location = response.headers.get("location");
+			await response.body?.cancel();
+			if (!location) throw new Error("Google file redirect has no location");
+			const target = new URL(location, download).toString();
+			rejectSecretUrl(target);
+			const next = googleVideoFile(config, target);
+			// CDN downloads go through the public-DNS-pinned downloader without any API headers.
+			if (!next) return this.#download(target, { maxBytes: this.#maxVideoBytes, signal });
+			download = next.download;
+		}
+		throw new Error("Too many Google file redirects; retrieve the same job later");
 	}
 
 	async #json(response: Response, maxBytes = 1024 * 1024): Promise<Json> {
@@ -459,7 +541,7 @@ export class MediaGenerationService {
 				promptSnippet: "Start a video generation using the default video model from Settings",
 				promptGuidelines: [
 					"For video skills use generate_video with the user-configured default, not hard-coded skill providers or scripts. Then call get_generated_video until completed or failed. Cancellation stops local waiting, not a provider-side job or its charges.",
-					"Read the current video capabilities in the host policy or media_model_status. Prefer aspectRatio and omit size unless a specific supported resolution is required. Never change an explicitly requested duration or resolution without user direction.",
+					"Read the current video capabilities in the host policy or media_model_status. Use aspectRatio only when supported for this mode; native image-to-video often inherits the input image shape. Omit size unless a specific supported resolution is required. Check generationModes. Never change an explicitly requested duration or resolution without user direction.",
 					"When the user asks to animate an attached/generated image, pass its real referenceArtifactId. The host uploads or Base64-encodes it when supported. If capabilities only accept public-url, use a user-provided public referenceImageUrl or explain the limitation. Never invent a URL, publish the image to a third party, or silently generate text-only video. For Agnes reference mode refer to the image as <Picture 1> in the prompt.",
 				],
 				parameters: Type.Object(
@@ -483,13 +565,13 @@ export class MediaGenerationService {
 						),
 						size: Type.Optional(
 							Type.String({
-								pattern: "^([0-9]{2,4}x[0-9]{2,4}|720[Pp]|1080[Pp]|[12][Kk])$",
+								pattern: "^([0-9]{2,4}x[0-9]{2,4}|(?:360|480|512|540|720|768|1080)[Pp]|[124][Kk])$",
 								description:
 									"Optional provider-supported resolution. Omit for the model default; prefer aspectRatio for orientation.",
 							})
 						),
 						seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
-						aspectRatio: Type.Optional(Type.String({ pattern: "^(21:9|16:9|4:3|1:1|3:4|9:16)$" })),
+						aspectRatio: Type.Optional(Type.String({ pattern: "^(21:9|16:9|4:3|1:1|3:4|9:16|3:2|2:3)$" })),
 						referenceArtifactId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
 						referenceImageUrl: Type.Optional(
 							Type.String({
@@ -505,6 +587,7 @@ export class MediaGenerationService {
 				execute: async (id, params, externalSignal) => {
 					const config = this.#models.resolve("video", params.model, params.provider);
 					validateVideoRequest(config, params);
+					validateVideoCredentials(config, videoProtocol(config));
 					const permit = await authorize(id, config, externalSignal);
 					const signal = AbortSignal.any([...(externalSignal ? [externalSignal] : []), AbortSignal.timeout(120_000)]);
 					let submitting = false;
@@ -525,12 +608,21 @@ export class MediaGenerationService {
 						}
 						const request = videoRequest(config, params, reference);
 						submitting = true;
-						const payload = await this.#json(await this.#request(config, "videos", signal, request.body, request.json));
+						const payload = await this.#json(
+							await this.#videoRequest(
+								config,
+								request.protocol,
+								{ ...request, resource: request.resource ?? "videos" },
+								signal,
+								true
+							),
+							this.#videoJsonLimit(request.protocol)
+						);
 						const remoteId = videoRemoteId(request.protocol, payload);
 						const jobId = randomUUID();
 						this.#db
 							.prepare(
-								"INSERT INTO media_video_jobs (id, session_id, remote_id, connection_hash, protocol, provider, model) VALUES (?, ?, ?, ?, ?, ?, ?)"
+								"INSERT INTO media_video_jobs (id, session_id, remote_id, connection_hash, protocol, provider, model, request_context) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 							)
 							.run(
 								jobId,
@@ -539,7 +631,8 @@ export class MediaGenerationService {
 								connectionHash(config),
 								request.protocol,
 								config.provider!,
-								config.model
+								config.model,
+								request.context ? JSON.stringify(request.context) : null
 							);
 						this.#polling.initialize(jobId, connectionHash(config), this.#now(), true);
 						return {
@@ -629,14 +722,46 @@ export class MediaGenerationService {
 							if (!this.#polling.claim(job.id, this.#now())) continue;
 							try {
 								const payload = await this.#json(
-									await this.#request(config, videoResultResource(config, job.protocol, job.remote_id), signal)
+									await this.#videoRequest(
+										config,
+										job.protocol,
+										videoPollRequest(
+											config,
+											job.protocol,
+											job.remote_id,
+											job.request_context ? (JSON.parse(job.request_context) as VideoJobContext) : undefined
+										),
+										signal
+									),
+									this.#videoJsonLimit(job.protocol)
 								);
 								const result = videoResult(job.protocol, payload);
 								const status = result.status;
 								if (status === "completed") {
 									let content: Buffer;
-									if (result.url) {
-										content = await this.#download(result.url, { maxBytes: this.#maxVideoBytes, signal });
+									let downloadUrl = result.url;
+									if (result.fileId && job.protocol === "minimax") {
+										const file = await this.#json(
+											await this.#videoRequest(
+												config,
+												job.protocol,
+												{ resource: minimaxFileRequest(config, result.fileId) },
+												signal
+											)
+										);
+										downloadUrl = minimaxFileUrl(file);
+									}
+									if (result.inlineData) {
+										content = decodeInlineVideo(result.inlineData.data, this.#maxVideoBytes);
+									} else if (downloadUrl && isGoogleVideo(job.protocol)) {
+										const downloaded = await this.#googleVideoContent(config, job.protocol, downloadUrl, signal);
+										if (!downloaded) {
+											this.#polling.pending(job.id, this.#now());
+											continue;
+										}
+										content = downloaded;
+									} else if (downloadUrl) {
+										content = await this.#download(downloadUrl, { maxBytes: this.#maxVideoBytes, signal });
 									} else {
 										const response = await this.#request(
 											config,

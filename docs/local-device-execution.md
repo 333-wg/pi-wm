@@ -62,7 +62,9 @@ preview by default and rejects configurations that would expose them.
 User-authored skills and user MCP servers follow the same boundary. Builtin
 skills may ship with Wuming, but extra skills live under the user's workspace
 `.wuming/skills` directory. MCP declarations live in `.wuming/mcp.json`, and
-local trust lives in `.wuming/mcp-permissions.json`. In server mode these
+local trust lives in `.wuming/mcp-permissions.json`. Global MCP entries use the
+same filenames under the local application data directory and are merged into
+every workspace, with workspace entries taking precedence. In server mode these
 user-owned capability stores are not discovered or mutated, and model-facing
 management tools are not exposed. A cloud service may synchronize policy or
 model access, but it should not become the place where each user's tool servers,

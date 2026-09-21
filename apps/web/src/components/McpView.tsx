@@ -18,7 +18,14 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { Command, CommandResult, McpServer, McpServerConfiguration, McpServerSummary } from "@wuming/protocol";
+import type {
+	Command,
+	CommandResult,
+	McpScope,
+	McpServer,
+	McpServerConfiguration,
+	McpServerSummary,
+} from "@wuming/protocol";
 import { McpConfigDialog } from "./McpConfigDialog.js";
 import { useFocusTrap } from "../use-focus-trap.js";
 import "./mcp.css";
@@ -105,6 +112,7 @@ function Confirmation({
 					</div>
 				)}
 				<p id="mcp-confirm-description">
+					{server.scope === "global" && "此操作影响所有工作区。"}
 					{action === "trust"
 						? server.transport === "stdio"
 							? "此操作将在本机启动该服务进程。仅授权你信任的服务。"
@@ -261,7 +269,7 @@ function ServerDetails({
 							</div>
 							<div>
 								<dt>作用范围</dt>
-								<dd>当前工作区</dd>
+								<dd>{server.scope === "global" ? "全局（所有工作区）" : "当前工作区"}</dd>
 							</div>
 							<div>
 								<dt>工具权限</dt>
@@ -346,7 +354,11 @@ function ServerDetails({
 export function McpView({ workspaceId, available, servers, selectedServer, onRefresh, onSelect, onCommand }: Props) {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string>();
-	const [editor, setEditor] = useState<{ initial?: McpServerConfiguration; mode?: "form" | "import" }>();
+	const [editor, setEditor] = useState<{
+		initial?: McpServerConfiguration;
+		scope?: McpScope;
+		mode?: "form" | "import";
+	}>();
 	const [confirmation, setConfirmation] = useState<{ server: McpServerSummary; action: Action }>();
 	const [expanded, setExpanded] = useState<string>();
 	const [loading, setLoading] = useState<string>();
@@ -401,7 +413,8 @@ export function McpView({ workspaceId, available, servers, selectedServer, onRef
 			const result = await onCommand({ type: "mcp.configuration.get", workspaceId, serverId: id });
 			if (result.type !== "mcp.configuration" || result.serverId !== id || result.workspaceId !== workspaceId)
 				throw new Error("Unexpected response");
-			if (alive.current) setEditor({ initial: result.config });
+			if (alive.current)
+				setEditor({ initial: result.config, scope: servers.find((server) => server.id === id)?.scope ?? "workspace" });
 		}, "读取配置失败，请检查管理权限及网关连接。");
 	const toggle = (server: McpServerSummary) =>
 		run(async () => {
@@ -455,7 +468,7 @@ export function McpView({ workspaceId, available, servers, selectedServer, onRef
 						<div className="mcp-page-title">
 							<Plug size={22} />
 							<h2>MCP 服务</h2>
-							<span className="mcp-scope">当前工作区</span>
+							<span className="mcp-scope">全局与当前工作区</span>
 						</div>
 						<div className="mcp-overview">
 							<span>{servers.length} 个服务</span>
@@ -577,6 +590,7 @@ export function McpView({ workspaceId, available, servers, selectedServer, onRef
 														<Status server={server} />
 													</span>
 													<span className="mcp-server-meta">
+														<span>{server.scope === "global" ? "全局" : "当前工作区"}</span>
 														<span>
 															{server.transport === "stdio" ? "本地进程" : server.transport === "sse" ? "SSE" : "HTTP"}
 														</span>
@@ -659,10 +673,17 @@ export function McpView({ workspaceId, available, servers, selectedServer, onRef
 				<McpConfigDialog
 					{...(editor.initial ? { initial: editor.initial } : {})}
 					initialMode={editor.mode ?? "form"}
+					initialScope={editor.scope ?? "global"}
 					existingIds={servers.map((server) => server.id)}
 					onClose={() => setEditor(undefined)}
-					onSave={async (config) => {
-						const result = await onCommand({ type: "mcp.configure", workspaceId, config });
+					onSave={async (config, scope) => {
+						const result = await onCommand({
+							type: "mcp.configure",
+							workspaceId,
+							config,
+							scope,
+							...(editor.initial ? { previousScope: editor.scope ?? "workspace" } : {}),
+						});
 						if (result.type !== "mcp.updated") throw new Error("Unexpected response");
 						if (alive.current) {
 							setExpanded(result.server.id);

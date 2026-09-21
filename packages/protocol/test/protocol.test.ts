@@ -149,6 +149,25 @@ describe("wire protocol", () => {
 		}
 	});
 
+	it("validates global MCP configuration scopes", () => {
+		const request = Compile(RequestEnvelopeSchema);
+		const envelope = {
+			type: "request",
+			requestId: "scope",
+			idempotencyKey: "scope",
+			command: {
+				type: "mcp.configure",
+				workspaceId: "workspace-1",
+				scope: "global",
+				previousScope: "workspace",
+				config: { id: "docs", command: "node" },
+			},
+		};
+		expect(request.Check(envelope)).toBe(true);
+		expect(request.Check({ ...envelope, command: { ...envelope.command, scope: "unknown" } })).toBe(false);
+		expect(request.Check({ ...envelope, command: { ...envelope.command, previousScope: "unknown" } })).toBe(false);
+	});
+
 	it("accepts local MCP management commands and results", () => {
 		const request = Compile(RequestEnvelopeSchema);
 		expect(

@@ -65,8 +65,28 @@ the real team ID. Do not launch a duplicate team after a host launch receipt.
    relative writePaths, and encode actual dependencies. Members share the directory;
    do not assign overlapping writes concurrently. At least one teammate's first
    task must be dependency-ready so the scheduler can start execution.
-4. Use SendMessage for peer communication. Ordinary chat text is not delivery.
+4. Keep delegating throughout execution, not only during initial research. Before
+   substantial local coding and after every result, failure or phase change, compare
+   delivered work with the original objective and refresh TaskList. For build/change
+   requests, give teammates implementation, repair and verification work, not only
+   analysis to hand back to the lead. Coding assignments require direct file edits,
+   changed paths and verification evidence. Research-only requests need no invented
+   implementation tasks.
+   Reuse suitable retained members with explicitly owned follow-up tasks. Proactively
+   call Agent when a useful independent workstream needs additional capacity or
+   expertise; do not wait for the user to request more members. Respect exclusive
+   rosters, tool permissions and the limit of 8 members including the lead. Queue
+   follow-up work for busy members or add a useful member within those constraints.
+   Dispatch independent work before starting substantial local work. The lead owns
+   decomposition, coordination, integration and final acceptance; small integration
+   edits, tightly coupled decisions and genuinely serial urgent blockers may stay
+   local with a brief reason. Avoid duplicate implementation and overlapping writes.
+   Route review findings back to task owners for fixes and delegate re-verification
+   where useful. Do not leave suitable members idle while doing long implementation,
+   or end with actionable unassigned work. A completed research board is not a
+   completed build objective; add the remaining deliverables before accepting.
+5. Use SendMessage for peer communication. Ordinary chat text is not delivery.
    End the turn while waiting; inbox delivery wakes the lead without busy polling.
-5. Inspect the actual results and integration. Respect the user's testing limits.
+6. Inspect the actual results and integration. Respect the user's testing limits.
    Use TeamFinish only when tasks are complete and there is concrete acceptance
    evidence. Never fabricate completion, teammates, messages or verification.

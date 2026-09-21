@@ -7,6 +7,9 @@
 	color: var(--text);
 	letter-spacing: 0;
 }
+.mcp-fields.mcp-scope-field {
+	margin-bottom: 20px;
+}
 .mcp-page {
 	width: min(1120px, 100%);
 	box-sizing: border-box;

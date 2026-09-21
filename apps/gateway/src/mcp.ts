@@ -11,7 +11,7 @@ import {
 	ListToolsResultSchema,
 	ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { McpServer, McpServerSummary, McpToolSummary, SessionSnapshot } from "@wuming/protocol";
+import type { McpScope, McpServer, McpServerSummary, McpToolSummary, SessionSnapshot } from "@wuming/protocol";
 import type { McpServerConfiguration as PublicMcpConfiguration } from "@wuming/protocol";
 import { Type } from "typebox";
 import type { ApprovalBroker } from "@wuming/sandbox";
@@ -62,6 +62,7 @@ const SAFE_ENVIRONMENT_KEYS = new Set([
 ]);
 
 interface McpConfigServerBase {
+	scope?: McpScope;
 	id: string;
 	name?: string;
 	readOnly: boolean;
@@ -90,6 +91,7 @@ type McpConfigServer = McpStdioServer | McpHttpServer;
 type LocalMcpTrust = Map<string, string>;
 
 interface McpCatalogOptions {
+	globalRoot?: string;
 	requestTimeoutMs?: number;
 	startupTimeoutMs?: number;
 	resolveWorkspace?: (workspaceId: string) => string;
@@ -588,7 +590,8 @@ async function resolveServerCwd(server: McpStdioServer, workspaceRoot: string): 
 	const root = resolve(workspaceRoot);
 	if (server.cwd === undefined) return root;
 	const cwd = isAbsolute(server.cwd) ? resolve(server.cwd) : resolve(root, server.cwd);
-	if (!isWithin(root, cwd)) throw configError(`MCP server ${server.id} cwd must stay inside the workspace`);
+	if (server.scope !== "global" && !isWithin(root, cwd))
+		throw configError(`MCP server ${server.id} cwd must stay inside the workspace`);
 	const stat = await lstat(cwd).catch((error: unknown) => {
 		if (isMissing(error)) throw configError(`MCP server ${server.id} cwd does not exist`);
 		throw error;
@@ -1039,6 +1042,7 @@ function exposedTools(server: McpConfigServer, tools: McpToolSummary[]): McpTool
 }
 
 export class FileMcpCatalog {
+	readonly #globalRoot: string | undefined;
 	readonly #requestTimeoutMs: number;
 	readonly #startupTimeoutMs: number;
 	readonly #resolveWorkspace: ((workspaceId: string) => string) | undefined;
@@ -1047,7 +1051,8 @@ export class FileMcpCatalog {
 	readonly #mutations = new Map<string, Promise<unknown>>();
 
 	async #mutate<T>(workspaceRoot: string, operation: () => Promise<T>): Promise<T> {
-		const root = resolve(workspaceRoot);
+		// Scope changes touch both stores, so serialize management operations together.
+		const root = this.#globalRoot ?? resolve(workspaceRoot);
 		const previous = this.#mutations.get(root) ?? Promise.resolve();
 		const pending = previous.catch(() => {}).then(operation);
 		this.#mutations.set(root, pending);
@@ -1058,6 +1063,7 @@ export class FileMcpCatalog {
 		}
 	}
 	readonly #connections = new Map<string, { fingerprint: string; connection: McpConnectionLike }>();
+	readonly #connectionConfigRoots = new Map<string, string>();
 	readonly #connectionStarts = new Map<
 		string,
 		{ fingerprint: string; token: symbol; promise: Promise<McpConnectionLike> }
@@ -1069,6 +1075,7 @@ export class FileMcpCatalog {
 	>();
 
 	constructor(options: McpCatalogOptions = {}) {
+		this.#globalRoot = options.globalRoot ? resolve(options.globalRoot) : undefined;
 		this.#requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
 		this.#startupTimeoutMs = options.startupTimeoutMs ?? Math.min(STARTUP_TIMEOUT_MS, this.#requestTimeoutMs);
 		if (!Number.isFinite(this.#requestTimeoutMs) || this.#requestTimeoutMs <= 0)
@@ -1083,6 +1090,32 @@ export class FileMcpCatalog {
 		return this.#resolveWorkspace?.(workspaceId) ?? resolve(process.cwd());
 	}
 
+	#configRoot(workspaceRoot: string, scope: McpScope = "workspace"): string {
+		if (scope === "global") {
+			if (!this.#globalRoot) throw configError("Global MCP configuration is unavailable");
+			return this.#globalRoot;
+		}
+		return resolve(workspaceRoot);
+	}
+
+	#invalidateServer(workspaceRoot: string, serverId: string, scope: McpScope = "workspace"): void {
+		for (const key of new Set([
+			...this.#connections.keys(),
+			...this.#connectionStarts.keys(),
+			...this.#discovery.keys(),
+		])) {
+			if (!key.endsWith(`\0${serverId}`)) continue;
+			if (
+				key !== `${resolve(workspaceRoot)}\0${serverId}` &&
+				(scope !== "global" || this.#connectionConfigRoots.get(key) !== this.#globalRoot)
+			)
+				continue;
+			this.#connections.get(key)?.connection.close();
+			this.#connectionStarts.delete(key);
+			this.#invalidateDiscovery(key);
+		}
+	}
+
 	async #refreshLocalTrust(workspaceRoot: string): Promise<void> {
 		this.#localTrust.set(resolve(workspaceRoot), await readLocalTrust(workspaceRoot));
 	}
@@ -1090,7 +1123,8 @@ export class FileMcpCatalog {
 	async #trusted(workspaceId: string, workspaceRoot: string, server: McpConfigServer): Promise<boolean> {
 		return (
 			this.#isTrusted(workspaceId, server.id) ||
-			this.#localTrust.get(resolve(workspaceRoot))?.get(server.id) === configurationDigest(server)
+			this.#localTrust.get(this.#configRoot(workspaceRoot, server.scope))?.get(server.id) ===
+				configurationDigest(server)
 		);
 	}
 
@@ -1112,7 +1146,9 @@ export class FileMcpCatalog {
 
 	async #connectionFor(server: McpConfigServer, workspaceRoot: string): Promise<McpConnectionLike> {
 		const root = resolve(workspaceRoot);
+		const executionRoot = this.#configRoot(workspaceRoot, server.scope);
 		const key = `${root}\0${server.id}`;
+		this.#connectionConfigRoots.set(key, executionRoot);
 		const fingerprint = stableJson(server);
 		const current = this.#connections.get(key);
 		if (current && current.fingerprint === fingerprint && !current.connection.closed) return current.connection;
@@ -1132,9 +1168,9 @@ export class FileMcpCatalog {
 			const connection =
 				server.transport === "stdio"
 					? new McpConnection(
-							await resolveServerCommand(server, root),
+							await resolveServerCommand(server, executionRoot),
 							server.args,
-							await resolveServerCwd(server, root),
+							await resolveServerCwd(server, executionRoot),
 							server.env,
 							server.startupTimeoutMs ?? this.#startupTimeoutMs,
 							onClose,
@@ -1208,7 +1244,18 @@ export class FileMcpCatalog {
 	async #servers(workspaceRoot: string): Promise<McpConfigServer[]> {
 		await this.#refreshLocalTrust(workspaceRoot);
 		try {
-			const servers = await loadConfig(workspaceRoot);
+			const local = await loadConfig(workspaceRoot);
+			const servers = [...local];
+			if (this.#globalRoot && resolve(workspaceRoot) !== this.#globalRoot) {
+				await this.#refreshLocalTrust(this.#globalRoot);
+				const global = await loadConfig(this.#globalRoot);
+				const localIds = new Set(local.map((server) => server.id));
+				servers.push(
+					...global
+						.filter((server) => !localIds.has(server.id))
+						.map((server) => ({ ...server, scope: "global" as const }))
+				);
+			}
 			this.#reconcileConnections(workspaceRoot, servers);
 			return servers;
 		} catch (error) {
@@ -1334,6 +1381,7 @@ export class FileMcpCatalog {
 			if (!server.enabled) {
 				summaries.push({
 					id: server.id,
+					scope: server.scope ?? "workspace",
 					workspaceId,
 					name: server.name ?? server.id,
 					transport,
@@ -1347,6 +1395,7 @@ export class FileMcpCatalog {
 			if (!trusted) {
 				summaries.push({
 					id: server.id,
+					scope: server.scope ?? "workspace",
 					workspaceId,
 					name: server.name ?? server.id,
 					transport,
@@ -1361,6 +1410,7 @@ export class FileMcpCatalog {
 				const tools = exposedTools(server, await this.#listServerTools(workspaceId, server, workspaceRoot, true));
 				summaries.push({
 					id: server.id,
+					scope: server.scope ?? "workspace",
 					workspaceId,
 					name: server.name ?? server.id,
 					transport,
@@ -1373,6 +1423,7 @@ export class FileMcpCatalog {
 				const stillTrusted = await this.#trusted(workspaceId, workspaceRoot, server);
 				summaries.push({
 					id: server.id,
+					scope: server.scope ?? "workspace",
 					workspaceId,
 					name: server.name ?? server.id,
 					transport,
@@ -1395,6 +1446,7 @@ export class FileMcpCatalog {
 		if (!server.enabled) {
 			return {
 				id: server.id,
+				scope: server.scope ?? "workspace",
 				workspaceId,
 				name: server.name ?? server.id,
 				transport: server.transport,
@@ -1408,6 +1460,7 @@ export class FileMcpCatalog {
 		if (!(await this.#trusted(workspaceId, workspaceRoot, server))) {
 			return {
 				id: server.id,
+				scope: server.scope ?? "workspace",
 				workspaceId,
 				name: server.name ?? server.id,
 				transport: server.transport,
@@ -1421,6 +1474,7 @@ export class FileMcpCatalog {
 		const tools = exposedTools(server, await this.#listServerTools(workspaceId, server, workspaceRoot, true));
 		return {
 			id: server.id,
+			scope: server.scope ?? "workspace",
 			workspaceId,
 			name: server.name ?? server.id,
 			transport: server.transport,
@@ -1454,37 +1508,54 @@ export class FileMcpCatalog {
 	}
 
 	async removeServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<void> {
-		return this.#mutate(workspaceRoot, () => this.#removeServer(workspaceRoot, serverId));
-	}
-
-	async #removeServer(workspaceRoot: string, serverId: string): Promise<void> {
-		const root = resolve(workspaceRoot);
-		const servers = await this.#servers(root);
-		if (!servers.some((server) => server.id === serverId))
-			throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
-		await this.#setLocalTrust(root, serverId, false);
-		const remaining = servers.filter((server) => server.id !== serverId);
-		await writeConfig(root, remaining);
-		this.#reconcileConnections(root, remaining);
+		return this.#mutate(workspaceRoot, async () => {
+			const server = (await this.#servers(workspaceRoot)).find((entry) => entry.id === serverId);
+			if (!server) throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
+			const root = this.#configRoot(workspaceRoot, server.scope);
+			await this.#setLocalTrust(root, serverId, false);
+			await writeConfig(
+				root,
+				(await loadConfig(root)).filter((entry) => entry.id !== serverId)
+			);
+			this.#invalidateServer(workspaceRoot, serverId, server.scope);
+		});
 	}
 
 	async configureServer(
 		workspaceId: string,
 		workspaceRoot: string,
-		configuration: McpServerConfiguration
+		configuration: McpServerConfiguration,
+		scope: McpScope = "workspace",
+		previousScope?: McpScope
 	): Promise<McpServer> {
-		return this.#mutate(workspaceRoot, () => this.#configureServer(workspaceId, workspaceRoot, configuration));
+		return this.#mutate(workspaceRoot, () =>
+			this.#configureServer(workspaceId, workspaceRoot, configuration, scope, previousScope)
+		);
 	}
 
 	async #configureServer(
 		workspaceId: string,
 		workspaceRoot: string,
-		configuration: McpServerConfiguration
+		configuration: McpServerConfiguration,
+		scope: McpScope = "workspace",
+		previousScope?: McpScope
 	): Promise<McpServer> {
 		if (!plainRecord(configuration)) throw configError("MCP server configuration must be an object");
-		const root = resolve(workspaceRoot);
-		const current = await this.#servers(root);
-		const previous = current.find((server) => server.id === configuration.id);
+		const root = this.#configRoot(workspaceRoot, scope);
+		const current = await loadConfig(root);
+		const moving = previousScope !== undefined && previousScope !== scope;
+		const sourceRoot = this.#configRoot(workspaceRoot, previousScope ?? scope);
+		const source = moving ? await loadConfig(sourceRoot) : current;
+		const previous = source.find((server) => server.id === configuration.id);
+		if (moving && !previous) throw configError("The source MCP configuration no longer exists");
+		if (moving && current.some((server) => server.id === configuration.id))
+			throw configError("An MCP server with this ID already exists in the destination scope");
+		if (
+			scope === "global" &&
+			!moving &&
+			(await loadConfig(workspaceRoot)).some((server) => server.id === configuration.id)
+		)
+			throw configError("Edit the workspace server to move it to global scope first");
 		const restored = { ...configuration };
 		for (const field of ["env", "headers"] as const) {
 			const values = plainRecord(configuration[field]);
@@ -1511,41 +1582,69 @@ export class FileMcpCatalog {
 		}
 		const candidate = parseConfig(raw)[0];
 		if (!candidate) throw configError("MCP server configuration is empty");
+		if (scope === "global") {
+			candidate.scope = "global";
+			if (candidate.transport === "stdio") {
+				// Keep relative arguments anchored when a workspace config becomes global.
+				candidate.cwd = resolve(workspaceRoot, candidate.cwd ?? ".");
+				if (!isAbsolute(candidate.command) && /[/\\]/.test(candidate.command))
+					candidate.command = resolve(moving ? workspaceRoot : candidate.cwd, candidate.command);
+			}
+		}
+		if (
+			moving &&
+			scope === "workspace" &&
+			candidate.transport === "stdio" &&
+			candidate.cwd &&
+			!isWithin(resolve(workspaceRoot), resolve(workspaceRoot, candidate.cwd))
+		)
+			throw configError("Set the MCP working directory inside the destination workspace before changing scope");
 		const next = [...current.filter((server) => server.id !== candidate.id), candidate];
 		if (next.length > MAX_SERVERS) throw configError("MCP cannot contain more than 32 servers");
-		// Configuration changes always require a fresh local trust decision.
+		await this.#refreshLocalTrust(root);
 		await this.#setLocalTrust(root, candidate.id, false);
 		await writeConfig(root, next);
-		this.#reconcileConnections(root, next);
-		return this.get(workspaceId, root, candidate.id);
+		this.#invalidateServer(
+			workspaceRoot,
+			candidate.id,
+			scope === "global" || previousScope === "global" ? "global" : "workspace"
+		);
+		if (moving) {
+			await this.#refreshLocalTrust(sourceRoot);
+			await this.#setLocalTrust(sourceRoot, candidate.id, false);
+			await writeConfig(
+				sourceRoot,
+				source.filter((server) => server.id !== candidate.id)
+			);
+		}
+		return this.get(workspaceId, workspaceRoot, candidate.id);
 	}
 
 	async setEnabled(workspaceId: string, workspaceRoot: string, serverId: string, enabled: boolean): Promise<McpServer> {
 		return this.#mutate(workspaceRoot, async () => {
-			const root = resolve(workspaceRoot);
-			const servers = await this.#servers(root);
-			const previous = servers.find((server) => server.id === serverId);
+			const previous = (await this.#servers(workspaceRoot)).find((server) => server.id === serverId);
 			if (!previous) throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
+			const root = this.#configRoot(workspaceRoot, previous.scope);
 			if (previous.enabled !== enabled) {
 				const next = { ...previous, enabled };
-				// Carry forward only an existing local grant for this exact configuration.
-				// A failed write can lose trust, but cannot authorize an edited configuration.
 				const locallyTrusted = this.#localTrust.get(root)?.get(serverId) === configurationDigest(previous);
 				await this.#setLocalTrust(root, serverId, locallyTrusted, next);
-				const updated = servers.map((server) => (server.id === serverId ? next : server));
-				await writeConfig(root, updated);
-				this.#reconcileConnections(root, updated);
+				await writeConfig(
+					root,
+					(await loadConfig(root)).map((server) => (server.id === serverId ? next : server))
+				);
+				this.#invalidateServer(workspaceRoot, serverId, previous.scope);
 			}
 			try {
-				return await this.get(workspaceId, root, serverId);
+				return await this.get(workspaceId, workspaceRoot, serverId);
 			} catch {
-				// Enabling is persisted even if discovery fails; report the resulting state.
-				const server = (await this.#servers(root)).find((entry) => entry.id === serverId);
+				const server = (await this.#servers(workspaceRoot)).find((entry) => entry.id === serverId);
 				if (!server) throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
-				const trusted = await this.#trusted(workspaceId, root, server);
+				const trusted = await this.#trusted(workspaceId, workspaceRoot, server);
 				return {
 					id: server.id,
 					workspaceId,
+					scope: server.scope ?? "workspace",
 					name: server.name ?? server.id,
 					transport: server.transport,
 					readOnly: server.readOnly,
@@ -1559,31 +1658,29 @@ export class FileMcpCatalog {
 	}
 
 	async trustServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<McpServer> {
-		return this.#mutate(workspaceRoot, () => this.#trustServer(workspaceId, workspaceRoot, serverId));
-	}
-
-	async #trustServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<McpServer> {
-		const root = resolve(workspaceRoot);
-		const server = (await this.#servers(root)).find((candidate) => candidate.id === serverId);
-		if (!server) throw Object.assign(new Error(`MCP server ${serverId} was not found`), { protocolCode: "not_found" });
-		await this.#setLocalTrust(root, serverId, true, server);
-		return this.get(workspaceId, root, serverId);
+		return this.#mutate(workspaceRoot, async () => {
+			const server = (await this.#servers(workspaceRoot)).find((candidate) => candidate.id === serverId);
+			if (!server) throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
+			await this.#setLocalTrust(this.#configRoot(workspaceRoot, server.scope), serverId, true, server);
+			return this.get(workspaceId, workspaceRoot, serverId);
+		});
 	}
 
 	async untrustServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<McpServer> {
-		return this.#mutate(workspaceRoot, () => this.#untrustServer(workspaceId, workspaceRoot, serverId));
-	}
-
-	async #untrustServer(workspaceId: string, workspaceRoot: string, serverId: string): Promise<McpServer> {
-		const root = resolve(workspaceRoot);
-		const server = (await this.#servers(root)).find((candidate) => candidate.id === serverId);
-		if (server && this.#isTrusted(workspaceId, serverId))
-			return this.#configureServer(workspaceId, root, { ...serializableServer(server), enabled: false });
-		if (!server) throw Object.assign(new Error(`MCP server ${serverId} was not found`), { protocolCode: "not_found" });
-		await this.#setLocalTrust(root, serverId, false);
-		this.#connections.get(`${root}\0${serverId}`)?.connection.close();
-		this.#invalidateDiscovery(`${root}\0${serverId}`);
-		return this.get(workspaceId, root, serverId);
+		return this.#mutate(workspaceRoot, async () => {
+			const server = (await this.#servers(workspaceRoot)).find((candidate) => candidate.id === serverId);
+			if (!server) throw Object.assign(new Error("MCP server was not found"), { protocolCode: "not_found" });
+			if (this.#isTrusted(workspaceId, serverId))
+				return this.#configureServer(
+					workspaceId,
+					workspaceRoot,
+					{ ...serializableServer(server), enabled: false },
+					server.scope
+				);
+			await this.#setLocalTrust(this.#configRoot(workspaceRoot, server.scope), serverId, false);
+			this.#invalidateServer(workspaceRoot, serverId, server.scope);
+			return this.get(workspaceId, workspaceRoot, serverId);
+		});
 	}
 
 	async createTools(snapshot: SessionSnapshot, approvals: ApprovalBroker): Promise<ToolDefinition[]> {
@@ -1672,6 +1769,7 @@ export class FileMcpCatalog {
 	async [Symbol.asyncDispose](): Promise<void> {
 		for (const { connection } of this.#connections.values()) connection.close();
 		this.#connections.clear();
+		this.#connectionConfigRoots.clear();
 	}
 }
 

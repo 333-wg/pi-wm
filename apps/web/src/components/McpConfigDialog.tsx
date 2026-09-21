@@ -1,19 +1,28 @@
 import { CircleAlert, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { useState } from "react";
-import type { JsonValue, McpServerConfiguration } from "@wuming/protocol";
+import type { JsonValue, McpScope, McpServerConfiguration } from "@wuming/protocol";
 import { useFocusTrap } from "../use-focus-trap.js";
 import { importMcpConfigurations } from "../lib/mcp-config.js";
 
 interface Props {
 	initial?: McpServerConfiguration;
 	initialMode?: "form" | "import";
+	initialScope?: McpScope;
 	existingIds: string[];
-	onSave: (config: McpServerConfiguration) => Promise<void>;
+	onSave: (config: McpServerConfiguration, scope: McpScope) => Promise<void>;
 	onClose: () => void;
 }
 
-export function McpConfigDialog({ initial, initialMode = "form", existingIds, onSave, onClose }: Props) {
+export function McpConfigDialog({
+	initial,
+	initialMode = "form",
+	initialScope = "global",
+	existingIds,
+	onSave,
+	onClose,
+}: Props) {
 	const dialog = useFocusTrap<HTMLDivElement>();
+	const [scope, setScope] = useState<McpScope>(initialScope);
 	const [config, setConfig] = useState<McpServerConfiguration>(
 		initial ?? { id: "", name: "", transport: "stdio", command: "", args: [], enabled: true, readOnly: false }
 	);
@@ -54,7 +63,7 @@ export function McpConfigDialog({ initial, initialMode = "form", existingIds, on
 		}
 		setBusy(true);
 		try {
-			await onSave(candidate);
+			await onSave(candidate, scope);
 			onClose();
 		} catch {
 			setError("保存失败，请检查字段、工作区权限及网关连接。原有配置可能已保存，请刷新确认状态。");
@@ -97,6 +106,20 @@ export function McpConfigDialog({ initial, initialMode = "form", existingIds, on
 					</div>
 				)}
 				<div className="mcp-config-body">
+					<div className="mcp-fields mcp-scope-field">
+						<label>
+							作用范围
+							<select
+								aria-label="作用范围"
+								value={scope}
+								disabled={busy}
+								onChange={(event) => setScope(event.target.value as McpScope)}
+							>
+								<option value="global">全局（所有工作区）</option>
+								<option value="workspace">当前工作区</option>
+							</select>
+						</label>
+					</div>
 					{error && (
 						<div className="workbench-error" role="alert">
 							<CircleAlert size={16} />
@@ -261,7 +284,11 @@ export function McpConfigDialog({ initial, initialMode = "form", existingIds, on
 								)}
 								<section className="mcp-credentials" aria-label={stdio ? "环境变量" : "请求头"}>
 									{secrets.length > 0 && (
-										<p className="mcp-secret-warning">凭据将明文保存在工作区配置文件中，请勿提交到代码仓库。</p>
+										<p className="mcp-secret-warning">
+											{scope === "global"
+												? "凭据将明文保存在本机应用数据目录中。"
+												: "凭据将明文保存在工作区配置文件中，请勿提交到代码仓库。"}
+										</p>
 									)}
 									<div className="mcp-inline-heading">
 										<strong>{stdio ? "环境变量" : "请求头"}</strong>

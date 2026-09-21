@@ -28,6 +28,60 @@ interface Props {
 	onDiscover: (connection: MediaModelDiscoveryConnection) => Promise<CustomModelCandidate[]>;
 }
 
+const nativeVideoPresets = {
+	"google-veo": {
+		label: "Google Veo",
+		baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+		model: "veo-3.1-generate-preview",
+	},
+	"google-omni": {
+		label: "Google Gemini Omni",
+		baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+		model: "gemini-omni-1.1-flash",
+	},
+	grok: { label: "Grok Imagine Video", baseUrl: "https://api.x.ai/v1", model: "grok-imagine-video-1.5" },
+	seedance: {
+		label: "豆包 / Seedance（火山方舟）",
+		baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+		model: "doubao-seedance-1-5-pro-251215",
+	},
+	jimeng: { label: "即梦（火山视觉 API）", baseUrl: "https://visual.volcengineapi.com", model: "jimeng_ti2v_v30_pro" },
+	kling: { label: "可灵 Kling", baseUrl: "https://api-beijing.klingai.com/v1", model: "kling-v2-6" },
+	wan: { label: "通义万相 Wan", baseUrl: "https://dashscope.aliyuncs.com/api/v1", model: "wan2.6-t2v" },
+	minimax: { label: "MiniMax / 海螺", baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-Hailuo-2.3" },
+	vidu: { label: "Vidu", baseUrl: "https://api.vidu.cn/ent/v2", model: "viduq2" },
+};
+type NativeVideoProtocol = keyof typeof nativeVideoPresets;
+function nativeProtocol(
+	protocol: VideoProtocolPreference,
+	baseUrl: string,
+	model: string
+): NativeVideoProtocol | undefined {
+	if (protocol in nativeVideoPresets) return protocol as NativeVideoProtocol;
+	if (protocol !== "auto") return undefined;
+	try {
+		const host = new URL(baseUrl).hostname;
+		if (host === "generativelanguage.googleapis.com" && model.startsWith("gemini-omni-")) return "google-omni";
+		return Object.keys(nativeVideoPresets).find((key) => {
+			const expected = new URL(nativeVideoPresets[key as NativeVideoProtocol].baseUrl).hostname;
+			return (
+				host === expected ||
+				(
+					{
+						seedance: ["ark.ap-southeast.bytepluses.com"],
+						kling: ["api.klingai.com", "api-singapore.klingai.com"],
+						wan: ["dashscope-intl.aliyuncs.com", "dashscope-us.aliyuncs.com"],
+						minimax: ["api.minimax.io", "api.minimax.chat"],
+						vidu: ["api.vidu.com"],
+					} as Record<string, string[]>
+				)[key]?.includes(host)
+			);
+		}) as NativeVideoProtocol | undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function ModelForm({
 	kind,
 	saved,
@@ -44,8 +98,11 @@ function ModelForm({
 	const [baseUrl, setBaseUrl] = useState(saved?.baseUrl ?? "");
 	const [model, setModel] = useState(saved?.model ?? "");
 	const [apiKey, setApiKey] = useState("");
+	const [apiSecret, setApiSecret] = useState("");
 	const [videoProtocol, setVideoProtocol] = useState<VideoProtocolPreference>(saved?.videoProtocol ?? "auto");
 	const [base64Reference, setBase64Reference] = useState(saved?.videoReferenceFormat === "data-url");
+	const native = kind === "video" ? nativeProtocol(videoProtocol, baseUrl, model) : undefined;
+	const pairCredentials = native === "jimeng" || native === "kling";
 	const [busy, setBusy] = useState(false);
 	const [notice, setNotice] = useState("");
 	const [error, setError] = useState("");
@@ -64,7 +121,9 @@ function ModelForm({
 	}
 	const kindLabel = kind === "image" ? "生图" : "生视频";
 	const canDiscover = Boolean(
-		baseUrl.trim() && (apiKey.trim() || (saved?.authenticated && baseUrl.trim().replace(/\/+$/, "") === saved.baseUrl))
+		!native &&
+		baseUrl.trim() &&
+		(apiKey.trim() || (saved?.authenticated && baseUrl.trim().replace(/\/+$/, "") === saved.baseUrl))
 	);
 	function invalidateDiscovery() {
 		setCandidates([]);
@@ -76,6 +135,7 @@ function ModelForm({
 		baseUrl.trim().replace(/\/+$/, "") !== saved?.baseUrl ||
 		model.trim() !== saved?.model ||
 		Boolean(apiKey) ||
+		Boolean(apiSecret) ||
 		(kind === "video" &&
 			(videoProtocol !== (saved?.videoProtocol ?? "auto") ||
 				base64Reference !== (saved?.videoReferenceFormat === "data-url"))) ||
@@ -85,6 +145,7 @@ function ModelForm({
 		setBaseUrl(saved?.baseUrl ?? "");
 		setModel(saved?.model ?? "");
 		setApiKey("");
+		setApiSecret("");
 		setVideoProtocol(saved?.videoProtocol ?? "auto");
 		setBase64Reference(saved?.videoReferenceFormat === "data-url");
 		setNotice("");
@@ -121,8 +182,10 @@ function ModelForm({
 							? { videoProtocol, videoReferenceFormat: base64Reference ? ("data-url" as const) : ("auto" as const) }
 							: {}),
 						...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+						...(pairCredentials && apiSecret.trim() ? { apiSecret: apiSecret.trim() } : {}),
 					});
 					setApiKey("");
+					setApiSecret("");
 				});
 			}}
 		>
@@ -139,17 +202,34 @@ function ModelForm({
 					) : (
 						<select
 							value={videoProtocol}
-							onChange={(event) => setVideoProtocol(event.target.value as VideoProtocolPreference)}
+							onChange={(event) => {
+								const next = event.target.value as VideoProtocolPreference;
+								setVideoProtocol(next);
+								setBase64Reference(false);
+								invalidateDiscovery();
+								if (!saved && next in nativeVideoPresets) {
+									const preset = nativeVideoPresets[next as NativeVideoProtocol];
+									setBaseUrl(preset.baseUrl);
+									setModel("");
+									setApiKey("");
+									setApiSecret("");
+								}
+							}}
 						>
 							<option value="auto">自动识别</option>
 							<option value="openai">OpenAI Videos / 兼容中转</option>
 							<option value="openai-json">OpenAI Videos / JSON 中转</option>
 							<option value="agnes-v2.5">Agnes 2.5 / Flash</option>
 							<option value="agnes">Agnes v2.0</option>
+							{Object.entries(nativeVideoPresets).map(([value, preset]) => (
+								<option key={value} value={value}>
+									{preset.label}
+								</option>
+							))}
 						</select>
 					)}
 				</label>
-				{kind === "video" && (
+				{kind === "video" && !native && (
 					<label
 						className="media-reference-format"
 						title="默认按模型自动选择传图方式；官方 Agnes 2.5 Flash 已自动使用 Base64。仅在其他服务支持时强制启用。"
@@ -178,18 +258,19 @@ function ModelForm({
 					/>
 				</label>
 				<label>
-					模型 ID
+					{native === "jimeng" ? "模型 req_key" : "模型 ID"}
 					<input
 						required
 						maxLength={200}
 						value={model}
+						placeholder={native ? nativeVideoPresets[native].model : undefined}
 						readOnly={kind === "video" && Boolean(saved?.provider)}
 						autoComplete="off"
 						onChange={(event) => setModel(event.target.value)}
 					/>
 				</label>
 				<label>
-					API Key
+					{pairCredentials ? "Access Key" : "API Key"}
 					<input
 						type="password"
 						value={apiKey}
@@ -202,6 +283,18 @@ function ModelForm({
 						}}
 					/>
 				</label>
+				{pairCredentials && (
+					<label>
+						Secret Key
+						<input
+							type="password"
+							value={apiSecret}
+							autoComplete="new-password"
+							placeholder={saved ? "已保存时留空不修改" : "输入 Secret Key"}
+							onChange={(event) => setApiSecret(event.target.value)}
+						/>
+					</label>
+				)}
 				{kind === "image" && imageOptions.size > 0 && (
 					<div className="media-image-models" role="group" aria-label="生图模型多选">
 						<div className="media-image-models-heading">
@@ -277,6 +370,7 @@ function ModelForm({
 					<button
 						type="button"
 						className="secondary-button"
+						title={native ? "原生服务请填写控制台模型 ID；即梦填写 req_key" : undefined}
 						disabled={!canDiscover || (kind === "video" && Boolean(saved?.provider))}
 						onClick={() =>
 							void perform(async () => {

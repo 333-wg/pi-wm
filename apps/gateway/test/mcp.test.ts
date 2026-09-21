@@ -140,6 +140,197 @@ afterEach(async () => {
 });
 
 describe("FileMcpCatalog", () => {
+	it("shares global config, trust and tools across workspaces and restarts", async () => {
+		const { root, script } = await fixtureWorkspace();
+		const other = await mkdtemp(join(tmpdir(), "wuming-mcp-other-"));
+		const globalRoot = await mkdtemp(join(tmpdir(), "wuming-mcp-global-"));
+		const options = { globalRoot, resolveWorkspace: () => other, isTrusted: () => false };
+		const catalog = createCatalog(options);
+		await catalog.configureServer(
+			"workspace-1",
+			root,
+			{ id: "shared", command: process.execPath, args: [script], readOnly: true },
+			"global"
+		);
+		expect(await catalog.list("workspace-2", other)).toMatchObject([{ id: "shared", scope: "global", trusted: false }]);
+		await catalog.trustServer("workspace-1", root, "shared");
+		const restarted = createCatalog(options);
+		expect(await restarted.get("workspace-2", other, "shared")).toMatchObject({
+			scope: "global",
+			trusted: true,
+			toolCount: 1,
+		});
+		const approve = { authorize: vi.fn(async () => undefined) };
+		const tools = await restarted.createTools(snapshot(), approve as never);
+		expect(tools.map((tool) => tool.name)).toEqual(["mcp__shared__echo"]);
+		await expect(tools[0]!.execute("global-call", {}, undefined, undefined, noContext)).resolves.toMatchObject({
+			content: [{ text: "MCP says hello" }],
+		});
+		const key = await catalog.configurationKey("workspace-2", other);
+		await catalog.setEnabled("workspace-1", root, "shared", false);
+		expect(await catalog.configurationKey("workspace-2", other)).not.toBe(key);
+		expect(await restarted.get("workspace-2", other, "shared")).toMatchObject({
+			trusted: true,
+			discoveryStatus: "disabled",
+		});
+		await expect(tools[0]!.execute("stale-call", {}, undefined, undefined, noContext)).rejects.toThrow(/changed/);
+		await catalog.setEnabled("workspace-2", other, "shared", true);
+		await catalog.untrustServer("workspace-2", other, "shared");
+		expect(await catalog.get("workspace-1", root, "shared")).toMatchObject({ trusted: false });
+		await catalog.removeServer("workspace-2", other, "shared");
+		expect((await catalog.list("workspace-1", root)).map((server) => server.id)).toEqual(["fixture"]);
+		await expect(access(join(other, ".wuming", "mcp.json"))).rejects.toThrow();
+	});
+
+	it("keeps workspace overrides isolated and reveals global config when the override is removed", async () => {
+		const { root, script } = await fixtureWorkspace();
+		const other = await mkdtemp(join(tmpdir(), "wuming-mcp-other-"));
+		const globalRoot = await mkdtemp(join(tmpdir(), "wuming-mcp-global-"));
+		const catalog = createCatalog({ globalRoot, resolveWorkspace: () => root, isTrusted: () => false });
+		await catalog.configureServer(
+			"workspace-2",
+			other,
+			{ id: "fixture", command: process.execPath, args: [script], name: "Global" },
+			"global"
+		);
+		await catalog.trustServer("workspace-2", other, "fixture");
+		expect(await catalog.list("workspace-1", root)).toMatchObject([
+			{ name: "Fixture MCP", scope: "workspace", trusted: false },
+		]);
+		expect(await catalog.createTools(snapshot(), { authorize: vi.fn() } as never)).toEqual([]);
+		await catalog.setEnabled("workspace-1", root, "fixture", false);
+		expect(await catalog.get("workspace-2", other, "fixture")).toMatchObject({
+			name: "Global",
+			discoveryStatus: "ready",
+		});
+		await catalog.removeServer("workspace-1", root, "fixture");
+		expect(await catalog.get("workspace-1", root, "fixture")).toMatchObject({
+			name: "Global",
+			scope: "global",
+			trusted: true,
+		});
+	});
+
+	it("moves existing configs to global without exposing credentials or losing relative arguments", async () => {
+		const { root } = await fixtureWorkspace();
+		const other = await mkdtemp(join(tmpdir(), "wuming-mcp-other-"));
+		const globalRoot = await mkdtemp(join(tmpdir(), "wuming-mcp-global-"));
+		const catalog = createCatalog({ globalRoot, isTrusted: () => false });
+		await catalog.configureServer("workspace-1", root, {
+			id: "fixture",
+			command: process.execPath,
+			args: ["server.cjs"],
+			env: { KEY: "secret-canary" },
+		});
+		await catalog.trustServer("workspace-1", root, "fixture");
+		const redacted = await catalog.getConfiguration(root, "fixture");
+		expect(redacted.env).toEqual({ KEY: null });
+		await catalog.configureServer("workspace-1", root, redacted, "global", "workspace");
+		expect(JSON.parse(await readFile(join(root, ".wuming", "mcp.json"), "utf8")).servers).toEqual([]);
+		const stored = JSON.parse(await readFile(join(globalRoot, ".wuming", "mcp.json"), "utf8")).servers[0];
+		expect(stored).toMatchObject({ cwd: root, args: ["server.cjs"], env: { KEY: "secret-canary" } });
+		expect(await catalog.get("workspace-2", other, "fixture")).toMatchObject({ scope: "global", trusted: false });
+		await expect(catalog.trustServer("workspace-2", other, "fixture")).resolves.toMatchObject({ toolCount: 1 });
+		await catalog.configureServer(
+			"workspace-1",
+			root,
+			await catalog.getConfiguration(root, "fixture"),
+			"workspace",
+			"global"
+		);
+		expect(await catalog.list("workspace-2", other)).toEqual([]);
+		expect(await catalog.get("workspace-1", root, "fixture")).toMatchObject({ scope: "workspace", trusted: false });
+	});
+
+	it("does not restart a workspace override when the global server changes", async () => {
+		const { root, script } = await fixtureWorkspace();
+		const other = await mkdtemp(join(tmpdir(), "wuming-mcp-other-"));
+		const globalRoot = await mkdtemp(join(tmpdir(), "wuming-mcp-global-"));
+		const catalog = createCatalog({ globalRoot, resolveWorkspace: () => root, isTrusted: () => false });
+		await catalog.configureServer(
+			"workspace-2",
+			other,
+			{ id: "fixture", command: process.execPath, args: [script] },
+			"global"
+		);
+		await catalog.trustServer("workspace-1", root, "fixture");
+		await catalog.get("workspace-1", root, "fixture");
+		const before = await catalog.createTools(snapshot(), { authorize: vi.fn() } as never);
+		expect(before[0]!.description).toBe("Echo input #2");
+		await catalog.setEnabled("workspace-2", other, "fixture", false);
+		const after = await catalog.createTools(snapshot(), { authorize: vi.fn() } as never);
+		expect(after[0]!.description).toBe(before[0]!.description);
+	});
+
+	it("rejects moving global working directories outside the target workspace without deleting the source", async () => {
+		const { root, script } = await fixtureWorkspace();
+		const other = await mkdtemp(join(tmpdir(), "wuming-mcp-other-"));
+		const globalRoot = await mkdtemp(join(tmpdir(), "wuming-mcp-global-"));
+		const catalog = createCatalog({ globalRoot, isTrusted: () => false });
+		await catalog.configureServer(
+			"workspace-1",
+			root,
+			{ id: "shared", command: process.execPath, args: [script] },
+			"global"
+		);
+		await expect(
+			catalog.configureServer(
+				"workspace-2",
+				other,
+				await catalog.getConfiguration(other, "shared"),
+				"workspace",
+				"global"
+			)
+		).rejects.toThrow(/working directory inside/);
+		expect(await catalog.get("workspace-1", root, "shared")).toMatchObject({ scope: "global" });
+		await expect(access(join(other, ".wuming", "mcp.json"))).rejects.toThrow();
+	});
+
+	it("rejects scope migration conflicts without overwriting either configuration", async () => {
+		const { root } = await fixtureWorkspace();
+		const other = await mkdtemp(join(tmpdir(), "wuming-mcp-other-"));
+		const globalRoot = await mkdtemp(join(tmpdir(), "wuming-mcp-global-"));
+		const catalog = createCatalog({ globalRoot, isTrusted: () => false });
+		await catalog.configureServer(
+			"workspace-2",
+			other,
+			{ id: "fixture", command: "global-canary", enabled: false },
+			"global"
+		);
+		await expect(
+			catalog.configureServer(
+				"workspace-1",
+				root,
+				await catalog.getConfiguration(root, "fixture"),
+				"global",
+				"workspace"
+			)
+		).rejects.toThrow(/already exists/);
+		expect((await catalog.getConfiguration(other, "fixture")).command).toBe("global-canary");
+		expect((await catalog.getConfiguration(root, "fixture")).command).toBe(process.execPath);
+	});
+
+	it("revokes global trust on edits and serializes concurrent writes from different workspaces", async () => {
+		const { root, script } = await fixtureWorkspace();
+		const other = await mkdtemp(join(tmpdir(), "wuming-mcp-other-"));
+		const globalRoot = await mkdtemp(join(tmpdir(), "wuming-mcp-global-"));
+		const catalog = createCatalog({ globalRoot, resolveWorkspace: () => other, isTrusted: () => false });
+		await Promise.all([
+			catalog.configureServer("workspace-1", root, { id: "one", command: process.execPath, args: [script] }, "global"),
+			catalog.configureServer("workspace-2", other, { id: "two", command: "unused", enabled: false }, "global"),
+		]);
+		await catalog.trustServer("workspace-2", other, "one");
+		const tools = await catalog.createTools(snapshot(), { authorize: vi.fn(async () => undefined) } as never);
+		await catalog.configureServer(
+			"workspace-1",
+			root,
+			{ ...(await catalog.getConfiguration(root, "one")), name: "Edited" },
+			"global"
+		);
+		expect(await catalog.list("workspace-2", other)).toHaveLength(2);
+		expect(await catalog.get("workspace-2", other, "one")).toMatchObject({ trusted: false });
+		await expect(tools[0]!.execute("stale", {}, undefined, undefined, noContext)).rejects.toThrow(/changed/);
+	});
 	it("preserves exact local trust across disable, restart and re-enable", async () => {
 		const { root } = await fixtureWorkspace();
 		const first = createCatalog({ resolveWorkspace: () => root, isTrusted: () => false });

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { openApp, startWebApp, stopWebApp } from "./harness.js";
+import { openApp, startWebApp, stopWebApp, token } from "./harness.js";
 
 let webUrl: string;
 let workspace: string;
@@ -26,6 +26,69 @@ test.beforeAll(async () => {
 });
 test.afterAll(stopWebApp);
 
+test("moves a workspace MCP to global and keeps it available in another project and a new chat", async ({
+	page,
+	request,
+}, testInfo) => {
+	await openApp(page, webUrl);
+	await page.getByRole("tab", { name: "MCP", exact: true }).click();
+	await page.getByRole("button", { name: "新增 MCP 服务", exact: true }).click();
+	let dialog = page.getByRole("dialog", { name: "新增 MCP 服务" });
+	await expect(dialog.getByLabel("作用范围", { exact: true })).toHaveValue("global");
+	await dialog.getByLabel("作用范围", { exact: true }).selectOption("workspace");
+	await dialog.getByLabel("服务 ID", { exact: true }).fill("scope-migration");
+	await dialog.getByLabel("启动命令", { exact: true }).fill(process.execPath);
+	await dialog.getByRole("button", { name: "添加参数" }).click();
+	await dialog.getByLabel("启动参数 1", { exact: true }).fill(script);
+	await dialog.getByRole("button", { name: "保存配置" }).click();
+	await expect(dialog).toHaveCount(0);
+	let row = page.locator(".mcp-server").filter({ hasText: "scope-migration" });
+	await expect(row.locator(".mcp-server-meta")).toContainText("当前工作区");
+	await row.getByRole("button", { name: "编辑 scope-migration", exact: true }).click();
+	dialog = page.getByRole("dialog", { name: "编辑 MCP 服务" });
+	await expect(dialog.getByLabel("作用范围", { exact: true })).toHaveValue("workspace");
+	await dialog.getByLabel("作用范围", { exact: true }).selectOption("global");
+	await dialog.getByRole("button", { name: "保存配置" }).click();
+	await expect(dialog).toHaveCount(0);
+	await expect(row.locator(".mcp-server-meta")).toContainText("全局");
+	await row.getByRole("button", { name: "授权并连接", exact: true }).click();
+	await expect(page.getByRole("alertdialog")).toContainText("此操作影响所有工作区");
+	await page.getByRole("button", { name: "确认授权并连接", exact: true }).click();
+	await expect(row).toContainText("已连接");
+	const headers = { Authorization: "Bearer " + token };
+	const created = await request.post(webUrl + "api/projects", { headers, data: { name: "MCP 跨工作区测试" } });
+	expect(created.ok()).toBeTruthy();
+	const projectId = (await created.json()).project.id;
+	expect(
+		(
+			await request.put(webUrl + "api/projects/" + projectId + "/files", {
+				headers: { ...headers, "X-Wuming-Project-Path": "notes.txt" },
+				data: "MCP scope test",
+			})
+		).ok()
+	).toBeTruthy();
+	expect((await request.post(webUrl + "api/projects/" + projectId + "/complete", { headers })).ok()).toBeTruthy();
+	await page.reload();
+	await expect(page.locator(".connection.connected")).toHaveCount(1);
+	await page.getByRole("button", { name: "MCP 跨工作区测试", exact: true }).click();
+	await page.getByRole("tab", { name: "MCP", exact: true }).click();
+	row = page.locator(".mcp-server").filter({ hasText: "scope-migration" });
+	await expect(row).toContainText("已连接");
+	await expect(row.locator(".mcp-server-meta")).toContainText("全局");
+	await row.getByRole("button", { name: "查看 scope-migration", exact: true }).click();
+	await expect(row.locator(".mcp-tool strong")).toHaveText("echo");
+	await page.getByRole("button", { name: "新对话", exact: true }).first().click();
+	await page.getByRole("tab", { name: "MCP", exact: true }).click();
+	await expect(row).toContainText("已连接");
+	await page.screenshot({ path: testInfo.outputPath("mcp-global-new-chat.png") });
+	await row.getByRole("button", { name: "查看 scope-migration", exact: true }).click();
+	await page.getByRole("tab", { name: "配置", exact: true }).click();
+	await row.getByRole("button", { name: "删除服务", exact: true }).click();
+	await page.getByRole("button", { name: "确认删除服务", exact: true }).click();
+	await expect(row).toHaveCount(0);
+	await unlink(join(workspace, "started.txt"));
+});
+
 for (const width of [1440, 390]) {
 	test("manages MCP configuration, trust and credentials at width " + width, async ({ page }, testInfo) => {
 		await page.setViewportSize({ width, height: 900 });
@@ -34,6 +97,7 @@ for (const width of [1440, 390]) {
 		const workbench = page.getByRole("region", { name: "MCP 服务" });
 		await workbench.getByRole("button", { name: "新增 MCP 服务", exact: true }).click();
 		let dialog = page.getByRole("dialog", { name: "新增 MCP 服务" });
+		if (width === 390) await dialog.getByLabel("作用范围", { exact: true }).selectOption("workspace");
 		await dialog.getByLabel("服务 ID", { exact: true }).fill("fixture-" + width);
 		await dialog.getByLabel("显示名称").fill("本地文档服务");
 		await dialog.getByLabel("启动命令", { exact: true }).fill(process.execPath);
@@ -73,7 +137,8 @@ for (const width of [1440, 390]) {
 		await dialog.getByRole("button", { name: "保存配置" }).click();
 		await expect(dialog).toHaveCount(0);
 		await expect(workbench.locator(".mcp-server-row")).toContainText("待授权");
-		const stored = JSON.parse(await readFile(join(workspace, ".wuming", "mcp.json"), "utf8"));
+		const configRoot = width === 1440 ? join(workspace, "..", "data") : workspace;
+		const stored = JSON.parse(await readFile(join(configRoot, ".wuming", "mcp.json"), "utf8"));
 		expect(stored.servers.find((entry: { id: string }) => entry.id === "fixture-" + width).env.TEST_KEY).toBe(
 			"local-secret-canary"
 		);
@@ -147,6 +212,7 @@ test("keeps literal arguments and long names usable on a narrow screen", async (
 	await page.getByRole("tab", { name: "MCP", exact: true }).click();
 	await page.getByRole("button", { name: "导入 JSON", exact: true }).click();
 	const dialog = page.getByRole("dialog", { name: "新增 MCP 服务" });
+	await dialog.getByLabel("作用范围", { exact: true }).selectOption("workspace");
 	const args = ["C:\\Program Files\\MCP\\server.js", "", "--label=two words", '"quoted"'];
 	await dialog
 		.getByLabel("JSON 配置")

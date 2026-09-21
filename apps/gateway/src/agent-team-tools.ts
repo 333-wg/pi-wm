@@ -34,7 +34,7 @@ export function createAgentTeamTools(sessionId: string, service: AgentTeamServic
 			name: "Agent",
 			label: "Agent",
 			description:
-				"Team lead: create a persistent teammate, at startup or later when a new responsibility is needed. Without templateName, role defines a task-specific member; no saved template or user setup is required. Optional templateName reuses a suitable configuration from AgentTemplates. Preserve explicit user member/role assignments; never replace a named template silently or bypass its tool limits. Explicit model/thinkingLevel overrides template values, otherwise inherit the lead. Template prompt, tools and color are frozen on creation. Returns immediately; create and explicitly assign the first task with TaskCreate/TaskUpdate so work can start. Members retain sessions and run concurrently; this does not wait for a report.",
+				"Team lead: proactively create a persistent teammate whenever useful independent implementation, repair or verification needs capacity or expertise, at startup or later; do not wait for a user reminder. Reuse suitable retained members first, respect exclusive rosters and the 8-member limit including lead, and avoid duplicate roles without distinct work. Without templateName, role defines a task-specific member; no saved template or user setup is required. Optional templateName reuses a suitable configuration from AgentTemplates. Preserve explicit user member/role assignments; never replace a named template silently or bypass its tool limits. Explicit model/thinkingLevel overrides template values, otherwise inherit the lead. Template prompt, tools and color are frozen on creation. Returns immediately; create and explicitly assign the first task with TaskCreate/TaskUpdate so work can start. Members retain sessions and run concurrently; this does not wait for a report.",
 			parameters: Type.Object({
 				name: Type.String({ minLength: 1, maxLength: 80 }),
 				role: Text,
@@ -49,7 +49,7 @@ export function createAgentTeamTools(sessionId: string, service: AgentTeamServic
 			name: "TaskCreate",
 			label: "TaskCreate",
 			description:
-				"Create a shared team task. Lead should explicitly assign every teammate's first task. Declare dependency task IDs and disjoint workspace-relative writePaths (files/directories, no globs). Unowned tasks can be auto-claimed by activated idle teammates. Task creation alone does not signal completion.",
+				"Create a shared team task for real deliverables throughout research, implementation, repair and verification. Lead should explicitly assign every teammate's first task and give suitable retained members owned follow-up tasks instead of taking over after research. Include concrete output and acceptance criteria; coding assignments require direct file edits, changed paths and check results. Declare dependency task IDs and disjoint workspace-relative writePaths (files/directories, no globs). Prefer explicit owners for specialized work: unowned tasks can be auto-claimed by any activated idle teammate. Task creation alone does not signal completion.",
 			parameters: Type.Object({
 				title: Type.String({ minLength: 1, maxLength: 500 }),
 				description: Text,

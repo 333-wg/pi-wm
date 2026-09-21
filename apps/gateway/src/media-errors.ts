@@ -25,12 +25,18 @@ export function mediaErrorDetail(payload: unknown, config: MediaConnection): str
 		config.apiKey,
 		encodeURIComponent(config.apiKey),
 		Buffer.from(config.apiKey).toString("base64"),
+		...(config.apiSecret
+			? [config.apiSecret, encodeURIComponent(config.apiSecret), Buffer.from(config.apiSecret).toString("base64")]
+			: []),
 	])
 		if (secret) safe = safe.split(secret).join("[redacted]");
 	return safe
 		.replace(/https?:\/\/[^\s"'<>]+/gi, "[url omitted]")
 		.replace(/data:[^\s"'<>]+/gi, "[media omitted]")
 		.replace(/\bBearer\s+[^\s,;"']+/gi, "Bearer [redacted]")
+		.replace(/\bToken\s+[^\s,;"']+/gi, "Token [redacted]")
+		.replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[jwt redacted]")
+		.replace(/\b(Signature|Credential)=[^\s,]+/gi, "$1=[redacted]")
 		.replace(/\b(?:sk-[\w-]+|gh[pousr]_[\w]+|github_pat_[\w]+)/g, "[redacted]")
 		.replace(
 			/\b(api[_-]?key|authorization|token|password|secret|cookie)\b["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
