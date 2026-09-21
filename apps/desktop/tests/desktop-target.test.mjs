@@ -37,6 +37,8 @@ test("Mac CI gates both architectures before explicit release attachment", async
 		{ schema: JSON_SCHEMA }
 	);
 	assert.equal(workflow.on.workflow_dispatch.inputs.upload_to_release.default, false);
+	assert.equal(workflow.on.workflow_dispatch.inputs.candidate_run_id.default, "");
+	assert.match(workflow.jobs.build.if, /inputs.candidate_run_id == ''/);
 	assert.deepEqual(workflow.jobs.build.strategy.matrix.include, [
 		{ runner: "macos-15", arch: "arm64" },
 		{ runner: "macos-15-intel", arch: "x64" },
@@ -49,6 +51,14 @@ test("Mac CI gates both architectures before explicit release attachment", async
 	assert.ok(steps.some((step) => step.run === "node scripts/verify-desktop-macos.mjs"));
 	assert.equal(workflow.jobs.upload.needs, "build");
 	assert.match(workflow.jobs.upload.if, /inputs.upload_to_release/);
+	assert.match(workflow.jobs.upload.if, /needs.build.result == 'success'/);
+	assert.equal(workflow.jobs.upload.permissions.actions, "read");
+	const provenance = workflow.jobs.upload.steps.find((step) => step.name?.startsWith("Validate existing candidate"));
+	assert.match(provenance.run, /git merge-base --is-ancestor/);
+	assert.match(provenance.run, /Application changed after candidate build/);
+	assert.match(provenance.run, /conclusion == "success"/);
+	const download = workflow.jobs.upload.steps.find((step) => step.uses === "actions/download-artifact@v4");
+	assert.equal(download.with["run-id"], "${{ inputs.candidate_run_id || github.run_id }}");
 	assert.match(workflow.jobs.upload.steps.at(-1).run, /sha256sum --check/);
 	assert.doesNotMatch(workflow.jobs.upload.steps.at(-1).run, /--clobber|release create|release edit|latest-mac/);
 });

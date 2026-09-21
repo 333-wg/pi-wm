@@ -26,6 +26,17 @@ if (!response.ok) {
 }
 const release = await response.json();
 if (!release.draft) throw new Error("Installation fixtures must be in a draft release");
+const baselineName = `Pi-Wm-${baselineVersion}-Setup-x64.exe`;
+if (!release.assets.some((asset) => asset.name === baselineName)) {
+	const baselineResponse = await fetch(`https://api.github.com/repos/${repository}/releases/tags/v${baselineVersion}`, { headers });
+	if (!baselineResponse.ok) throw new Error(`Baseline release lookup failed: ${baselineResponse.status}`);
+	const baselineRelease = await baselineResponse.json();
+	if (baselineRelease.draft || baselineRelease.prerelease || baselineRelease.tag_name !== `v${baselineVersion}`)
+		throw new Error("Baseline must be the exact published stable release");
+	const baselineAsset = baselineRelease.assets.find((asset) => asset.name === baselineName);
+	if (!baselineAsset) throw new Error("Published baseline installer missing");
+	release.assets.push(baselineAsset);
+}
 await mkdir(directory, { recursive: true });
 const names = [
 	`Pi-Wm-${baselineVersion}-Setup-x64.exe`,

@@ -8,6 +8,11 @@ on:
         required: true
         default: false
         type: boolean
+      candidate_run_id:
+        description: Reuse an already verified run without rebuilding installers
+        required: false
+        default: ""
+        type: string
   pull_request:
     paths:
       - ".github/workflows/desktop-macos.yml"
@@ -27,6 +32,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_dispatch' || inputs.candidate_run_id == ''
     strategy:
       fail-fast: false
       matrix:
@@ -73,17 +79,40 @@ jobs:
           retention-days: 14
 
   upload:
-    if: github.event_name == 'workflow_dispatch' && inputs.upload_to_release
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.upload_to_release && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.candidate_run_id != ''))
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate existing candidate provenance and unchanged application code
+        if: inputs.candidate_run_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_RUN_ID" =~ ^[0-9]+$ ]]
+          source=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" --jq 'select(.status == "completed" and .conclusion == "success" and .path == ".github/workflows/desktop-macos.yml" and .head_repository.full_name == env.GITHUB_REPOSITORY) | .head_sha')
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$source" HEAD
+          while IFS= read -r path; do
+            case "$path" in
+              docs/*|.github/workflows/*|apps/desktop/tests/*|scripts/download-desktop-update-fixture.mjs) ;;
+              *) echo "Application changed after candidate build: $path"; exit 1 ;;
+            esac
+          done < <(git diff --name-only "$source" HEAD)
       - uses: actions/download-artifact@v4
         with:
           pattern: desktop-macos-*
           path: artifacts
+          run-id: ${{ inputs.candidate_run_id || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Attach installers without replacing Windows assets or publishing drafts
         shell: bash
         env:

@@ -114,6 +114,10 @@ The `Desktop Installed Update` workflow runs only when manually dispatched on an
 
 For a real release, build the candidate normally and use a lower-version installer with a configured updater as the baseline. Keep both installers, the candidate's blockmap and `latest.yml` in the draft release. Upload a second copy of the candidate's metadata named `update-test-latest.yml` for the test downloader. Dispatch the workflow with the draft release ID, baseline version and candidate target version. The workflow validates GitHub asset SHA-256 digests before execution.
 
+The baseline installer may instead remain in its original published stable release.
+When it is absent from the draft, the downloader resolves the exact baseline tag
+and verifies that asset's GitHub digest, avoiding a duplicate baseline upload.
+
 The test installs the baseline, creates isolated test data, drives its update UI against a loopback server serving the candidate installer, and executes the unmodified NSIS launch with silent/restart flags. It checks the original Windows process exits, replacement of the installed binary, updated Windows registration, automatic restart, and preservation of the session, workspace file and settings. Only the update feed and native confirmation response are automated; installer spawning, installation, quitting and restarting are not mocked.
 
 After the gate passes, remove the baseline installer, any baseline blockmap and `update-test-latest.yml` from this draft. Keep the three candidate release files listed above. Do not delete the baseline's original published release. The evidence records which two versions were installed. Unsigned early releases must explicitly disclose their unsigned status and still require a signing plan for wider distribution.
