@@ -4,6 +4,8 @@ import type { WorkspaceSummary } from "@wuming/protocol";
 export interface GatewayPrincipal {
 	id: string;
 	workspaces: WorkspaceSummary[];
+	/** Only the single-user local profile may include hidden/unregistered workspaces in usage totals. */
+	allWorkspaceUsage?: boolean;
 	/** Optional role for deployments migrating from workspace-only auth. */
 	role?: GatewayRole;
 }

@@ -345,7 +345,7 @@ export const DailyUsageSchema = StrictObject({
 export type DailyUsage = Static<typeof DailyUsageSchema>;
 
 export const UsageOverviewSchema = StrictObject({
-	workspaceId: Id,
+	workspaceId: Type.Optional(Id),
 	generatedAt: Timestamp,
 	total: UsageSchema,
 	totalTurnCount: Type.Integer({ minimum: 0 }),
@@ -1529,7 +1529,7 @@ export const CommandSchema = Type.Union([
 	StrictObject({ type: Type.Literal("workspace.list") }),
 	StrictObject({
 		type: Type.Literal("usage.overview"),
-		workspaceId: Id,
+		workspaceId: Type.Optional(Id),
 		days: Type.Optional(Type.Integer({ minimum: 7, maximum: 31 })),
 	}),
 	StrictObject({ type: Type.Literal("tool.list"), workspaceId: Id }),

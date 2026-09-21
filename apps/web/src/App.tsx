@@ -3437,66 +3437,55 @@ function aggregateDailyUsage(entries: UsageOverview["daily"]): {
 function UsageSettings({
 	overview,
 	snapshot,
-	workspaceId,
-	workspaceName,
+	workspaces,
 	models,
 	onRefresh,
 }: {
 	overview: UsageOverview | undefined;
 	snapshot: SessionSnapshot | undefined;
-	workspaceId: string | undefined;
-	workspaceName: string;
+	workspaces: WorkspaceSummary[];
 	models: ModelMetadata[];
-	onRefresh: (days: UsageRange) => Promise<UsageOverview | undefined>;
+	onRefresh: (workspaceId: string | undefined, days: UsageRange) => Promise<UsageOverview | undefined>;
 }) {
 	const { locale, t } = useLocale();
 	const [range, setRange] = useState<UsageRange>(7);
-	const [data, setData] = useState<UsageOverview | undefined>(overview);
+	const [scope, setScope] = useState("");
+	const workspaceId = scope || undefined;
+	const [data, setData] = useState<UsageOverview>();
+	const [refreshKey, setRefreshKey] = useState(0);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string>();
-	const session = snapshot?.session.workspaceId === workspaceId ? snapshot : undefined;
+	const session = !workspaceId || snapshot?.session.workspaceId === workspaceId ? snapshot : undefined;
 
 	useEffect(() => {
-		setRange(7);
-		setData(overview?.workspaceId === workspaceId ? overview : undefined);
-		setError(undefined);
-	}, [workspaceId]);
+		if (scope && !workspaces.some((workspace) => workspace.id === scope)) setScope("");
+	}, [scope, workspaces]);
 
 	useEffect(() => {
-		if (!overview || overview.workspaceId !== workspaceId) return;
-		setData((current) =>
-			range === 7 || !current
-				? overview
-				: {
-						...current,
-						generatedAt: overview.generatedAt,
-						total: overview.total,
-						totalTurnCount: overview.totalTurnCount,
-						totalRequestCount: overview.totalRequestCount,
-						today: overview.today,
-						month: overview.month,
-					}
-		);
-	}, [overview, range, workspaceId]);
-
-	const refresh = async (nextRange: UsageRange) => {
-		if (!workspaceId) return;
+		let active = true;
 		setLoading(true);
 		setError(undefined);
-		try {
-			const next = await onRefresh(nextRange);
-			if (!next) throw new Error(t("usageLoadFailed"));
-			setData(next);
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : t("usageLoadFailed"));
-		} finally {
-			setLoading(false);
-		}
-	};
+		setData((current) =>
+			current?.workspaceId === workspaceId && current?.daily.length === range ? current : undefined
+		);
+		void onRefresh(workspaceId, range)
+			.then((next) => {
+				if (!next) throw new Error(t("usageLoadFailed"));
+				if (active) setData(next);
+			})
+			.catch((cause: unknown) => {
+				if (active) setError(cause instanceof Error ? cause.message : t("usageLoadFailed"));
+			})
+			.finally(() => {
+				if (active) setLoading(false);
+			});
+		return () => {
+			active = false;
+		};
+	}, [workspaceId, range, onRefresh, overview?.generatedAt, refreshKey, t]);
 
 	const selectRange = (nextRange: UsageRange) => {
 		setRange(nextRange);
-		void refresh(nextRange);
 	};
 	const period = useMemo(() => aggregateDailyUsage(data?.daily ?? []), [data?.daily]);
 	const maxDailyTokens = Math.max(1, ...(data?.daily.map((entry) => entry.usage.totalTokens) ?? []));
@@ -3547,27 +3536,25 @@ function UsageSettings({
 			meta: t("usageCalendarMonth"),
 		},
 		{
-			label: t("usageAllTime"),
+			label: t(workspaceId ? "usageWorkspaceAllTime" : "usageAllTime"),
 			usage: data?.total,
 			meta: data ? t("usageRequestsTurns", { requests: data.totalRequestCount, turns: data.totalTurnCount }) : "",
 		},
 	];
 
-	if (!workspaceId) {
-		return (
-			<div className="settings-empty-state usage-settings-empty">
-				<BarChart3 size={22} />
-				<strong>{t("usageNoWorkspace")}</strong>
-			</div>
-		);
-	}
-
 	return (
 		<div className="usage-settings">
 			<div className="usage-settings-toolbar">
 				<div>
-					<span>{t("usageWorkspace")}</span>
-					<strong>{workspaceName}</strong>
+					<label htmlFor="usage-workspace-scope">{t("usageWorkspace")}</label>
+					<select id="usage-workspace-scope" value={scope} onChange={(event) => setScope(event.target.value)}>
+						<option value="">{t("usageAllWorkspaces")}</option>
+						{workspaces.map((workspace) => (
+							<option key={workspace.id} value={workspace.id}>
+								{workspaceName(workspace.name)}
+							</option>
+						))}
+					</select>
 				</div>
 				<div className="usage-settings-actions">
 					<div className="usage-range-control" role="group" aria-label={t("usageRange")}>
@@ -3589,7 +3576,7 @@ function UsageSettings({
 						title={t("usageRefresh")}
 						aria-label={t("usageRefresh")}
 						disabled={loading}
-						onClick={() => void refresh(range)}
+						onClick={() => setRefreshKey((key) => key + 1)}
 					>
 						<RefreshCw className={loading ? "spin" : ""} size={15} />
 					</button>
@@ -5165,6 +5152,7 @@ export function App() {
 				? {
 						tool: {
 							...tool,
+							hasNotice: "webEvidence" in tool && Boolean(tool.webEvidence),
 							status: client.snapshot?.pendingApprovals.some((approval) => approval.toolCallId === tool.toolCallId)
 								? ("awaiting_approval" as const)
 								: tool.status,
@@ -6998,10 +6986,9 @@ export function App() {
 											<UsageSettings
 												overview={client.usageOverview}
 												snapshot={client.snapshot}
-												workspaceId={selectedWorkspace?.id}
-												workspaceName={selectedWorkspace ? workspaceName(selectedWorkspace.name) : t("noProject")}
+												workspaces={client.workspaces}
 												models={client.models}
-												onRefresh={(days) => client.refreshUsageOverview(selectedWorkspace!.id, days)}
+												onRefresh={client.getUsageOverview}
 											/>
 										</section>
 										{desktopUpdates.enabled && (

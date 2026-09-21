@@ -1,4 +1,5 @@
 import type { AgentRuntime } from "@wuming/orchestrator";
+import { reduceSessionEvent, type SessionEvent } from "@wuming/domain";
 import { ArtifactStore } from "@wuming/artifacts";
 import { ContextEngine } from "@wuming/context-engine";
 import { AttestationSigner, EvaluationStore, verifyEvaluationAttestation } from "@wuming/evaluation";
@@ -167,6 +168,98 @@ function send(ws: WebSocket, message: ClientMessage): void {
 }
 
 describe("GatewayServer", () => {
+	it("includes hidden workspace usage only for the local profile and enforces explicit workspace access", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		cleanup.push(() => store.close());
+		const orchestrator = new SessionOrchestrator(store, new GatewayRuntime());
+		for (const [workspaceId, totalTokens] of [
+			[workspace.id, 100],
+			["hidden-workspace", 200],
+		] as const) {
+			const { snapshot } = await orchestrator.createSession({
+				principalId: "local",
+				idempotencyKey: workspaceId,
+				workspaceId,
+				model: { provider: "test", id: "model" },
+				thinkingLevel: "medium",
+				sandboxMode: "workspace_write",
+				approvalPolicy: "on_risk",
+			});
+			const event: SessionEvent = {
+				type: "session.usage.recorded",
+				eventId: `event-${workspaceId}`,
+				sessionId: snapshot.session.id,
+				revision: snapshot.revision + 1,
+				timestamp: Date.now(),
+				turnId: `turn-${workspaceId}`,
+				mode: "prompt",
+				model: snapshot.model,
+				attempt: 1,
+				tools: [],
+				requests: [],
+				usage: {
+					inputTokens: totalTokens,
+					outputTokens: 0,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+					totalTokens,
+					costUsd: 0,
+				},
+			};
+			store.commitMutation({
+				sessionId: snapshot.session.id,
+				expectedRevision: snapshot.revision,
+				events: [event],
+				snapshot: reduceSessionEvent(snapshot, event),
+			});
+		}
+		const server = new GatewayServer({
+			store,
+			orchestrator,
+			auth: new StaticTokenMapAuth([
+				{ token: "local", principal: { id: "local", workspaces: [workspace], allWorkspaceUsage: true } },
+				{ token: "owner", principal: { id: "owner", role: "owner", workspaces: [workspace] } },
+				{ token: "viewer", principal: { id: "viewer", role: "viewer", workspaces: [workspace] } },
+				{ token: "empty", principal: { id: "empty", workspaces: [] } },
+			]),
+		});
+		const address = await server.listen();
+		cleanup.push(() => server.close());
+		for (const [token, totalTokens] of [
+			["local", 300],
+			["owner", 100],
+			["viewer", 100],
+			["empty", 0],
+		] as const) {
+			const client = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, token);
+			send(client.ws, { type: "hello", protocolVersion: 1, clientId: token, capabilities: [] });
+			await client.collector.waitFor((message) => message.type === "hello");
+			send(client.ws, {
+				type: "request",
+				requestId: "all-usage",
+				idempotencyKey: "all-usage",
+				command: { type: "usage.overview", days: 30 },
+			});
+			const result = await client.collector.waitFor(
+				(message) => message.type === "response" && message.requestId === "all-usage"
+			);
+			expect(result).toMatchObject({
+				type: "response",
+				result: { type: "usage.overview", overview: { total: { totalTokens } } },
+			});
+			send(client.ws, {
+				type: "request",
+				requestId: "forbidden-usage",
+				idempotencyKey: "forbidden-usage",
+				command: { type: "usage.overview", workspaceId: "hidden-workspace" },
+			});
+			const denied = await client.collector.waitFor(
+				(message) => message.type === "response" && message.requestId === "forbidden-usage"
+			);
+			expect(denied).toMatchObject({ type: "response", error: { code: "forbidden" } });
+		}
+	});
+
 	it("restricts official accounts to owners and makes authenticated models selectable without exposing tokens", async () => {
 		const root = await mkdtemp(join(tmpdir(), "official-gateway-"));
 		cleanup.push(() => rm(root, { recursive: true, force: true }));

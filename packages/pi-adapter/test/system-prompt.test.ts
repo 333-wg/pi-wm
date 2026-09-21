@@ -340,6 +340,14 @@ describe("buildWumingSystemPrompt environment", () => {
 		expect(prompt).toContain("brief progress updates at meaningful transitions");
 		expect(prompt).toContain("not private chain-of-thought");
 		expect(prompt).toContain("must use the user's language");
+		expect(prompt).toContain("Before the first tool call in a multi-step task");
+		expect(prompt).toContain("ordinary assistant-text sentences");
+		expect(prompt).toContain("Do not put this update only in thinking, tool arguments, a command, or a team mailbox");
+		expect(prompt).toContain("roughly 30 seconds");
+		expect(prompt).toContain("Explain the intended scope before editing files");
+		expect(prompt).toContain("announce the checks before verification");
+		expect(prompt).toContain("Simple questions answered directly do not need a progress preamble");
+		expect(prompt).toContain("a successful command is not proof that the user's goal is achieved");
 	});
 });
 

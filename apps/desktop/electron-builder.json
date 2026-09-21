@@ -2,6 +2,7 @@
 	"appId": "com.wuming.desktop",
 	"productName": "Pi-Wm",
 	"publish": null,
+	"compression": "maximum",
 	"electronLanguages": ["en-US", "zh-CN", "zh-TW"],
 	"directories": { "app": "apps/desktop", "output": "release" },
 	"files": ["src/**/*", "resources/**/*", "package.json"],

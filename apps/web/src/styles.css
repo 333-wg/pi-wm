@@ -6109,12 +6109,19 @@ button {
 	display: grid;
 	gap: 3px;
 }
-.usage-settings-toolbar > div:first-child span {
+.usage-settings-toolbar > div:first-child label {
 	color: var(--muted);
 	font-size: 10px;
 }
-.usage-settings-toolbar > div:first-child strong {
-	overflow: hidden;
+.usage-settings-toolbar select {
+	width: 220px;
+	max-width: 100%;
+	min-width: 0;
+	height: 34px;
+	padding: 0 8px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--surface);
 	color: var(--text);
 	font-size: 12px;
 	text-overflow: ellipsis;
@@ -9147,6 +9154,21 @@ button {
 	margin-left: 31px;
 	padding-left: 12px;
 	border-left: 1px solid var(--line);
+}
+.tool-activity-label {
+	flex: 1 1 160px;
+	min-width: 0;
+	color: var(--text-soft);
+	font-size: 12.5px;
+	line-height: 1.6;
+	text-align: left;
+	overflow-wrap: anywhere;
+}
+.tool-group-summary {
+	align-items: center;
+}
+.tool-group-summary > .tool-state.complete {
+	color: var(--muted);
 }
 .tool-group-items > .tool-row {
 	margin: 0;

@@ -1,6 +1,6 @@
 import type { WorkspaceSummary } from "@wuming/protocol";
 import { describe, expect, it, test } from "vitest";
-import { bearerProtocol, StaticTokenAuth, tokenFromProtocols } from "../src/auth.js";
+import { bearerProtocol, parseGatewayTokenEntries, StaticTokenAuth, tokenFromProtocols } from "../src/auth.js";
 
 const workspace: WorkspaceSummary = {
 	id: "workspace-1",
@@ -10,6 +10,17 @@ const workspace: WorkspaceSummary = {
 	updatedAt: 1,
 };
 const principal = { id: "user-1", workspaces: [workspace] };
+
+test("configured principals cannot opt into unrestricted local-profile usage", () => {
+	const [entry] = parseGatewayTokenEntries(
+		JSON.stringify([
+			{ token: "secret", id: "owner", role: "owner", workspaceIds: [workspace.id], allWorkspaceUsage: true },
+		]),
+		[workspace]
+	);
+	expect(entry?.principal.workspaces).toEqual([workspace]);
+	expect(entry?.principal.allWorkspaceUsage).toBeUndefined();
+});
 
 test("normalizes static token whitespace and rejects empty credentials", () => {
 	const auth = new StaticTokenAuth(" secret ", principal);

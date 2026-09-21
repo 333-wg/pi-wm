@@ -64,6 +64,17 @@ runtime assets, PDF support, the browser, and standalone Node remain intact.
 Electron language resources are limited to English and Simplified/Traditional
 Chinese. `runtime-manifest.json` records pruning counts and uncompressed bytes.
 
+Version 0.1.8 also removes the published TypeScript source trees of the pinned
+OpenAI, Anthropic and Zod SDKs, the browser-only PDF parser bundle, and Sentry
+profiler binaries for other platforms, architectures or Node ABIs. Headless
+Chromium locale packs are limited to the same three languages where present;
+fonts, ICU, PDF workers/WASM, runtime JavaScript and legal notices remain intact.
+Pi documentation and examples are retained because its runtime references them.
+These rules apply only to generated staging, never user projects or source dependencies.
+Maximum archive compression is enabled on Windows and macOS. Electron, standalone
+Node and the headless browser still account for most of the package: removing one
+requires an architectural change or an explicit on-demand download policy.
+
 The installer is an **unsigned internal-test build** unless a signing identity
 is supplied to electron-builder. Windows may warn about an unknown publisher.
 Windows update behavior and release gates are documented in [desktop updates](desktop-updates.md).

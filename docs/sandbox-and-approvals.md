@@ -177,8 +177,11 @@ matches and the server becomes untrusted until the user approves it again.
 
 The model-facing `mcp_configure`, `mcp_trust`, and `mcp_untrust` tools and the
 client commands `mcp.configure`, `mcp.trust`, and `mcp.untrust` are available
-only through a local-device Gateway. The tool path requires explicit
-`mcp.manage` approval before writing `.wuming/mcp.json` or the trust file. The
+only through a local-device Gateway. The tool path authorizes `mcp.manage` before
+writing `.wuming/mcp.json` or the trust file. Full-access sessions automatically
+authorize skill and MCP management unless the policy is always-ask; other modes
+retain explicit approval and sandbox restrictions. This exception does not
+authorize sensitive skill-source inspection or mixed-capability requests. The
 RPC path is still role-checked by the Gateway; viewers may list and inspect but
 cannot configure or trust servers. Server mode leaves user MCP management
 unavailable instead of starting processes on a Wuming-owned host.

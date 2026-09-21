@@ -567,17 +567,29 @@ export function useWumingClient() {
 		[]
 	);
 
-	const refreshUsageOverview = useCallback(async (workspaceId: string, days = 7) => {
-		const result = await requestRef.current?.({ type: "usage.overview", workspaceId, days });
-		if (result?.type === "usage.overview" && days === 7) {
-			setState((current) =>
-				current.selectedWorkspaceId === undefined || current.selectedWorkspaceId === workspaceId
-					? { ...current, usageOverview: result.overview }
-					: current
-			);
-		}
+	const getUsageOverview = useCallback(async (workspaceId?: string, days = 7) => {
+		const result = await requestRef.current?.({
+			type: "usage.overview",
+			...(workspaceId ? { workspaceId } : {}),
+			days,
+		});
 		return result?.type === "usage.overview" ? result.overview : undefined;
 	}, []);
+
+	const refreshUsageOverview = useCallback(
+		async (workspaceId: string, days = 7) => {
+			const overview = await getUsageOverview(workspaceId, days);
+			if (overview && days === 7) {
+				setState((current) =>
+					current.selectedWorkspaceId === undefined || current.selectedWorkspaceId === workspaceId
+						? { ...current, usageOverview: overview }
+						: current
+				);
+			}
+			return overview;
+		},
+		[getUsageOverview]
+	);
 
 	const refreshRuns = useCallback(async (sessionId: string) => {
 		const result = await requestRef.current?.({ type: "session.run.list", sessionId, limit: 20 });
@@ -2393,6 +2405,7 @@ export function useWumingClient() {
 		browseSessions,
 		searchSessions,
 		refreshSessions,
+		getUsageOverview,
 		refreshUsageOverview,
 		refreshRuns,
 		refreshMemories,

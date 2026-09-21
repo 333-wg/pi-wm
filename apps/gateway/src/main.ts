@@ -1408,6 +1408,7 @@ async function main(): Promise<void> {
 	let auth: import("./auth.js").GatewayAuth = new StaticTokenAuth(token, {
 		id: "local-user",
 		workspaces,
+		allWorkspaceUsage: localUserCapabilities,
 	});
 	const configuredAuth = process.env.WUMING_AUTH_TOKENS_JSON?.trim();
 	if (configuredAuth) {

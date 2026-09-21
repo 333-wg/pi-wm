@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { SessionSnapshot } from "@wuming/protocol";
+import { SessionOrchestrator, SqliteOrchestratorStore } from "@wuming/orchestrator";
+import { ApprovalBroker } from "@wuming/sandbox";
 import type { ApprovalAuthorization, ApprovalPermit } from "@wuming/sandbox";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -71,6 +73,91 @@ function snapshot(): SessionSnapshot {
 }
 
 describe("model-driven skill discovery", () => {
+	it("installs and manages skills without prompts in full access and rechecks changed permissions", async () => {
+		const { root, manager } = await fixture();
+		await mkdir(join(root, "package"));
+		await writeFile(
+			join(root, "package", "SKILL.md"),
+			"---\nname: Local review\ndescription: Review local changes\n---\nReview carefully."
+		);
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const orchestrator = new SessionOrchestrator(store, {
+				async executeTurn() {
+					return { items: [] };
+				},
+			});
+			const { snapshot: fullAccess } = await orchestrator.createSession({
+				principalId: "user",
+				idempotencyKey: "create",
+				workspaceId: "workspace",
+				model: { provider: "demo", id: "demo" },
+				thinkingLevel: "off",
+				sandboxMode: "unrestricted",
+				approvalPolicy: "never",
+			});
+			const broker = new ApprovalBroker({ store });
+			const tools = createSkillManagementTools(manager, fullAccess, broker);
+			let calls = 0;
+			const invoke = (name: string, params: Record<string, unknown>) =>
+				tools
+					.find((tool) => tool.name === name)!
+					.execute(
+						`manage-${++calls}`,
+						params,
+						undefined,
+						undefined,
+						undefined as unknown as Parameters<ToolDefinition["execute"]>[4]
+					);
+			await expect(invoke("skill_install", { sourcePath: "package", skillId: "local-review" })).resolves.toMatchObject({
+				details: { installed: true },
+			});
+			expect(await readFile(join(root, ".wuming", "skills", "local-review", "SKILL.md"), "utf8")).toContain(
+				"Review carefully."
+			);
+			await expect(invoke("skill_install", { sourcePath: "package", skillId: "local-review" })).rejects.toMatchObject({
+				protocolCode: "conflict",
+			});
+			await expect(invoke("skill_install", { sourcePath: "../outside", skillId: "outside" })).rejects.toMatchObject({
+				protocolCode: "forbidden",
+			});
+			await expect(invoke("skill_set_enabled", { skillId: "local-review", enabled: false })).resolves.toMatchObject({
+				details: { enabled: false },
+			});
+			await expect(invoke("skill_set_enabled", { skillId: "local-review", enabled: true })).resolves.toMatchObject({
+				details: { enabled: true },
+			});
+			await expect(invoke("skill_uninstall", { skillId: "local-review" })).resolves.toMatchObject({
+				details: { uninstalled: true },
+			});
+			expect((await manager.list()).some((skill) => skill.id === "local-review")).toBe(false);
+			await invoke("skill_install", { sourcePath: "package", skillId: "local-review" });
+			expect(store.loadSnapshot(fullAccess.session.id)?.pendingApprovals).toEqual([]);
+			await orchestrator.setSessionPolicy({
+				principalId: "user",
+				idempotencyKey: "restrict",
+				sessionId: fullAccess.session.id,
+				sandboxMode: "workspace_write",
+				approvalPolicy: "on_risk",
+			});
+			const pending = invoke("skill_uninstall", { skillId: "local-review" });
+			await vi.waitFor(() => expect(store.loadSnapshot(fullAccess.session.id)?.pendingApprovals).toHaveLength(1));
+			expect((await manager.list()).some((skill) => skill.id === "local-review")).toBe(true);
+			const approval = store.loadSnapshot(fullAccess.session.id)!.pendingApprovals[0]!;
+			await broker.respond({
+				principalId: "user",
+				idempotencyKey: "approve",
+				sessionId: fullAccess.session.id,
+				approvalId: approval.id,
+				decision: "approve",
+			});
+			await expect(pending).resolves.toMatchObject({ details: { uninstalled: true } });
+			expect((await manager.list()).some((skill) => skill.id === "local-review")).toBe(false);
+			expect(store.loadSnapshot(fullAccess.session.id)?.pendingApprovals).toEqual([]);
+		} finally {
+			store.close();
+		}
+	});
 	it("lets the agent install and manage a user-owned skill entirely in the local workspace", async () => {
 		const { root, manager } = await fixture();
 		const source = join(root, "package");

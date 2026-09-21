@@ -554,25 +554,25 @@ test("shows a thinking activity before the first model event", async ({ page }) 
 	await expect(thinking).toBeHidden();
 });
 
-test("shows live commands, output, and completion in execution order", async ({ page }) => {
-	await createSession(page);
+test("shows progress and compact live activity with command details on demand", async ({ page }) => {
+	await page.locator(".sidebar-new-chat").click();
 	await sendMessage(page, "/demo-live-tool");
 
 	const transcript = page.locator(".transcript");
 	await expect(transcript.getByText("我先运行项目测试，确认当前状态。", { exact: true })).toBeVisible();
-	const liveTool = transcript.locator(".live-tool");
-	await expect(liveTool).toContainText("执行");
-	await expect(liveTool).toContainText("npm test --silent");
-	await expect(liveTool).toContainText("运行中");
-	await expect(liveTool).toContainText("RUN tests");
-	await expect(liveTool).toContainText("已完成");
-	await expect(liveTool).toContainText("4 tests passed");
+	const activity = transcript.locator(".tool-group-summary");
+	await expect(activity).toContainText("正在执行命令");
+	await expect(activity).toHaveAttribute("aria-expanded", "false");
+	await expect(transcript).not.toContainText("npm test --silent");
 
-	await waitForIdle(page);
-	await expect(liveTool).toHaveCount(0);
-	const durableTool = transcript.locator(".tool-row").filter({ hasText: "npm test --silent" });
-	await expect(durableTool).toContainText("已完成");
+	await expect(activity).toContainText("执行命令 1 次");
+	await expect(activity).toContainText("已完成");
 	await expect(transcript.getByText("测试完成：4 项通过。", { exact: true })).toBeVisible();
+	await activity.click();
+	const detail = transcript.locator(".tool-group-items .tool-trace-summary");
+	await expect(detail).toContainText("npm test --silent");
+	await detail.click();
+	await expect(transcript.locator(".tool-result")).toContainText("4 tests passed");
 });
 
 test("shows automatic retry progress and recovery in the conversation", async ({ page }) => {
@@ -907,7 +907,8 @@ test("organizes settings into focused sections without mobile overflow", async (
 	await navigation.getByRole("button", { name: /^用量统计/ }).click();
 	const usagePanel = dialog.locator("#settings-panel-usage");
 	await expect(usagePanel).toBeVisible();
-	await expect(usagePanel.getByText("历史累计", { exact: true })).toBeVisible();
+	await expect(usagePanel.getByText("全部历史累计", { exact: true })).toBeVisible();
+	await expect(usagePanel.getByRole("combobox", { name: "统计范围" })).toHaveValue("");
 	await expect(usagePanel.getByRole("heading", { name: "每日趋势" })).toBeVisible();
 	await expect(usagePanel.locator(".usage-settings-day")).toHaveCount(7);
 	await usagePanel.getByRole("button", { name: "近 30 天", exact: true }).click();

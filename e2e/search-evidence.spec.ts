@@ -23,6 +23,8 @@ for (const width of [1440, 390]) {
 			const domModule = await import(domPath);
 			const { createRoot } = domModule.default ?? domModule;
 			const { ToolCard } = await import(toolPath);
+			const localePath = "/src/lib/locale.ts";
+			const { LanguageProvider } = await import(localePath);
 			const existing = document.getElementById("root");
 			if (existing) existing.style.display = "none";
 			const host = document.createElement("main");
@@ -31,8 +33,8 @@ for (const width of [1440, 390]) {
 			const levels = ["candidate_links", "page_content", "insufficient_content", "access_blocked"];
 			createRoot(host).render(
 				React.createElement(
-					"div",
-					null,
+					LanguageProvider,
+					{ initialLocale: "zh" },
 					...levels.map((level, index) =>
 						React.createElement(
 							ToolCard,

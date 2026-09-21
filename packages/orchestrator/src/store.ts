@@ -1532,7 +1532,9 @@ export class SqliteOrchestratorStore implements Disposable {
 		return this.#search.search(workspaceId, options);
 	}
 
-	usageOverview(workspaceId: string, now: number, requestedDays = 7): UsageOverview {
+	usageOverview(workspaceIds: string | readonly string[] | undefined, now: number, requestedDays = 7): UsageOverview {
+		const workspaceId = typeof workspaceIds === "string" ? workspaceIds : undefined;
+		const allowedIds = typeof workspaceIds === "string" ? [workspaceIds] : workspaceIds;
 		const days = Math.max(7, Math.min(31, Math.trunc(requestedDays)));
 		const current = new Date(now);
 		const todayStart = new Date(current.getFullYear(), current.getMonth(), current.getDate()).getTime();
@@ -1563,13 +1565,14 @@ export class SqliteOrchestratorStore implements Disposable {
 			SELECT e.event_json
 			FROM session_events e
 			JOIN session_snapshots s ON s.session_id = e.session_id
-			WHERE s.workspace_id = ?
+			WHERE ${allowedIds === undefined ? "1 = 1" : "s.workspace_id IN (SELECT value FROM json_each(?))"}
 				AND s.parent_session_id IS NULL
+				AND json_extract(e.event_json, '$.type') = 'session.usage.recorded'
 				AND e.created_at < ?
 			ORDER BY e.created_at
 		`
 			)
-			.all(workspaceId, tomorrowStart) as unknown as Array<{
+			.all(...(allowedIds === undefined ? [] : [JSON.stringify(allowedIds)]), tomorrowStart) as unknown as Array<{
 			event_json: string;
 		}>;
 		for (const row of rows) {
@@ -1587,7 +1590,16 @@ export class SqliteOrchestratorStore implements Disposable {
 			bucket.turnCount += 1;
 			bucket.requestCount += event.requests.length;
 		}
-		return { workspaceId, generatedAt: now, total, totalTurnCount, totalRequestCount, today, month, daily };
+		return {
+			...(workspaceId === undefined ? {} : { workspaceId }),
+			generatedAt: now,
+			total,
+			totalTurnCount,
+			totalRequestCount,
+			today,
+			month,
+			daily,
+		};
 	}
 
 	listChildSnapshots(parentSessionId: string, limit = 100): SessionSnapshot[] {

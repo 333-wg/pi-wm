@@ -143,6 +143,13 @@ export class ApprovalBroker {
 		if (!snapshot) throw new SandboxError("approval_denied", `Session ${request.sessionId} does not exist`);
 		// Read current permissions from the store. Cached tool definitions must not
 		// turn a previous full-access choice into a permanent grant.
+		const managesLocalExtensions =
+			request.capabilities.length > 0 &&
+			request.capabilities.every(
+				(capability) => capability.type === "skill.manage" || capability.type === "mcp.manage"
+			);
+		if (managesLocalExtensions && snapshot.sandboxMode === "unrestricted" && snapshot.approvalPolicy !== "always")
+			request = { ...request, requireExplicitApproval: false };
 		if (
 			request.fullAccessComputerUse &&
 			snapshot.sandboxMode === "unrestricted" &&
@@ -159,7 +166,9 @@ export class ApprovalBroker {
 				"approval_denied",
 				request.capabilities.some((capability) => capability.type === "computer.use")
 					? "Computer Use requires human approval. Select an approval-enabled permission mode before using desktop tools."
-					: "Skill source inspection requires human approval. Use an approval-enabled session to review or edit source; use skill_load for invocation. Do not read another copy to bypass this restriction."
+					: managesLocalExtensions
+						? "Skill and MCP management requires full access or an approval-enabled session."
+						: "Skill source inspection requires human approval. Use an approval-enabled session to review or edit source; use skill_load for invocation. Do not read another copy to bypass this restriction."
 			);
 		}
 		for (const capability of request.capabilities) {

@@ -857,6 +857,7 @@ export class GatewayServer implements AsyncDisposable {
   #isReadOnlyCommand(type: Command['type']): boolean {
     return [
       'workspace.list',
+      'usage.overview',
       'session.list',
       'session.search',
       'session.attach',
@@ -1346,10 +1347,15 @@ export class GatewayServer implements AsyncDisposable {
       case 'workspace.list':
         return { type: 'workspace.list', workspaces: connection.principal.workspaces };
       case 'usage.overview':
-        this.#requireWorkspace(connection, command.workspaceId);
+        if (command.workspaceId !== undefined) this.#requireWorkspace(connection, command.workspaceId);
         return {
           type: 'usage.overview',
-          overview: this.#store.usageOverview(command.workspaceId, this.#clock(), command.days),
+          overview: this.#store.usageOverview(
+            command.workspaceId ?? (connection.principal.allWorkspaceUsage
+              ? undefined : connection.principal.workspaces.map((workspace) => workspace.id)),
+            this.#clock(),
+            command.days,
+          ),
         };
       case 'tool.list': {
         this.#requireWorkspace(connection, command.workspaceId);

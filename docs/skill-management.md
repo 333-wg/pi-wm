@@ -28,8 +28,9 @@ as `local_device`. Server mode exposes bundled skills, but it does not discover
 workspace user skills, install packages, toggle them, uninstall them, or expose
 model-facing management tools. A user can still ask the agent to install or
 disable a skill in chat, but the resulting `skill_install`, `skill_set_enabled`,
-or `skill_uninstall` tool call runs on the user's local device host after an
-explicit approval.
+or `skill_uninstall` tool call runs on the user's local device host. Full-access
+sessions authorize these operations automatically; other modes still require
+explicit approval and a write-capable sandbox. An always-ask policy still prompts.
 
 ## Installing a Package
 
@@ -96,8 +97,8 @@ read into a running model conversation.
 
 The Pi runtime also exposes local-device management tools with the same mutation
 semantics: `skill_install`, `skill_set_enabled`, and `skill_uninstall`. These
-tools are absent in server mode and request `skill.manage` approval before any
-workspace state is changed.
+tools are absent in server mode and authorize `skill.manage` before any workspace
+state is changed, using the current stored session permissions on every call.
 
 All commands require workspace access. Viewers may list/preview but cannot
 install, toggle or uninstall. Installation validates all package entries before

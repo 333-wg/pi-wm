@@ -411,7 +411,8 @@ client configuration:
 
 Workspace configuration alone never authorizes a host process. In
 `local_device` mode, a user can ask Wuming to configure or trust an MCP server;
-after explicit approval the Gateway writes `.wuming/mcp.json` and records local
+after explicit approval (or automatically in a full-access session unless the
+policy is always-ask) the Gateway writes `.wuming/mcp.json` and records local
 trust in `.wuming/mcp-permissions.json`. Trust is bound to the normalized server
 configuration digest, so editing the command, args, URL, env, headers, or tool
 filters makes the server untrusted again until the user re-approves it. Server

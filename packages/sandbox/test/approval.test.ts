@@ -1,5 +1,6 @@
 import type { AgentRuntime } from "@wuming/orchestrator";
 import { SessionOrchestrator, SqliteOrchestratorStore } from "@wuming/orchestrator";
+import type { ToolCapability } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
 import { ApprovalBroker } from "../src/index.js";
 
@@ -41,6 +42,116 @@ async function pendingApproval(store: SqliteOrchestratorStore, sessionId: string
 }
 
 describe("ApprovalBroker", () => {
+	const managementCapabilities: ToolCapability[] = [
+		{ type: "skill.manage", skillId: "local", action: "install" },
+		{ type: "skill.manage", skillId: "local", action: "enable" },
+		{ type: "skill.manage", skillId: "local", action: "disable" },
+		{ type: "skill.manage", skillId: "local", action: "uninstall" },
+		{ type: "mcp.manage", serverId: "local", action: "configure" },
+		{ type: "mcp.manage", serverId: "local", action: "trust" },
+		{ type: "mcp.manage", serverId: "local", action: "untrust" },
+	];
+	it.each(["never", "on_risk", "on_failure"] as const)(
+		"automatically authorizes local extension management with full access under %s",
+		async (approvalPolicy) => {
+			const store = new SqliteOrchestratorStore(":memory:");
+			try {
+				const { snapshot } = await session(store, { sandboxMode: "unrestricted", approvalPolicy });
+				const broker = new ApprovalBroker({ store });
+				for (const capability of managementCapabilities) {
+					await expect(
+						broker.authorize({
+							sessionId: snapshot.session.id,
+							toolCallId: `manage-${JSON.stringify(capability)}`,
+							risk: "high",
+							summary: "Manage local extension",
+							requireExplicitApproval: true,
+							capabilities: [capability],
+						})
+					).resolves.toBeUndefined();
+				}
+				expect(store.loadSnapshot(snapshot.session.id)?.pendingApprovals).toEqual([]);
+			} finally {
+				store.close();
+			}
+		}
+	);
+	it.each([
+		{ sandboxMode: "workspace_write", approvalPolicy: "on_risk" },
+		{ sandboxMode: "unrestricted", approvalPolicy: "always" },
+	] as const)("still asks before extension management under $sandboxMode/$approvalPolicy", async (policy) => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const { snapshot } = await session(store, policy);
+			const broker = new ApprovalBroker({ store });
+			for (const capability of managementCapabilities) {
+				const abort = new AbortController();
+				const pending = broker.authorize({
+					sessionId: snapshot.session.id,
+					toolCallId: `manage-${JSON.stringify(capability)}`,
+					risk: "high",
+					summary: "Manage local extension",
+					requireExplicitApproval: true,
+					capabilities: [capability],
+					signal: abort.signal,
+				});
+				const rejected = expect(pending).rejects.toMatchObject({ code: "approval_denied" });
+				await pendingApproval(store, snapshot.session.id);
+				abort.abort();
+				await rejected;
+			}
+		} finally {
+			store.close();
+		}
+	});
+	it.each([
+		{ sandboxMode: "read_only", approvalPolicy: "on_risk", message: "exceeds sandbox mode" },
+		{ sandboxMode: "workspace_write", approvalPolicy: "never", message: "requires full access" },
+		{ sandboxMode: "workspace_write", approvalPolicy: "on_failure", message: "requires full access" },
+	] as const)("rejects extension management under $sandboxMode/$approvalPolicy", async ({ message, ...policy }) => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const { snapshot } = await session(store, policy);
+			const broker = new ApprovalBroker({ store });
+			for (const capability of managementCapabilities) {
+				await expect(
+					broker.authorize({
+						sessionId: snapshot.session.id,
+						toolCallId: "manage",
+						risk: "high",
+						summary: "Manage local extension",
+						requireExplicitApproval: true,
+						capabilities: [capability],
+					})
+				).rejects.toThrow(message);
+			}
+			expect(store.loadSnapshot(snapshot.session.id)?.pendingApprovals).toEqual([]);
+		} finally {
+			store.close();
+		}
+	});
+	it("does not extend full-access management consent to source inspection or empty requests", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		try {
+			const { snapshot } = await session(store, { sandboxMode: "unrestricted", approvalPolicy: "never" });
+			const broker = new ApprovalBroker({ store });
+			const read: ToolCapability = { type: "filesystem.read", paths: ["SKILL.md"] };
+			for (const capabilities of [[], [read], [managementCapabilities[0]!, read], [managementCapabilities[4]!, read]]) {
+				await expect(
+					broker.authorize({
+						sessionId: snapshot.session.id,
+						toolCallId: "inspect",
+						risk: "low",
+						summary: "Inspect source",
+						requireExplicitApproval: true,
+						capabilities,
+					})
+				).rejects.toMatchObject({ code: "approval_denied" });
+			}
+		} finally {
+			store.close();
+		}
+	});
 	it.each(["never", "on_risk", "on_failure"] as const)(
 		"honors local full-access desktop consent under %s",
 		async (approvalPolicy) => {
