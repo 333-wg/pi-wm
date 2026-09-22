@@ -306,6 +306,19 @@ test("install rechecks after confirmation, stops the service, then installs exac
 		},
 	};
 	await Promise.all([installDesktopUpdate(options), installDesktopUpdate(options)]);
-	assert.deepEqual(events, ["status", "confirm", "prepare", "stop", ["install", true, true]]);
+	assert.deepEqual(events, ["status", "confirm", "prepare", "stop", ["install", false, true]]);
 	assert.equal(updates.state.status, "installing");
+});
+
+test("non-Windows installation keeps its existing handoff flags", async () => {
+	const { updates } = fixture({ platform: "darwin" });
+	updates.patch({ status: "ready" });
+	const calls = [];
+	await installDesktopUpdate({
+		updates,
+		host: { updateStatus: async () => ({ busy: false }), stop: async () => {} },
+		confirm: async () => true,
+		install: (...args) => calls.push(args),
+	});
+	assert.deepEqual(calls, [[true, true]]);
 });

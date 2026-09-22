@@ -1,3 +1,4 @@
+import type { ArtifactRef, WebEvidence } from "@wuming/protocol";
 import type { ToolStatusValue } from "../components/ToolCard.js";
 import type { LocaleKey, Translate } from "./locale.js";
 
@@ -9,6 +10,8 @@ export interface GroupableTool {
 	isError?: boolean;
 	hasArtifact?: boolean;
 	hasNotice?: boolean;
+	webEvidence?: WebEvidence | undefined;
+	artifacts?: ArtifactRef[];
 }
 
 export interface ToolTraceGroup<T> {
@@ -27,19 +30,36 @@ const standaloneTools = new Set([
 	"get_generated_video",
 	"TeamCreate",
 	"team_start",
-	"browser_open",
 	"preview_start",
 ]);
 
 export function isCompactTool(tool: GroupableTool): boolean {
 	return (
-		!tool.isError &&
 		!tool.hasArtifact &&
+		!(tool.artifacts ?? []).some((artifact) => !isOutputLog(tool.toolName, artifact)) &&
 		!tool.hasNotice &&
 		!standaloneTools.has(tool.toolName) &&
 		!tool.toolName.startsWith("computer_") &&
-		["pending", "running", "complete"].includes(tool.status)
+		["pending", "running", "complete", "error", "aborted"].includes(tool.status)
 	);
+}
+
+// Only text output from read/execute tools is folded. Downloaded deliverables and media stay visible.
+function isOutputLog(toolName: string, artifact: ArtifactRef): boolean {
+	return (
+		["read_file", "grep", "exec", "shell", "run_python", "web_fetch"].includes(toolName) &&
+		artifact.mimeType === "text/plain"
+	);
+}
+
+export function toolActivityCounts(tools: GroupableTool[]) {
+	return {
+		ended: tools.filter((tool) => ["complete", "error", "aborted"].includes(tool.status)).length,
+		failed: tools.filter((tool) => tool.isError || tool.status === "error").length,
+		aborted: tools.filter((tool) => tool.status === "aborted" && !tool.isError).length,
+		blocked: tools.filter((tool) => tool.webEvidence?.level === "access_blocked").length,
+		insufficient: tools.filter((tool) => tool.webEvidence?.level === "insufficient_content").length,
+	};
 }
 
 const activityKeys: Record<string, LocaleKey> = {
@@ -55,6 +75,11 @@ const activityKeys: Record<string, LocaleKey> = {
 	web_search: "activityWeb",
 	web_fetch: "activityWeb",
 	browser_search: "activityWeb",
+	browser_open: "activityBrowser",
+	browser_download: "activityBrowser",
+	browser_diagnostics: "activityBrowser",
+	browser_tabs: "activityBrowser",
+	browser_close: "activityBrowser",
 	browser_snapshot: "activityBrowser",
 	browser_action: "activityBrowser",
 	browser_screenshot: "activityBrowser",

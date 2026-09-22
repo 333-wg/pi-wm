@@ -43,6 +43,17 @@ test("keeps progress visible between mixed activity groups with details accessib
 					input: { pattern: "**/*.ts", path: index ? "frontend" : "backend" },
 				}));
 				const failed = { ...reads[0], id: "failed", toolCallId: "failed", status: "error", isError: true };
+				const web = Array.from({ length: 30 }, (_, index) => ({
+					...reads[0],
+					id: `web-${index}`,
+					toolCallId: `web-${index}`,
+					toolName: index % 2 ? "browser_open" : "web_fetch",
+					input: { url: `https://github.com/example/project/tree/main/long/path/${index}` },
+					webEvidence: {
+						level: index === 9 ? "access_blocked" : index === 8 ? "insufficient_content" : "page_content",
+						note: "Research evidence",
+					},
+				}));
 				const progress = (id: string, text: string) => ({ ...hidden, id, content: [{ type: "text", text }] });
 				const command = {
 					...reads[0],
@@ -68,6 +79,7 @@ test("keeps progress visible between mixed activity groups with details accessib
 						...reads.slice(4),
 						...matches,
 						command,
+						...web,
 						progress("progress-found", "已找到原因：页面没有处理接口返回的空值。我会补上空状态，再运行回归检查。"),
 						...edits,
 						failed,
@@ -82,15 +94,22 @@ test("keeps progress visible between mixed activity groups with details accessib
 	await page.getByRole("textbox", { name: "消息", exact: true }).fill("检查项目文件");
 	await page.getByRole("button", { name: "发送", exact: true }).click();
 	await expect(page.locator(".message-row.assistant").filter({ hasText: "Demo runtime received:" })).toHaveCount(1);
+	// Visible streamed text is not proof the session has been saved and renamed.
+	await expect(page.getByRole("button", { name: "停止任务", exact: true })).toBeHidden();
+	await expect(page.locator(".session-open").filter({ hasText: "检查项目文件" })).toBeVisible();
 	await page.reload();
 	// Projectless startup intentionally opens a draft; reopen the saved conversation.
-	await page.getByRole("button", { name: "检查项目文件", exact: true }).click();
+	await page.locator(".session-open").filter({ hasText: "检查项目文件" }).click();
 	const groups = page.locator(".tool-group");
 	await expect(groups).toHaveCount(2);
 	const summary = groups.first().locator(".tool-group-summary");
 	await expect(summary).toContainText("8 次");
 	await expect(summary).toContainText("检索文件 2 次");
 	await expect(summary).toContainText("执行命令 1 次");
+	await expect(summary).toContainText("41 项操作已结束");
+	await expect(summary).not.toContainText("访问受阻");
+	await expect(summary).not.toContainText("内容不足");
+	await expect(page.locator(".transcript")).not.toContainText("https://github.com/example");
 	await expect(page.locator(".transcript")).not.toContainText("inspect_project_files");
 	await expect(page.getByText("我会先检查页面和数据接口，确认问题出现在哪一层。", { exact: true })).toHaveCount(1);
 	await expect(
@@ -104,19 +123,25 @@ test("keeps progress visible between mixed activity groups with details accessib
 					row.classList.contains("tool-group") ? "activity" : row.classList.contains("tool-error") ? "error" : "message"
 				)
 			)
-	).toEqual(["message", "message", "activity", "message", "activity", "error", "message"]);
+	).toEqual(["message", "message", "activity", "message", "activity", "message"]);
 	await expect(summary).toHaveAttribute("aria-expanded", "false");
-	await expect(page.locator(".transcript > .tool-row")).toHaveCount(3);
-	await expect(page.locator(".transcript > .tool-error")).toContainText("失败");
+	await expect(page.locator(".transcript > .tool-row")).toHaveCount(2);
+	const failedSummary = groups.last().locator(".tool-group-summary");
+	await expect(failedSummary).not.toContainText("失败");
+	await expect(failedSummary).toContainText("3 项操作已结束");
+	await failedSummary.click();
+	await groups.last().locator(".tool-error .tool-trace-summary").click();
+	await expect(groups.last().locator(".tool-error .tool-result")).toContainText("Original file content 0");
+	await failedSummary.click();
 	const closeRail = page.getByRole("button", { name: "关闭运行面板", exact: true }).first();
 	if (await closeRail.isVisible()) await closeRail.click();
 	for (const width of [1440, 390, 320]) {
-		await page.setViewportSize({ width, height: 900 });
+		await page.setViewportSize({ width, height: width < 600 ? 844 : 900 });
 		if (await closeRail.isVisible()) await closeRail.click();
 		await summary.scrollIntoViewIfNeeded();
 		await page.screenshot({ path: testInfo.outputPath("collapsed-" + width + ".png") });
 		await summary.click();
-		await expect(groups.first().locator(".tool-group-items > .tool-row")).toHaveCount(11);
+		await expect(groups.first().locator(".tool-group-items > .tool-row")).toHaveCount(41);
 		await expect(groups.first()).toContainText("inspect_project_files");
 		const first = groups.first().locator(".tool-group-items .tool-trace-summary").first();
 		await first.click();

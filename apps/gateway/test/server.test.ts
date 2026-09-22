@@ -420,6 +420,16 @@ describe("GatewayServer", () => {
 				});
 		}
 		expect(outsider.collector.messages.some((message) => message.type === "task.notification")).toBe(false);
+		expect(outsider.collector.messages.some((message) => message.type === "event")).toBe(false);
+		const backgroundEvents = owner.collector.messages.filter((message) => message.type === "event");
+		expect(backgroundEvents.length).toBeGreaterThan(0);
+		expect(backgroundEvents.every((message) => message.event.type === "session.phase.changed")).toBe(true);
+		expect(backgroundEvents).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ event: expect.objectContaining({ phase: "turn" }) }),
+				expect.objectContaining({ event: expect.objectContaining({ phase: "idle" }) }),
+			])
+		);
 		expect(legacy.collector.messages.some((message) => message.type === "task.notification")).toBe(false);
 		const replay = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, "owner");
 		send(replay.ws, {

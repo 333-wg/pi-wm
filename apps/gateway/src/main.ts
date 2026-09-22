@@ -391,9 +391,26 @@ class DemoRuntime implements AgentRuntime {
 				/^Current step [^\n]+:\n\/approval(?:\n|$)/m.test(text));
 		this.#active.set(input.operation.sessionId, active);
 		try {
-			if (text.trim() === "/retry-once" && input.operation.attempt === 1) {
+			if ((text.trim() === "/retry-once" && input.operation.attempt === 1) || text.trim() === "/retry-exhaust") {
+				const failed: TranscriptItem = {
+					id: `demo-retry-${input.operation.id}-${input.operation.attempt}`,
+					type: "assistant",
+					createdAt: Date.now(),
+					model: input.snapshot.model,
+					status: "error",
+					error: "Upstream HTTP/2 stream failed",
+					content: [
+						{
+							type: "tool_call",
+							toolCallId: `interrupted-${input.operation.attempt}`,
+							toolName: "write_file",
+							input: { path: "incomplete.ts", content: "// partial" },
+						},
+					],
+				};
+				input.onTranscriptItem?.(failed);
 				return {
-					items: [],
+					items: [failed],
 					usage: {
 						inputTokens: 7,
 						outputTokens: 0,
@@ -404,7 +421,7 @@ class DemoRuntime implements AgentRuntime {
 					},
 					failure: {
 						code: "runtime_error" as const,
-						message: "Simulated transient provider network failure",
+						message: "Upstream HTTP/2 stream failed",
 						retryable: true,
 						kind: "provider_network" as const,
 					},
@@ -1309,7 +1326,7 @@ async function main(): Promise<void> {
 		turnTimeoutMs: envPositiveNumber("WUMING_TURN_TIMEOUT_MS", 20 * 60_000),
 		abortGraceMs: envPositiveNumber("WUMING_ABORT_GRACE_MS", 5_000),
 		forceTerminateTimeoutMs: envPositiveNumber("WUMING_FORCE_TERMINATE_TIMEOUT_MS", 2_000),
-		maxRetries: envNonNegativeNumber("WUMING_MAX_RETRIES", 2),
+		maxRetries: envNonNegativeNumber("WUMING_MAX_RETRIES", 5),
 		retryBaseDelayMs: envNonNegativeNumber("WUMING_RETRY_BASE_DELAY_MS", 1_000),
 		...(process.env.WUMING_COST_BUDGET_USD === undefined
 			? {}

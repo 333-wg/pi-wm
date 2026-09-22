@@ -231,7 +231,10 @@ async function boot() {
 							type: "question",
 							title: "Pi-Wm",
 							message: "重启并安装更新？",
-							detail: "Pi-Wm 将关闭本地服务和预览服务并重新启动。请先保存外部编辑器中未保存的文件。",
+							detail:
+								process.platform === "win32"
+									? "Pi-Wm 将关闭本地服务和预览服务，然后显示更新进度。安装完成后会自动打开新版，请勿在安装期间重复打开应用。请先保存外部编辑器中未保存的文件。"
+									: "Pi-Wm 将关闭本地服务和预览服务并重新启动。请先保存外部编辑器中未保存的文件。",
 							buttons: ["稍后", "重启并安装"],
 							defaultId: 0,
 							cancelId: 0,

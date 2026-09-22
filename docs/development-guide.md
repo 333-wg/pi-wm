@@ -146,7 +146,12 @@ sessions retain their plans but do not trigger until restored. Run history links
 to the child conversation for approvals and tool-level inspection. Configure the
 single-node scan cadence with `WUMING_AUTOMATION_POLL_MS` (default 30000ms).
 Provider failures marked retryable use bounded retries (`WUMING_MAX_RETRIES` and
-`WUMING_RETRY_BASE_DELAY_MS`). Set `WUMING_COST_BUDGET_USD` for a default
+`WUMING_RETRY_BASE_DELAY_MS`). Defaults are five retries after the initial attempt,
+with exponential delays of 1, 2, 4, 8 and 16 seconds. Authentication failures,
+exhausted provider credits and invalid requests are not retried. HTTP/2 stream
+interruptions are classified as transient network failures. Recovery updates one
+neutral conversation notice; individual failed attempts remain in diagnostics.
+Set `WUMING_COST_BUDGET_USD` for a default
 per-session budget, or send `costBudgetUsd` when creating a session; all model
 usage, including failed attempts, counts toward that budget.
 Sessions can also enforce a token budget and an adjustable warning threshold;

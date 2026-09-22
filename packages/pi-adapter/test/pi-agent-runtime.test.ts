@@ -1447,6 +1447,16 @@ describe("PiAgentRuntime", () => {
 
 	it.each([
 		["429 rate limit exceeded", true, "provider_rate_limit"],
+		["Upstream HTTP/2 stream failed", true, "provider_network"],
+		["ERR_HTTP2_STREAM_ERROR: RST_STREAM", true, "provider_network"],
+		["Stream ended without finish_reason", true, "provider_network"],
+		["503 Service Unavailable", true, "provider"],
+		["Model temporarily unavailable", true, "provider"],
+		["No available channel", true, "provider"],
+		["429 insufficient_quota", false, "budget"],
+		["quota exceeded", false, "budget"],
+		["insufficient balance", false, "budget"],
+		["404 model_not_found", false, "provider"],
 		["Request timed out while reading provider response", true, "provider_timeout"],
 		["401 invalid API key", false, "provider_auth"],
 		["400 invalid request parameter", false, "provider"],
@@ -1470,6 +1480,49 @@ describe("PiAgentRuntime", () => {
 			retryable,
 			kind,
 		});
+	});
+
+	it.each([false, true])("bounds HTTP/2 recovery to five retries (exhausted=%s)", async (exhausted) => {
+		using store = new SqliteOrchestratorStore(":memory:");
+		const session = new FakePiSession();
+		session.emitScript = async (current) => {
+			const failed = exhausted || current.prompts.length < 6;
+			const active = store.listOperationsByStatus("running")[0];
+			if (active) expect(store.loadSnapshot(active.sessionId)!.session.phase).toBe("turn");
+			const response = failed
+				? { ...assistant([], "error", 0, 0), errorMessage: "Upstream HTTP/2 stream failed" }
+				: assistant([{ type: "text", text: "recovered" }], "stop", 1, 1);
+			current.emit({ type: "message_start", message: response });
+			current.emit({ type: "message_end", message: response });
+		};
+		await using runtime = new PiAgentRuntime({ createSession: async () => session });
+		const orchestrator = new SessionOrchestrator(store, runtime, { maxRetries: 5, retryBaseDelayMs: 0 });
+		const created = await orchestrator.createSession({
+			principalId: "test",
+			idempotencyKey: "create",
+			workspaceId: "test",
+			model: snapshot.model,
+			thinkingLevel: "off",
+			sandboxMode: "unrestricted",
+			approvalPolicy: "never",
+		});
+		const sessionId = created.snapshot.session.id;
+		await orchestrator.acceptTurn({
+			principalId: "test",
+			idempotencyKey: "turn",
+			sessionId,
+			mode: "prompt",
+			content: [{ type: "text", text: "Continue the task" }],
+		});
+		await orchestrator.drainSession(sessionId);
+		const saved = store.listOperations(sessionId)[0]!;
+		expect(saved).toMatchObject({ status: exhausted ? "failed" : "completed", attempt: 6 });
+		expect(saved.retryHistory).toHaveLength(5);
+		expect(session.prompts).toHaveLength(6);
+		expect(saved.retryHistory?.map((entry) => entry.attempt)).toEqual([1, 2, 3, 4, 5]);
+		expect(store.loadSnapshot(sessionId)!.transcript.filter((item) => item.id.endsWith(":error"))).toHaveLength(
+			exhausted ? 1 : 0
+		);
 	});
 
 	it("classifies thrown provider errors and redacts credentials", async () => {

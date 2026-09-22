@@ -215,7 +215,6 @@
 	--meta-bg: #1b2127;
 }
 
-
 /* Additional palettes adapted to the workbench tokens from cc-haha. */
 :root[data-theme="white"] {
 	--tok-comment: #526c59;
@@ -1238,7 +1237,7 @@ button {
 }
 .session-open {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) 8px;
+	grid-template-columns: minmax(0, 1fr) 14px;
 	align-items: center;
 	gap: 7px;
 	width: 100%;
@@ -1367,10 +1366,16 @@ button {
 	opacity: 0.45;
 }
 .session-phase {
+	justify-self: center;
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
 	background: var(--dot);
+}
+.session-running {
+	width: 14px;
+	height: 14px;
+	color: var(--muted);
 }
 .dot-turn,
 .dot-retry {
@@ -1908,7 +1913,30 @@ button {
 	display: flex;
 	align-items: center;
 	gap: 7px;
+	color: var(--text-soft);
+}
+.failure-notice-critical .failure-notice-heading {
 	color: var(--red);
+}
+.recovery-notice {
+	margin-left: 41px;
+	border-left-color: var(--line-strong);
+}
+.recovery-counter {
+	margin-left: auto;
+	flex-shrink: 0;
+	color: var(--muted);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+.recovery-spinner {
+	flex-shrink: 0;
+	animation: retry-spin 1.5s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.recovery-spinner {
+		animation: none;
+	}
 }
 .failure-notice-heading strong {
 	font-size: 12px;
@@ -3837,6 +3865,9 @@ button {
 	display: -webkit-box;
 	-webkit-line-clamp: 2;
 	-webkit-box-orient: vertical;
+}
+.run-error-provider {
+	color: var(--muted);
 }
 .run-retries,
 .run-hooks,
@@ -9162,13 +9193,19 @@ button {
 	font-size: 12.5px;
 	line-height: 1.6;
 	text-align: left;
-	overflow-wrap: anywhere;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
 }
 .tool-group-summary {
 	align-items: center;
+	flex-wrap: wrap;
 }
-.tool-group-summary > .tool-state.complete {
-	color: var(--muted);
+.tool-group > .tool-trace::before {
+	content: none;
+}
+.tool-group-items .tool-verb {
+	font-weight: 500;
 }
 .tool-group-items > .tool-row {
 	margin: 0;

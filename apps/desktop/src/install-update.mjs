@@ -16,8 +16,8 @@ export async function installDesktopUpdate({ updates, host, confirm, install }) 
 		}
 		updates.patch({ status: "installing", busy: false, error: undefined });
 		await host.stop();
-		// The native confirmation already grants consent. Silent NSIS mode also honors force-run.
-		await install(true, true);
+		// Windows hands off to the installer's visible progress page; other platforms are unchanged.
+		await install(updates.state.platform !== "win32", true);
 	} catch {
 		const installing = updates.state.status === "installing";
 		updates.patch({ status: installing ? "error" : "ready", error: installing ? "install" : "service" });

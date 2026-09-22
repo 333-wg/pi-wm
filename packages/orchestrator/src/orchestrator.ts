@@ -4303,8 +4303,27 @@ export class SessionOrchestrator {
 					const { capabilityPlan: _capabilityPlan, contextPlan: _contextPlan, ...withoutPlans } = operation;
 					operation = withoutPlans;
 				}
-				const planSnapshot = this.store.loadSnapshot(operation.sessionId);
+				let planSnapshot = this.store.loadSnapshot(operation.sessionId);
 				if (!planSnapshot) throw new OrchestratorError("not_found", `Session ${operation.sessionId} does not exist`);
+				if (planSnapshot.session.phase === "retry") {
+					const event: SessionEvent = {
+						type: "session.phase.changed",
+						eventId: this.#idFactory(),
+						sessionId: operation.sessionId,
+						revision: planSnapshot.revision + 1,
+						timestamp: this.#clock(),
+						phase: "turn",
+					};
+					const next = reduceSessionEvent(planSnapshot, event);
+					this.store.commitMutation({
+						sessionId: operation.sessionId,
+						expectedRevision: planSnapshot.revision,
+						events: [event],
+						snapshot: next,
+						lease,
+					});
+					planSnapshot = next;
+				}
 				operation = await this.#ensureCapabilityPlan(operation, planSnapshot, abortController.signal, durableTraceId);
 				operation = await this.#ensureContextPlan(operation, planSnapshot, abortController.signal, durableTraceId);
 				await this.#dispatchOperationHooks(

@@ -25,12 +25,9 @@ describe("consecutive tool groups", () => {
 		expect(groups.map((entry) => entry.entries.length)).toEqual([2, 1, 3]);
 		expect(groups[2]?.tools.map((item) => item.toolCallId)).toEqual(["c", "d", "e"]);
 	});
-	it("keeps failures, approvals, artifacts and special tools individually visible", () => {
+	it("keeps approvals, deliverables and special tools individually visible", () => {
 		for (const changes of [
-			{ status: "error" as const },
-			{ status: "aborted" as const },
 			{ status: "awaiting_approval" as const },
-			{ isError: true },
 			{ hasArtifact: true },
 			{ hasNotice: true },
 			{ toolName: "subagent" },
@@ -39,7 +36,6 @@ describe("consecutive tool groups", () => {
 			{ toolName: "get_generated_image" },
 			{ toolName: "TeamCreate" },
 			{ toolName: "team_start" },
-			{ toolName: "browser_open" },
 			{ toolName: "preview_start" },
 			{ toolName: "computer_action" },
 		]) {
@@ -60,7 +56,7 @@ describe("consecutive tool groups", () => {
 		expect(html).toContain("正在读取文件");
 		expect(html).not.toContain("current.ts");
 		expect(html).toContain("1/2");
-		expect(html).toContain("运行中");
+		expect(html).not.toContain("项操作已结束");
 		expect(html).not.toContain("private detail");
 	});
 	it("summarizes singleton operations without exposing command arguments", () => {
@@ -76,7 +72,7 @@ describe("consecutive tool groups", () => {
 	});
 	it("reports all-complete groups correctly", () => {
 		const html = renderToStaticMarkup(createElement(ToolGroup, { tools: [tool("a"), tool("b")], children: "detail" }));
-		expect(html).toContain("已完成");
+		expect(html).toContain("2 项操作已结束");
 		expect(html).not.toContain("运行中");
 	});
 	it("summarizes mixed tools by actual operation count, including repeats", () => {
@@ -94,6 +90,45 @@ describe("consecutive tool groups", () => {
 		const queued = renderToStaticMarkup(createElement(ToolGroup, { tools: [tools[1]!], children: "detail" }));
 		expect(queued).toContain("等待读取文件");
 		expect(queued).not.toContain("tool-state complete");
+	});
+	it("folds 30 mixed web calls including errors and evidence without splitting the stable group", () => {
+		const tools = Array.from({ length: 30 }, (_, index) =>
+			tool(String(index), {
+				toolName: index % 2 ? "browser_open" : "web_fetch",
+				webEvidence: { level: "page_content", note: "Retrieved, not verified" },
+			})
+		);
+		tools[4] = tool("4", { status: "error", isError: true });
+		tools[5] = tool("5", { status: "aborted" });
+		tools[6] = tool("6", { webEvidence: { level: "access_blocked", note: "Blocked" } });
+		tools[7] = tool("7", { webEvidence: { level: "insufficient_content", note: "Shell only" } });
+		expect(group(tools)).toHaveLength(1);
+		const html = renderToStaticMarkup(createElement(ToolGroup, { tools, children: "hidden results" }));
+		expect(html).toContain("30 项操作已结束");
+		for (const notice of ["1 项失败", "1 项中止", "1 项访问受阻", "1 项内容不足"]) expect(html).not.toContain(notice);
+		expect(html).not.toContain("hidden results");
+		expect(html).not.toContain("已完成");
+		expect(group(tools)[0]?.key).toBe(group([tool("0", { status: "running" })])[0]?.key);
+	});
+	it("folds text logs but keeps media and downloaded deliverables accessible", () => {
+		const artifact = { id: "output", name: "output.txt", mimeType: "text/plain", size: 100 };
+		expect(group([tool("a"), tool("b", { toolName: "web_fetch", artifacts: [artifact] })])).toHaveLength(1);
+		for (const changes of [
+			{ toolName: "browser_download", artifacts: [artifact] },
+			{ artifacts: [{ ...artifact, mimeType: "image/png" }] },
+		])
+			expect(group([tool("a"), tool("b", changes)])).toHaveLength(2);
+	});
+	it("counts errors as ended but not successful, while continuing to show running activity", () => {
+		const html = renderToStaticMarkup(
+			createElement(ToolGroup, {
+				tools: [tool("a", { status: "error" }), tool("b", { status: "running", toolName: "browser_open" })],
+				children: "details",
+			})
+		);
+		expect(html).toContain("正在操作浏览器");
+		expect(html).toContain("已结束 1/2 项");
+		expect(html).not.toContain("1 项失败");
 	});
 	it("localizes summaries and preserves ordinary messages", () => {
 		const html = renderToStaticMarkup(createElement(ToolGroup, { tools: [tool("a")], children: "detail" }), "en");

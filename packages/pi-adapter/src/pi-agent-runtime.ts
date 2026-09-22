@@ -203,7 +203,10 @@ function assistantErrorMessage(message: AssistantMessage): string | undefined {
 	return message.errorMessage === undefined ? undefined : errorMessage(message.errorMessage);
 }
 
-function providerFailure(error: unknown): {
+function providerFailure(
+	error: unknown,
+	assistant?: AssistantMessage
+): {
 	kind: RunFailureKind;
 	retryable: boolean;
 	message: string;
@@ -225,20 +228,42 @@ function providerFailure(error: unknown): {
 	) {
 		return { kind: "provider_auth", retryable: false, message };
 	}
-	if (status === 429 || /rate.?limit|too many requests|quota exceeded/.test(text)) {
+	if (
+		/insufficient[_ ]quota|quota exceeded|out of budget|billing|insufficient (?:balance|credits)|余额不足|额度不足/.test(
+			text
+		)
+	) {
+		return { kind: "budget", retryable: false, message };
+	}
+	if (status === 429 || /rate.?limit|too many requests/.test(text)) {
 		return { kind: "provider_rate_limit", retryable: true, message };
 	}
 	if (status === 408 || status === 504 || /\b(etimedout|timeout|timed out)\b/.test(text)) {
 		return { kind: "provider_timeout", retryable: true, message };
 	}
 	if (
-		/\b(econnreset|econnrefused|enotfound|eai_again|epipe)\b|fetch failed|network error|connection error|socket hang up|premature close|terminated/.test(
+		/\b(econnreset|econnrefused|enotfound|eai_again|epipe|err_http2_stream_error)\b|fetch failed|network error|connection error|socket hang up|premature close|terminated|http\/?2.*(?:stream|reset|goaway|response)|upstream.*(?:disconnect|reset)|stream (?:failed|ended|closed)|other side closed/.test(
 			text
 		)
 	) {
 		return { kind: "provider_network", retryable: true, message };
 	}
-	return { kind: "provider", retryable: status !== undefined && status >= 500, message };
+	if (
+		(status !== undefined && status >= 400 && status < 500) ||
+		/invalid request|invalid (?:request )?parameter|model[_ ]not[_ ]found|does not exist|not supported/.test(text)
+	) {
+		return { kind: "provider", retryable: false, message };
+	}
+	return {
+		kind: "provider",
+		retryable:
+			(status !== undefined && status >= 500) ||
+			/\b(?:500|502|503|504|529)\b|service.?unavailable|temporarily unavailable|overloaded|no available (?:channel|provider)|无可用渠道/.test(
+				text
+			) ||
+			(assistant !== undefined && isRetryableAssistantError(assistant)),
+		message,
+	};
 }
 
 function assistantContent(message: AssistantMessage): ContentPart[] {
@@ -781,7 +806,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		let firstContentAt: number | undefined;
 		let assistantStreamSeq = 0;
 		const toolStreamSeq = new Map<string, number>();
-		let lastFailureRetryable = false;
+		let lastFailedAssistant: AssistantMessage | undefined;
 
 		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 			if (event.type === "message_start" && event.message.role === "assistant") {
@@ -887,7 +912,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			}
 			if (event.type === "message_end" && event.message.role === "assistant") {
 				const assistant = event.message as AssistantMessage;
-				if (assistant.stopReason === "error") lastFailureRetryable = isRetryableAssistantError(assistant);
+				if (assistant.stopReason === "error") lastFailedAssistant = assistant;
 				const item = mapAssistant(assistant, activeAssistantId ?? this.#idFactory());
 				items.push(item);
 				input.onTranscriptItem?.(item);
@@ -1083,7 +1108,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			const failed = [...items].reverse().find((item) => item.type === "assistant" && item.status === "error");
 			if (failed?.type === "assistant") {
 				const failedMessage = failed.error ?? "Provider request failed";
-				const classified = providerFailure(failedMessage);
+				const classified = providerFailure(failedMessage, lastFailedAssistant);
 				return {
 					items,
 					usage: cumulativeUsage,
@@ -1094,7 +1119,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 					failure: {
 						code: "runtime_error",
 						message: classified.message,
-						retryable: lastFailureRetryable || classified.retryable,
+						retryable: classified.retryable,
 						kind: classified.kind,
 					},
 				};

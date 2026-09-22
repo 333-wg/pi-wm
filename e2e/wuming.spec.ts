@@ -112,7 +112,7 @@ async function createSession(page: Page): Promise<void> {
 		socket.close();
 	}
 	await page.reload();
-	await page.getByRole("navigation", { name: "会话" }).getByRole("button", { name, exact: true }).click();
+	await page.getByRole("navigation", { name: "会话" }).locator(".session-open").filter({ hasText: name }).click();
 	if (!(await page.locator(".right-rail").isVisible()))
 		await page.getByRole("button", { name: "显示或隐藏运行面板" }).click();
 	await expect(page.getByRole("textbox", { name: "消息" })).toBeEnabled();
@@ -606,11 +606,14 @@ test("shows progress and compact live activity with command details on demand", 
 	await expect(activity).toContainText("正在执行命令");
 	await expect(activity).toHaveAttribute("aria-expanded", "false");
 	await expect(transcript).not.toContainText("npm test --silent");
+	await activity.click();
+	await expect(activity).toHaveAttribute("aria-expanded", "true");
 
 	await expect(activity).toContainText("执行命令 1 次");
-	await expect(activity).toContainText("已完成");
+	await expect(activity).toContainText("1 项操作已结束");
 	await expect(transcript.getByText("测试完成：4 项通过。", { exact: true })).toBeVisible();
-	await activity.click();
+	// The live tool has now become a saved transcript item; the group must stay open.
+	await expect(activity).toHaveAttribute("aria-expanded", "true");
 	const detail = transcript.locator(".tool-group-items .tool-trace-summary");
 	await expect(detail).toContainText("npm test --silent");
 	await detail.click();
@@ -623,8 +626,8 @@ test("shows automatic retry progress and recovery in the conversation", async ({
 
 	const retry = page.getByRole("status", { name: "正在自动重试" });
 	await expect(retry).toBeVisible();
-	await expect(retry).toContainText("模型网络故障");
-	await expect(retry).toContainText("第 2/3 次");
+	await expect(retry).toContainText("正在恢复连接");
+	await expect(retry).toContainText("重试 1/5");
 	await expect(retry).toContainText("750ms 后自动重试");
 
 	await waitForIdle(page);
@@ -637,7 +640,7 @@ test("shows a recoverable final error with details and a rerun action", async ({
 	await sendMessage(page, "/demo-fail");
 	await waitForIdle(page);
 
-	const failure = page.getByRole("alert").filter({ hasText: "模型服务错误" });
+	const failure = page.getByRole("status").filter({ hasText: "模型服务暂时不可用" });
 	await expect(failure).toBeVisible();
 	await expect(failure).toContainText("任务没有完成");
 	await failure.getByText("技术详情", { exact: true }).click();

@@ -1,6 +1,13 @@
-import type { RunSummary, TranscriptItem } from "@wuming/protocol";
+import type { RunSummary, SessionSnapshot, TranscriptItem } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
-import { connectionFailure, desktopContinuation, retrySummary, supersededFailure } from "../src/lib/failure-state.js";
+import {
+	activeRecovery,
+	activeTurnFailure,
+	connectionFailure,
+	desktopContinuation,
+	retrySummary,
+	supersededFailure,
+} from "../src/lib/failure-state.js";
 
 const user: TranscriptItem = { id: "user", type: "user", createdAt: 1, content: [] };
 const tool: TranscriptItem = {
@@ -45,12 +52,16 @@ describe("failure display and recovery", () => {
 	it("identifies connection errors even without a classified run", () => {
 		expect(connectionFailure(error.error!)).toBe(true);
 		expect(connectionFailure("Connection error: ECONNRESET")).toBe(true);
+		expect(connectionFailure("Upstream HTTP/2 stream failed")).toBe(true);
 		expect(connectionFailure("permission denied")).toBe(false);
 	});
 	it("only suppresses intermediate errors when the same turn has a final error", () => {
 		expect(supersededFailure([user, tool, error, terminal], error.id)).toBe(true);
 		expect(supersededFailure([user, tool, error, terminal], terminal.id)).toBe(false);
+		const { error: _error, ...aborted } = terminal;
+		expect(supersededFailure([user, error, { ...aborted, status: "aborted" }], error.id)).toBe(true);
 		expect(supersededFailure([user, tool, error], error.id)).toBe(false);
+		expect(supersededFailure([user, error, { ...error, id: "retry-2" }], error.id)).toBe(true);
 		expect(supersededFailure([error, user, terminal], error.id)).toBe(false);
 		const recovered: TranscriptItem = {
 			id: "recovered",
@@ -61,6 +72,29 @@ describe("failure display and recovery", () => {
 			content: [{ type: "text", text: "done" }],
 		};
 		expect(supersededFailure([user, error, recovered], error.id)).toBe(true);
+	});
+	it("suppresses in-flight failures only in the active turn", () => {
+		expect(activeTurnFailure([user, error], error.id, true)).toBe(true);
+		expect(activeTurnFailure([user, error], error.id, false)).toBe(false);
+		expect(activeTurnFailure([error, user], error.id, true)).toBe(false);
+	});
+	it("restores the single recovery card from durable history after reload", () => {
+		const snapshot = { session: { id: "session", phase: "retry" }, transcript: [user, error] } as SessionSnapshot;
+		const running = { ...run, status: "running" as const, failureKind: "provider_network" as const };
+		expect(activeRecovery(snapshot, [running], undefined)).toMatchObject({
+			operationId: "operation",
+			nextAttempt: 2,
+			maxAttempts: 3,
+			waiting: true,
+		});
+		expect(
+			activeRecovery({ ...snapshot, session: { ...snapshot.session, phase: "turn" } }, [running], undefined)
+		).toMatchObject({ waiting: false });
+		expect(
+			activeRecovery({ ...snapshot, session: { ...snapshot.session, phase: "idle" } }, [running], undefined)
+		).toBeUndefined();
+		expect(activeRecovery({ ...snapshot, transcript: [user, error, terminal] }, [running], undefined)).toBeUndefined();
+		expect(activeRecovery(snapshot, [{ ...running, sessionId: "other" }], undefined)).toBeUndefined();
 	});
 	it("continues desktop work after successful or uncertain actions without including older turns", () => {
 		expect(desktopContinuation([user, tool, error], error.id)).toBe(true);

@@ -2443,7 +2443,9 @@ export class GatewayServer implements AsyncDisposable {
       )
     )
       return;
-    if (requireAttachment && !connection.attachedSessions.has(stored.event.sessionId)) return;
+    // Phase-only events keep authorized clients' background conversation lists current.
+    if (requireAttachment && stored.event.type !== 'session.phase.changed' &&
+      !connection.attachedSessions.has(stored.event.sessionId)) return;
     const event = this.#publicEvent(stored);
     if (event) this.#send(connection, { type: 'event', cursor: stored.cursor, event });
   }

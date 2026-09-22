@@ -38,7 +38,7 @@ test.beforeAll(async () => {
 							id: `${mode}:provider`,
 							type: "assistant",
 							createdAt: Date.now(),
-							content: [],
+							content: [{ type: "text", text: "正在检查测试应用。" }],
 							status: "error",
 							error: "Connection error.",
 							model: input.snapshot.model,
@@ -101,7 +101,7 @@ for (const width of [1365, 390]) {
 				.click();
 			const notice = page.locator(".failure-notice");
 			await expect(notice).toHaveCount(1);
-			await expect(notice).toContainText(mode === "network" ? "模型连接中断" : "任务状态保存失败");
+			await expect(notice).toContainText(mode === "network" ? "连接暂时中断" : "任务状态保存失败");
 			if (mode === "legacy") await expect(notice).toContainText("已安排自动重试 1 次；任务实际启动 1 次");
 			await notice.getByText("技术详情", { exact: true }).click();
 			await expect(notice.locator("pre")).toContainText("Connection error.");

@@ -276,7 +276,7 @@ export function useWumingClient() {
 					toolCall: existing.toolCall + delta.toolCall,
 				};
 			}
-			return changed ? { ...current, liveRetry: undefined, liveAssistants } : current;
+			return changed ? { ...current, liveAssistants } : current;
 		});
 	}, []);
 
@@ -1096,7 +1096,6 @@ export function useWumingClient() {
 					const order = ++liveOrder.current;
 					setState((current) => ({
 						...current,
-						liveRetry: undefined,
 						liveTools: {
 							...current.liveTools,
 							[event.toolCallId]: {
@@ -1176,6 +1175,12 @@ export function useWumingClient() {
 			cursorRef.current = message.cursor;
 			localStorage.setItem("wuming.cursor", message.cursor);
 			if (event.type === "session.snapshot") {
+				setState((current) => ({
+					...current,
+					sessions: current.sessions.map((session) =>
+						session.id === event.snapshot.session.id ? event.snapshot.session : session
+					),
+				}));
 				if (event.snapshot.session.phase === "idle") discardAssistantDeltas(event.snapshot.session.id);
 				if (event.snapshot.session.id === snapshotRef.current?.session.id) {
 					setState((current) => {
@@ -1193,6 +1198,15 @@ export function useWumingClient() {
 					void refreshUsageOverview(event.snapshot.session.workspaceId);
 				}
 				return;
+			}
+			// Sidebar status also follows conversations that are not currently open.
+			if (event.type === "session.phase.changed") {
+				setState((current) => ({
+					...current,
+					sessions: current.sessions.map((session) =>
+						session.id === event.sessionId ? { ...session, phase: event.phase } : session
+					),
+				}));
 			}
 			if (event.sessionId !== snapshotRef.current?.session.id) return;
 			if (event.type === "session.phase.changed" && (event.phase === "idle" || event.phase === "retry")) {

@@ -1,7 +1,14 @@
 import { GoalPlanEditor, GoalPlanView, newGoalPlan } from "./components/GoalPlan";
 import clover from "./assets/wuming-clover.png";
 import { findToolSubagent } from "./lib/subagent-navigation.js";
-import { connectionFailure, desktopContinuation, retrySummary, supersededFailure } from "./lib/failure-state.js";
+import {
+	activeRecovery,
+	activeTurnFailure,
+	connectionFailure,
+	desktopContinuation,
+	retrySummary,
+	supersededFailure,
+} from "./lib/failure-state.js";
 import { ChildConversationMenu } from "./components/ChildConversations.js";
 import { AgentTeamsWorkbench } from "./components/AgentTeamsWorkbench.js";
 import { PersistentAgentTeams } from "./components/PersistentAgentTeams.js";
@@ -46,6 +53,7 @@ import {
 	GitCompareArrows,
 	Globe,
 	Hourglass,
+	LoaderCircle,
 	TerminalSquare,
 	Trash2,
 	Upload,
@@ -1368,6 +1376,7 @@ function Content({
 	renderedToolCalls,
 	imagesFirst = false,
 	showImageDownload = true,
+	interrupted = false,
 }: {
 	parts: ContentPart[];
 	onDownload?: ((artifact: ArtifactRef) => Promise<void>) | undefined;
@@ -1375,6 +1384,7 @@ function Content({
 	renderedToolCalls?: Set<string> | undefined;
 	imagesFirst?: boolean;
 	showImageDownload?: boolean;
+	interrupted?: boolean;
 }) {
 	if (imagesFirst) {
 		const images = parts.filter((part) => part.type === "artifact" && isPreviewableImageArtifact(part.artifact));
@@ -1418,7 +1428,14 @@ function Content({
 					// The tool gets its own transcript item once it starts; render the
 					// call inline only while that item does not exist yet.
 					if (renderedToolCalls?.has(part.toolCallId)) return null;
-					return <ToolCard toolName={part.toolName} input={part.input} status="pending" key={index} />;
+					return (
+						<ToolCard
+							toolName={part.toolName}
+							input={part.input}
+							status={interrupted ? "aborted" : "pending"}
+							key={index}
+						/>
+					);
 				}
 				return (
 					<div
@@ -1492,7 +1509,7 @@ function imageInputUnsupported(error: string): boolean {
 
 function failureTitle(error: string, kind: RunSummary["failureKind"]): string {
 	if (/Mutation contains an invalid (event|snapshot)/i.test(error)) return "任务状态保存失败";
-	if (connectionFailure(error)) return "模型连接中断";
+	if (connectionFailure(error)) return "连接暂时中断";
 	if (imageInputUnsupported(error)) return "当前模型不支持图片理解";
 	if (/browser_open|url parameter|Stream ended without finish_reason/i.test(error)) {
 		return "浏览器步骤未完成";
@@ -1500,8 +1517,10 @@ function failureTitle(error: string, kind: RunSummary["failureKind"]): string {
 	if (/stream ended|premature close|terminated/i.test(error)) {
 		return "模型响应中断";
 	}
+	if (kind === "provider") return "模型服务暂时不可用";
+	if (kind === "provider_rate_limit") return "模型服务繁忙";
 	if (kind) return failureKindLabel(kind);
-	return "这一步没有完成";
+	return "任务暂未完成";
 }
 
 function failureAdvice(error: string, kind: RunSummary["failureKind"]): string {
@@ -1532,7 +1551,7 @@ function failureAdvice(error: string, kind: RunSummary["failureKind"]): string {
 		case "runtime_restart":
 			return "运行期间服务发生重启，服务恢复后可以重新执行。";
 		case "budget":
-			return "当前会话的 Token 或费用限额已用尽，请先调整用量限额。";
+			return "可用额度不足，请检查模型服务余额或会话用量限额后继续。";
 		case "user_abort":
 			return "本次任务已由你停止。";
 		default:
@@ -1557,12 +1576,17 @@ function FailureNotice({ error, actions }: { error: string; actions: FailureActi
 	const retries = retrySummary(actions.run);
 	const previousError = actions.run?.retryHistory?.at(-1)?.error;
 	const title = failureTitle(error, kind);
+	const severe = /Mutation contains an invalid (event|snapshot)/i.test(error) || kind === "tool";
 	const action =
 		kind === "provider_auth" ? "settings" : kind === "budget" ? "usage" : kind === "user_abort" ? undefined : "retry";
 	return (
-		<section className="failure-notice" role="alert">
+		<section
+			className={`failure-notice${severe ? " failure-notice-critical" : ""}`}
+			role={severe ? "alert" : "status"}
+			aria-live={severe ? "assertive" : "polite"}
+		>
 			<div className="failure-notice-heading">
-				<CircleAlert size={16} />
+				{severe ? <CircleAlert size={16} /> : <Pause size={16} />}
 				<strong>{title}</strong>
 			</div>
 			<p>{failureAdvice(error, kind)}</p>
@@ -1628,6 +1652,7 @@ function TranscriptItemView({
 	now,
 	transcript,
 	onOpenSubagent,
+	turnActive = false,
 }: {
 	item: TranscriptItem;
 	onDownload: (artifact: ArtifactRef) => Promise<void>;
@@ -1638,6 +1663,7 @@ function TranscriptItemView({
 	now: number;
 	transcript: TranscriptItem[];
 	onOpenSubagent?: (() => void) | undefined;
+	turnActive?: boolean;
 }) {
 	const t = useT();
 	if (item.type === "tool") {
@@ -1678,13 +1704,13 @@ function TranscriptItemView({
 	if (item.type === "assistant" && !item.error && !hasVisibleContent(item.content, renderedToolCalls)) {
 		return null;
 	}
-	if (
+	const suppressFailure =
 		item.type === "assistant" &&
-		item.error &&
-		!hasVisibleContent(item.content, renderedToolCalls) &&
-		supersededFailure(transcript, item.id)
-	)
-		return null;
+		!!item.error &&
+		(supersededFailure(transcript, item.id) || activeTurnFailure(transcript, item.id, turnActive));
+	// Incomplete calls never executed; their real results, if any, have separate tool rows.
+	const visibleParts = suppressFailure ? item.content.filter((part) => part.type !== "tool_call") : item.content;
+	if (suppressFailure && !hasVisibleContent(visibleParts, renderedToolCalls)) return null;
 	const toolFailureInTurn = item.type === "assistant" && item.error ? hasToolFailureInTurn(transcript, item.id) : false;
 	if (toolFailureInTurn && !hasVisibleContent(item.content, renderedToolCalls)) return null;
 
@@ -1699,7 +1725,9 @@ function TranscriptItemView({
 			<div className="message-body">
 				<div className="message-meta">
 					<strong>{item.type === "user" ? t("you") : "Pi-Wm"}</strong>
-					{item.type === "assistant" && item.status !== "complete" && <span>{statusLabel(item.status, t)}</span>}
+					{item.type === "assistant" && item.status !== "complete" && !suppressFailure && (
+						<span>{item.error ? "已暂停" : statusLabel(item.status, t)}</span>
+					)}
 					<time
 						className="message-time"
 						dateTime={new Date(item.createdAt).toISOString()}
@@ -1719,14 +1747,16 @@ function TranscriptItemView({
 					)}
 				</div>
 				<Content
-					parts={item.content}
+					parts={visibleParts}
 					onDownload={onDownload}
 					onLoadArtifact={onLoadArtifact}
 					renderedToolCalls={renderedToolCalls}
 					imagesFirst={item.type === "user"}
+					interrupted={item.type === "assistant" && (item.status === "error" || item.status === "aborted")}
 				/>
 				{item.type === "assistant" &&
 					item.error &&
+					!suppressFailure &&
 					!toolFailureInTurn &&
 					(failureActions ? (
 						<FailureNotice error={item.error} actions={failureActions} />
@@ -1784,17 +1814,32 @@ function ThinkingActivity({ phase }: { phase: SessionSnapshot["session"]["phase"
 	);
 }
 
-function RetryActivity({ retry }: { retry: LiveRetry }) {
+function RetryActivity({ retry }: { retry: LiveRetry & { waiting: boolean } }) {
 	return (
-		<div className="activity-row retry-activity" role="status" aria-live="assertive" aria-label="正在自动重试">
-			<RefreshCw size={14} />
-			<span>
-				{failureKindLabel(retry.failureKind)}，{formatDelay(retry.delayMs)} 后自动重试
-			</span>
-			<small>
-				第 {retry.nextAttempt}/{retry.maxAttempts} 次
-			</small>
-		</div>
+		<section
+			className="failure-notice recovery-notice"
+			role="status"
+			aria-live="polite"
+			aria-label="正在自动重试"
+			data-operation-id={retry.operationId}
+		>
+			<div className="failure-notice-heading">
+				<RefreshCw size={16} className="recovery-spinner" />
+				<strong>正在恢复连接</strong>
+				<span className="recovery-counter">
+					重试 {retry.nextAttempt - 1}/{retry.maxAttempts - 1}
+				</span>
+			</div>
+			<p>
+				{retry.waiting
+					? `模型服务暂时未响应，${formatDelay(retry.delayMs)} 后自动重试。`
+					: "正在重新请求模型，任务进度已保留。"}
+			</p>
+			<details className="failure-details">
+				<summary>技术详情</summary>
+				<pre>{redactDiagnostic(retry.error)}</pre>
+			</details>
+		</section>
 	);
 }
 
@@ -4092,7 +4137,11 @@ function RightRail({
 								)}
 								{run.abortRequested && <span>{t("stopRequested")}</span>}
 							</div>
-							{run.error && <div className="run-error">{run.error}</div>}
+							{run.error && (
+								<div className={`run-error${run.failureKind?.startsWith("provider") ? " run-error-provider" : ""}`}>
+									{redactDiagnostic(run.error)}
+								</div>
+							)}
 							{run.retryHistory && run.retryHistory.length > 0 && (
 								<details className="run-retries">
 									<summary>
@@ -4372,7 +4421,16 @@ function SessionNavigation({
 							<>
 								<button className="session-open" type="button" onClick={() => onSelect(session.id)}>
 									<span>{session.name || t("newChat")}</span>
-									<i className={`session-phase dot-${session.phase}`} />
+									{session.phase === "turn" || session.phase === "compaction" || session.phase === "retry" ? (
+										<LoaderCircle
+											className="session-running spin"
+											size={14}
+											role="img"
+											aria-label={t(STATUS_LABELS[session.phase]!)}
+										/>
+									) : (
+										<i className={`session-phase dot-${session.phase}`} title={t(STATUS_LABELS[session.phase]!)} />
+									)}
 								</button>
 								<div className={`session-actions ${archived ? "restore-only" : ""}`}>
 									{archived ? (
@@ -5095,6 +5153,7 @@ export function App() {
 		: undefined;
 	const reasoningPhase =
 		client.snapshot !== undefined && ["turn", "retry", "compaction"].includes(client.snapshot.session.phase);
+	const recovery = activeRecovery(client.snapshot, client.runs, client.liveRetry);
 	const liveAssistantItems = Object.values(client.liveAssistants).filter(
 		(item) =>
 			!transcript?.some((saved) => saved.id === item.id) && (item.thinking.trim() !== "" || item.text.trim() !== "")
@@ -5120,7 +5179,7 @@ export function App() {
 				? "running"
 				: undefined;
 	const showThinkingActivity =
-		reasoningPhase && liveTrace.length === 0 && client.liveRetry === undefined && compactionStatus !== "running";
+		reasoningPhase && liveTrace.length === 0 && recovery === undefined && compactionStatus !== "running";
 	// A completed call appears in both its assistant request and its own result
 	// item. Render the result card once; live calls carry their own input.
 	const renderedToolCalls = useMemo(() => {
@@ -5152,12 +5211,15 @@ export function App() {
 				? {
 						tool: {
 							...tool,
-							hasNotice: "webEvidence" in tool && Boolean(tool.webEvidence),
 							status: client.snapshot?.pendingApprovals.some((approval) => approval.toolCallId === tool.toolCallId)
 								? ("awaiting_approval" as const)
 								: tool.status,
-							hasArtifact:
-								"content" in tool ? tool.content.some((part) => part.type === "artifact") : Boolean(tool.artifact),
+							artifacts:
+								"content" in tool
+									? tool.content.flatMap((part) => (part.type === "artifact" ? [part.artifact] : []))
+									: tool.artifact
+										? [tool.artifact]
+										: [],
 						},
 					}
 				: {}),
@@ -6372,6 +6434,7 @@ export function App() {
 												}
 												key={item.id}
 												transcript={client.snapshot?.transcript ?? []}
+												turnActive={reasoningPhase}
 												now={Date.now()}
 												onDownload={client.downloadArtifact}
 												onLoadArtifact={client.loadArtifact}
@@ -6397,7 +6460,9 @@ export function App() {
 								</ToolGroup>
 							))}
 							{compactionStatus && <CompactionActivity status={compactionStatus} />}
-							{client.liveRetry && compactionStatus !== "running" && <RetryActivity retry={client.liveRetry} />}
+							{recovery && compactionStatus !== "running" && (
+								<RetryActivity key={recovery.operationId} retry={recovery} />
+							)}
 							{client.snapshot?.pendingApprovals.map((approval) => (
 								<ApprovalPanel
 									key={approval.id}

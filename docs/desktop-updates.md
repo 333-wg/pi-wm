@@ -7,11 +7,21 @@
 - Check at startup (after 20 seconds) and every six hours when automatic checking is enabled.
 - Checking does not download. Downloading does not install. Quitting normally does not install.
 - The user explicitly chooses Download, then Restart & install and confirms in a native dialog.
-- After confirmation, Windows installation runs silently and automatically starts the new version. This is explicit consent, not unattended background installation.
+- After confirmation, Windows shows the native installer progress page, verifies the installed files, then automatically starts the new version. This is explicit consent, not unattended background installation.
 - A 24-hour reminder deferral and the automatic-check preference are stored in the user's existing profile.
 - The main process asks the local service about queued/running operations across all sessions, in-flight requests, recovery, automation ticks, and open terminals. Unknown/busy status blocks installation. It checks again after confirmation, gates new requests, then stops the service before invoking the installer.
 - Update failure does not remove the installed application or user data. The existing Wuming profile and application ID remain unchanged.
 - Development and unconfigured builds report their status explicitly and do not contact a release server.
+
+## Windows 更新进度
+
+应用内确认更新后，安装器显示原生进度页，依次提示检查、替换、安装和文件校验，校验通过后自动启动新版并关闭安装窗口。更新沿用原安装目录和安装范围，不重复显示选择页面；全用户安装仍由原有逻辑申请管理员权限。
+
+旧版传入的 `--updated /S --force-run` 也会进入可视化流程，因此从旧版升级到包含此改动的安装包时即可生效。普通 `/S` 安装、卸载和 macOS 更新行为不变。
+
+自动启动直接使用已校验的主程序，不依赖桌面或开始菜单快捷方式。启动请求失败时显示提示和日志位置，不把失败隐藏成成功。文件替换期间快捷方式目标可能暂时不可用，快捷方式报错不能作为更新完成信号。
+
+`apps/desktop/tests/installer-ui.test.mjs` 编译并运行不修改产品注册表的原生隔离夹具，验证进度窗口可见、中英文阶段文字、旧版静默参数兼容、单次自动启动、普通静默安装不受影响，以及未通过校验时禁止自动启动。该夹具不替代发布前的真实安装升级验证。
 
 ## Choose a Repository
 
@@ -118,7 +128,7 @@ The baseline installer may instead remain in its original published stable relea
 When it is absent from the draft, the downloader resolves the exact baseline tag
 and verifies that asset's GitHub digest, avoiding a duplicate baseline upload.
 
-The test installs the baseline, creates isolated test data, drives its update UI against a loopback server serving the candidate installer, and executes the unmodified NSIS launch with silent/restart flags. It checks the original Windows process exits, replacement of the installed binary, updated Windows registration, automatic restart, and preservation of the session, workspace file and settings. Only the update feed and native confirmation response are automated; installer spawning, installation, quitting and restarting are not mocked.
+The test installs the baseline, creates isolated test data, drives its update UI against a loopback server serving the candidate installer, and executes the unmodified NSIS launch with update/restart flags (older baselines also pass the silent flag). It checks the original Windows process exits, replacement of the installed binary, updated Windows registration, automatic restart, and preservation of the session, workspace file and settings. Only the update feed and native confirmation response are automated; installer spawning, installation, quitting and restarting are not mocked.
 
 After the gate passes, remove the baseline installer, any baseline blockmap and `update-test-latest.yml` from this draft. Keep the three candidate release files listed above. Do not delete the baseline's original published release. The evidence records which two versions were installed. Unsigned early releases must explicitly disclose their unsigned status and still require a signing plan for wider distribution.
 
