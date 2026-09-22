@@ -95,6 +95,7 @@ for (const width of [1365, 390]) {
 			}, sessions[mode]!);
 			await openApp(page, webUrl);
 			await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeEnabled();
+			await expect(page.locator(".session-entry.selected")).toHaveCount(1);
 			if (width <= 720) await page.getByRole("button", { name: "打开导航", exact: true }).click();
 			await page
 				.locator(".session-open")
