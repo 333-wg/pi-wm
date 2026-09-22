@@ -125,7 +125,7 @@ async function sendMessage(page: Page, message: string): Promise<void> {
 }
 
 async function waitForIdle(page: Page): Promise<void> {
-	await expect(page.locator(".right-rail .phase-idle")).toHaveText("空闲");
+	await expect(page.locator(".session-entry.selected .dot-idle")).toHaveCount(1);
 }
 
 test.beforeAll(async () => {
@@ -289,7 +289,7 @@ test("archives, browses, and restores a chat", async ({ page }) => {
 	await archive.click();
 	await expect(page.getByRole("heading", { name: "开始一个新任务" })).toBeVisible();
 	await expect(
-		page.getByRole("navigation", { name: "会话" }).getByRole("button", { name: "归档交互 E2E", exact: true })
+		page.getByRole("navigation", { name: "会话" }).locator(".session-open").filter({ hasText: /^归档交互 E2E$/ })
 	).toHaveCount(0);
 
 	await page.getByRole("button", { name: "查看归档聊天" }).click();
@@ -297,7 +297,7 @@ test("archives, browses, and restores a chat", async ({ page }) => {
 		.getByRole("navigation", { name: "会话" })
 		.locator(".session-entry", { hasText: "归档交互 E2E" });
 	await expect(archivedSession).toBeVisible();
-	await archivedSession.getByRole("button", { name: "归档交互 E2E", exact: true }).click();
+	await archivedSession.locator(".session-open").click();
 	await expect(page.getByText("已归档", { exact: true })).toBeVisible();
 	await archivedSession.hover();
 	await archivedSession.getByRole("button", { name: "恢复聊天" }).click();
@@ -305,7 +305,7 @@ test("archives, browses, and restores a chat", async ({ page }) => {
 
 	await page.getByRole("button", { name: "返回聊天" }).click();
 	await expect(
-		page.getByRole("navigation", { name: "会话" }).getByRole("button", { name: "归档交互 E2E", exact: true })
+		page.getByRole("navigation", { name: "会话" }).locator(".session-open").filter({ hasText: /^归档交互 E2E$/ })
 	).toBeVisible();
 });
 
@@ -436,7 +436,7 @@ test("branches a session from a message and resends an edited prompt", async ({ 
 	await page.getByRole("textbox", { name: "消息", exact: true }).fill("改写的第二问");
 	// `exact` matters: every other message still offers 编辑并重新发送.
 	await page.getByRole("button", { name: "发送", exact: true }).click();
-	await expect(page.getByRole("button", { name: `${originalName} (fork)`, exact: true })).toBeVisible();
+	await expect(page.locator(".session-entry.selected .session-open")).toHaveText(`${originalName} (fork)`);
 	await expect(page.getByText("Demo runtime received: 改写的第二问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第一问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第二问")).toHaveCount(0);

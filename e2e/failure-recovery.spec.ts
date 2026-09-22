@@ -94,11 +94,13 @@ for (const width of [1365, 390]) {
 				localStorage.setItem("wuming.sessionId.local-workspace", id);
 			}, sessions[mode]!);
 			await openApp(page, webUrl);
+			await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeEnabled();
 			if (width <= 720) await page.getByRole("button", { name: "打开导航", exact: true }).click();
 			await page
 				.locator(".session-open")
 				.filter({ hasText: new RegExp(`^${mode}$`) })
 				.click();
+			await expect(page.locator(".session-entry.selected .session-open")).toHaveText(mode);
 			const notice = page.locator(".failure-notice");
 			await expect(notice).toHaveCount(1);
 			await expect(notice).toContainText(mode === "network" ? "连接暂时中断" : "任务状态保存失败");

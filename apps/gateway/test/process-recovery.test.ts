@@ -452,7 +452,7 @@ it("preserves provider retry backoff and accounting across a gateway restart", a
 			attempt: 1,
 			maxAttempts: 1,
 			delayMs: 3000,
-			error: "Simulated transient provider network failure",
+			error: "Upstream HTTP/2 stream failed",
 		}),
 	]);
 
