@@ -1708,6 +1708,7 @@ export function useWumingClient() {
 			if (result?.type === "session.created") {
 				sessionListRef.current = { archived: false };
 				snapshotRef.current = result.snapshot;
+				localStorage.setItem("wuming.workspaceId", workspaceId);
 				localStorage.setItem(sessionSelectionKey(workspaceId), result.snapshot.session.id);
 				setState((current) => ({
 					...current,
@@ -1725,7 +1726,9 @@ export function useWumingClient() {
 					liveRetry: undefined,
 				}));
 				await refreshSessions(workspaceId, { archived: false });
+				return result.snapshot;
 			}
+			throw new Error("会话创建失败");
 		},
 		[refreshSessions, state.models, state.selectedModel]
 	);
@@ -2292,17 +2295,36 @@ export function useWumingClient() {
 		return goalId;
 	}, []);
 
+	const scheduledRequest = useCallback(
+		async (command: Extract<Command, { type: `scheduled.${string}` }>, idempotencyKey?: string) => {
+			if (!requestRef.current) throw new Error("服务未连接");
+			return requestRef.current(command, idempotencyKey);
+		},
+		[]
+	);
+
 	const createAutomation = useCallback(
-		async (input: {
-			objective: string;
-			title?: string;
-			schedule: AutomationSchedule;
-			successCriteria?: string;
-			maxRounds?: number;
-			plan?: GoalPlanSpec;
-		}) => {
-			const snapshot = snapshotRef.current;
-			if (!snapshot) throw new Error("未选择会话");
+		async (
+			input: {
+				objective: string;
+				title?: string;
+				schedule: AutomationSchedule;
+				successCriteria?: string;
+				maxRounds?: number;
+				plan?: GoalPlanSpec;
+			},
+			workspaceId?: string
+		) => {
+			let snapshot = snapshotRef.current;
+			if (!snapshot) {
+				if (!workspaceId) throw new Error("请选择项目");
+				snapshot = await createSessionInWorkspace(workspaceId);
+			}
+			if (
+				snapshotRef.current?.session.id !== snapshot.session.id ||
+				(workspaceId && snapshot.session.workspaceId !== workspaceId)
+			)
+				throw new Error("会话已切换，请重新创建定时任务");
 			if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
 			const review = input.successCriteria
 				? {
@@ -2320,17 +2342,64 @@ export function useWumingClient() {
 				...review,
 			});
 			if (result?.type !== "automation.created") throw new Error("自动化创建失败");
-			setState((current) => ({
-				...current,
-				automations: [
-					result.automation,
-					...current.automations.filter((automation) => automation.id !== result.automation.id),
-				],
-			}));
+			const parentSessionId = snapshot.session.id;
+			setState((current) =>
+				current.snapshot?.session.id !== parentSessionId
+					? current
+					: {
+							...current,
+							automations: [
+								result.automation,
+								...current.automations.filter((automation) => automation.id !== result.automation.id),
+							],
+						}
+			);
+			return result.automation;
+		},
+		[createSessionInWorkspace]
+	);
+
+	const updateAutomation = useCallback(
+		async (automationId: string, expectedUpdatedAt: number, input: Parameters<typeof createAutomation>[0]) => {
+			const snapshot = snapshotRef.current;
+			if (!snapshot) throw new Error("未选择会话");
+			const result = await requestRef.current?.({
+				type: "automation.update",
+				sessionId: snapshot.session.id,
+				automationId,
+				expectedUpdatedAt,
+				...input,
+			});
+			if (result?.type !== "automation.configured") throw new Error("定时任务保存失败");
+			setState((current) =>
+				current.snapshot?.session.id !== snapshot.session.id
+					? current
+					: {
+							...current,
+							automations: current.automations.map((item) => (item.id === automationId ? result.automation : item)),
+						}
+			);
 			return result.automation;
 		},
 		[]
 	);
+
+	const deleteAutomation = useCallback(async (automationId: string, expectedUpdatedAt: number) => {
+		const snapshot = snapshotRef.current;
+		if (!snapshot) throw new Error("未选择会话");
+		const result = await requestRef.current?.({
+			type: "automation.delete",
+			sessionId: snapshot.session.id,
+			automationId,
+			expectedUpdatedAt,
+		});
+		if (result?.type !== "automation.deleted") throw new Error("定时任务删除失败");
+		setState((current) =>
+			current.snapshot?.session.id !== snapshot.session.id
+				? current
+				: { ...current, automations: current.automations.filter((item) => item.id !== automationId) }
+		);
+	}, []);
 
 	const setAutomationEnabled = useCallback(async (automationId: string, enabled: boolean) => {
 		const snapshot = snapshotRef.current;
@@ -2489,6 +2558,9 @@ export function useWumingClient() {
 		resumeGoal,
 		deleteGoal,
 		createAutomation,
+		scheduledRequest,
+		updateAutomation,
+		deleteAutomation,
 		setAutomationEnabled,
 		triggerAutomation,
 		listAutomationRuns,

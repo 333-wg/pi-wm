@@ -16,6 +16,7 @@ import { Value } from "typebox/value";
 import { buildWumingSystemPrompt } from "./system-prompt.js";
 import { ToolRecoveryMonitor } from "./tool-recovery.js";
 import { stableToolDefinitions } from "./prompt-cache.js";
+import { guardedModelStream } from "./model-stream.js";
 import { recoverDurableSession, requestDigest } from "./session-recovery.js";
 import type { PiProviderRegistration, PiSessionFactory, PiSessionRecovery, WorkspaceResolver } from "./types.js";
 
@@ -26,6 +27,8 @@ export interface DefaultPiSessionFactoryOptions {
 	createCustomTools?: (snapshot: SessionSnapshot) => ToolDefinition[] | Promise<ToolDefinition[]>;
 	autoRetry?: boolean;
 	autoCompaction?: boolean;
+	/** Maximum silence per model stream. Zero disables this guard; tools are unaffected. */
+	modelIdleTimeoutMs?: number;
 	initialToolChoice?: "required";
 	/** Unset preserves Pi/provider defaults, including PI_CACHE_RETENTION. */
 	cacheRetention?: CacheRetention;
@@ -193,7 +196,7 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		session.setAutoRetryEnabled(options.autoRetry ?? false);
 		session.setAutoCompactionEnabled(options.autoCompaction ?? true);
 		let initialToolChoicePending = options.initialToolChoice === "required";
-		if (initialToolChoicePending || options.cacheRetention !== undefined) {
+		{
 			const streamFunction = session.agent.streamFunction.bind(session.agent);
 			session.agent.streamFunction = (streamModel, context, streamOptions) => {
 				const requireTool = initialToolChoicePending && (context.tools?.length ?? 0) > 0;
@@ -204,10 +207,17 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 							samplingParams: { ...streamModel.samplingParams, tool_choice: "required" },
 						}
 					: streamModel;
-				return streamFunction(selectedModel, context, {
-					...streamOptions,
-					...(options.cacheRetention === undefined ? {} : { cacheRetention: options.cacheRetention }),
-				});
+				return guardedModelStream(
+					selectedModel,
+					(signal) =>
+						streamFunction(selectedModel, context, {
+							...streamOptions,
+							signal,
+							...(options.cacheRetention === undefined ? {} : { cacheRetention: options.cacheRetention }),
+						}),
+					streamOptions?.signal,
+					options.modelIdleTimeoutMs
+				);
 			};
 		}
 		const resumeApprovedTool = async (

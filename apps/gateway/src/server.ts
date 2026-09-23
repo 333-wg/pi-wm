@@ -873,6 +873,8 @@ export class GatewayServer implements AsyncDisposable {
       'team.list',
       'agent.template.list',
       'automation.list',
+	  'scheduled.list',
+	  'scheduled.run.list',
       'automation.run.list',
       'skill.list',
       'skill.get',
@@ -1244,13 +1246,13 @@ export class GatewayServer implements AsyncDisposable {
               this.#onError(error);
           });
       }
-      if (command.type === 'automation.trigger' && result.type === 'automation.triggered') {
+      if ((command.type === 'automation.trigger' || command.type === 'scheduled.trigger') && result.type === 'automation.triggered') {
         void this.#orchestrator.dispatchAutomationRun(result.run.id, traceId).catch((error) => {
           if (!(error instanceof OrchestratorError && error.code === 'lease_conflict')) {
             this.#logger.log('error', 'gateway.automation.run_failed', {
               automationId: command.automationId,
               runId: result.run.id,
-              parentSessionId: command.sessionId,
+              parentSessionId: command.type === 'automation.trigger' ? command.sessionId : undefined,
               error,
             });
             this.#onError(error);
@@ -1318,6 +1320,8 @@ export class GatewayServer implements AsyncDisposable {
     idempotencyKey: string,
     command: Command
   ): Promise<CommandResult> {
+    if ('sessionId' in command && !this.#isReadOnlyCommand(command.type) && this.#store.scheduledTaskSessionIds().includes(command.sessionId))
+      throw new OrchestratorError('conflict', '这是定时任务的内部上下文，请在任务中心编辑配置');
     if (command.type === 'model.official.list' || command.type === 'model.official.start' ||
         command.type === 'model.official.submit' || command.type === 'model.official.cancel' || command.type === 'model.official.logout') {
       if (!hasGatewayPermission(connection.principal, 'admin')) throw Object.assign(new Error('Permission denied'), { protocolCode: 'forbidden' });
@@ -1343,6 +1347,8 @@ export class GatewayServer implements AsyncDisposable {
       if (command.type === 'model.media.remove') await this.#mediaModels.remove(command.kind);
       return { type: 'model.media.settings', settings: this.#mediaModels.list() };
     }
+    if (command.type.startsWith('automation.') && 'automationId' in command && this.#store.loadAutomation(command.automationId)?.execution)
+      throw new OrchestratorError('conflict', '独立定时任务请使用任务中心操作');
     switch (command.type) {
       case 'workspace.list':
         return { type: 'workspace.list', workspaces: connection.principal.workspaces };
@@ -1602,12 +1608,12 @@ export class GatewayServer implements AsyncDisposable {
       case 'session.search': {
         this.#requireWorkspace(connection, command.workspaceId);
         return { type: 'session.search', ...this.#store.searchSessions(command.workspaceId, {
-          ...command, excludeSessionIds: [...(this.#teams?.internalSessionIds() ?? [])],
+          ...command, excludeSessionIds: [...(this.#teams?.internalSessionIds() ?? []), ...this.#store.scheduledTaskSessionIds()],
         }) };
       }
       case 'session.list': {
         this.#requireWorkspace(connection, command.workspaceId);
-        const internalSessions = this.#teams?.internalSessionIds() ?? new Set<string>();
+        const internalSessions = new Set([...(this.#teams?.internalSessionIds() ?? []), ...this.#store.scheduledTaskSessionIds()]);
         return {
           type: 'session.list',
           sessions: this.#store
@@ -2149,6 +2155,41 @@ export class GatewayServer implements AsyncDisposable {
           sessionId: command.sessionId,
           goalId: command.goalId,
         });
+      case 'scheduled.list': {
+		const workspaceIds = connection.principal.workspaces.map((workspace) => workspace.id);
+		return { type: 'scheduled.list', ...this.#orchestrator.listScheduledTasks(workspaceIds, command.offset ?? 0, command.limit ?? 100) };
+	  }
+	  case 'scheduled.create':
+	  case 'scheduled.update': {
+		this.#requireWorkspace(connection, command.input.execution.workspaceId);
+		const models = this.#availableModels();
+		const selected = command.input.execution.model;
+		if (!models.some((model) => model.authenticated && model.model.provider === selected.provider && model.model.id === selected.id))
+			throw new OrchestratorError('conflict', '所选模型不可用或尚未验证');
+		if (!command.input.title.trim() || !command.input.execution.description.trim())
+			throw new OrchestratorError('conflict', '名称和描述不能为空');
+		if (command.type === 'scheduled.create')
+			return this.#orchestrator.createScheduledTask({ ...command.input, principalId: connection.principal.id, idempotencyKey });
+		const task = this.#store.loadAutomation(command.automationId);
+		if (!task?.execution) throw new OrchestratorError('not_found', '定时任务不存在');
+		this.#requireWorkspace(connection, task.execution.workspaceId);
+		return this.#orchestrator.updateAutomation({ ...command.input, principalId: connection.principal.id, idempotencyKey,
+			sessionId: task.parentSessionId, automationId: task.id, expectedUpdatedAt: command.expectedUpdatedAt });
+	  }
+	  case 'scheduled.delete':
+	  case 'scheduled.set_enabled':
+	  case 'scheduled.trigger':
+	  case 'scheduled.run.list': {
+		const task = this.#store.loadAutomation(command.automationId);
+		if (!task?.execution) throw new OrchestratorError('not_found', '定时任务不存在');
+		this.#requireWorkspace(connection, task.execution.workspaceId);
+		const input = { principalId: connection.principal.id, idempotencyKey, sessionId: task.parentSessionId, automationId: task.id };
+		if (command.type === 'scheduled.delete') return this.#orchestrator.deleteAutomation({ ...input, expectedUpdatedAt: command.expectedUpdatedAt });
+		if (command.type === 'scheduled.set_enabled') return this.#orchestrator.setAutomationEnabled({ ...input, enabled: command.enabled });
+		if (command.type === 'scheduled.trigger') return this.#orchestrator.triggerAutomation(input);
+		return { type: 'automation.run.list', sessionId: task.parentSessionId, automationId: task.id,
+			runs: this.#orchestrator.listAutomationRuns(task.parentSessionId, task.id) };
+	  }
       case 'automation.create':
         this.#requireSession(connection, command.sessionId);
         return this.#orchestrator.createAutomation({
@@ -2163,6 +2204,32 @@ export class GatewayServer implements AsyncDisposable {
             : { successCriteria: command.successCriteria }),
           ...(command.maxRounds === undefined ? {} : { maxRounds: command.maxRounds }),
           ...(command.plan === undefined ? {} : { plan: command.plan }),
+        });
+      case 'automation.update':
+        this.#requireSession(connection, command.sessionId);
+        return this.#orchestrator.updateAutomation({
+          principalId: connection.principal.id,
+          idempotencyKey,
+          sessionId: command.sessionId,
+          automationId: command.automationId,
+          expectedUpdatedAt: command.expectedUpdatedAt,
+          objective: command.objective,
+          schedule: command.schedule,
+          ...(command.title === undefined ? {} : { title: command.title }),
+          ...(command.successCriteria === undefined
+            ? {}
+            : { successCriteria: command.successCriteria }),
+          ...(command.maxRounds === undefined ? {} : { maxRounds: command.maxRounds }),
+          ...(command.plan === undefined ? {} : { plan: command.plan }),
+        });
+      case 'automation.delete':
+        this.#requireSession(connection, command.sessionId);
+        return this.#orchestrator.deleteAutomation({
+          principalId: connection.principal.id,
+          idempotencyKey,
+          sessionId: command.sessionId,
+          automationId: command.automationId,
+          expectedUpdatedAt: command.expectedUpdatedAt,
         });
       case 'automation.list':
         this.#requireSession(connection, command.sessionId);

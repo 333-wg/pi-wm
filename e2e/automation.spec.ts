@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { openApp, restartGateway, startWebApp, stopWebApp } from "./harness.js";
+import { openLegacyAutomations, openApp, restartGateway, startWebApp, stopWebApp } from "./harness.js";
 
 let webUrl: string;
 
@@ -18,8 +18,8 @@ for (const restart of [false, true])
 			async ({ page }) => {
 				await page.setViewportSize({ width: 1365, height: 900 });
 				await openApp(page, webUrl);
-				await page.getByRole("button", { name: "新对话" }).click();
-				await page.getByRole("tab", { name: "自动化" }).click();
+				await page.getByRole("button", { name: "新对话", exact: true }).click();
+				await openLegacyAutomations(page);
 				const workbench = page.getByRole("region", { name: "自动化" });
 				await workbench.getByRole("button", { name: "新建自动化" }).click();
 				await workbench.getByRole("textbox", { name: "目标", exact: true }).fill("Approval dependency plan");
@@ -43,7 +43,7 @@ for (const restart of [false, true])
 				await expect(plan.getByText("已完成", { exact: true })).toHaveCount(0);
 				if (restart) await restartGateway();
 				await page.reload();
-				await page.getByRole("tab", { name: "自动化" }).click();
+				await openLegacyAutomations(page);
 				await expect(approval).toBeVisible();
 				await expect(plan.getByText("等待依赖", { exact: true })).toBeVisible();
 				await approval.getByRole("button", { name: decision, exact: true }).click();
@@ -60,8 +60,8 @@ for (const restart of [false, true])
 test("approves an automation from its run history and continues execution", async ({ page }) => {
 	await page.setViewportSize({ width: 1365, height: 900 });
 	await openApp(page, webUrl);
-	await page.getByRole("button", { name: "新对话" }).click();
-	await page.getByRole("tab", { name: "自动化" }).click();
+	await page.getByRole("button", { name: "新对话", exact: true }).click();
+	await openLegacyAutomations(page);
 	const workbench = page.getByRole("region", { name: "自动化" });
 	await workbench.getByRole("button", { name: "新建自动化" }).click();
 	await workbench.getByRole("textbox", { name: "目标", exact: true }).fill("/approval");
@@ -84,7 +84,7 @@ test("approves an automation from its run history and continues execution", asyn
 test("runs and reloads an automation dependency plan", async ({ page }, testInfo) => {
 	await page.setViewportSize({ width: 1365, height: 900 });
 	await openApp(page, webUrl);
-	await page.getByRole("button", { name: "新对话" }).click();
+	await page.getByRole("button", { name: "新对话", exact: true }).click();
 	await page.setViewportSize({ width: 390, height: 844 });
 	await expect
 		.poll(async () => {
@@ -92,8 +92,7 @@ test("runs and reloads an automation dependency plan", async ({ page }, testInfo
 			return box ? box.x + box.width : 0;
 		})
 		.toBeLessThanOrEqual(0);
-	await page.locator(".right-rail").getByRole("button", { name: "关闭运行面板" }).click();
-	await page.getByRole("tab", { name: "自动化" }).click();
+	await openLegacyAutomations(page);
 	const workbench = page.getByRole("region", { name: "自动化" });
 	await workbench.getByRole("button", { name: "新建自动化" }).click();
 	await workbench.getByRole("textbox", { name: "目标", exact: true }).fill("Run a dependency automation");
@@ -114,7 +113,7 @@ test("runs and reloads an automation dependency plan", async ({ page }, testInfo
 		2
 	);
 	await page.reload();
-	await page.getByRole("tab", { name: "自动化" }).click();
+	await openLegacyAutomations(page);
 	await expect(history.getByRole("region", { name: "步骤执行状态" }).getByText("已完成", { exact: true })).toHaveCount(
 		2
 	);
@@ -126,10 +125,9 @@ test("runs and reloads an automation dependency plan", async ({ page }, testInfo
 test("creates, controls, runs, and inspects a durable automation", async ({ page }, testInfo) => {
 	await page.setViewportSize({ width: 1365, height: 900 });
 	await openApp(page, webUrl);
-	await page.getByRole("button", { name: "新对话" }).click();
-	await expect(page.getByRole("navigation", { name: "会话" }).locator(".session-entry.selected")).toHaveCount(1);
+	await page.getByRole("button", { name: "新对话", exact: true }).click();
 
-	await page.getByRole("tab", { name: "自动化" }).click();
+	await openLegacyAutomations(page);
 	const workbench = page.getByRole("region", { name: "自动化" });
 	await expect(workbench).toBeVisible();
 	await page.getByRole("button", { name: "新建自动化" }).click();

@@ -5,6 +5,9 @@ import {
 	type CommandResult,
 	CommandResultSchema,
 	AutomationScheduleSchema,
+	ScheduledTaskConfigSchema,
+	nextCalendarRun,
+	validateCalendarSchedule,
 	GoalPlanSpecSchema,
 	type GoalPlanSpec,
 	type MemoryAction,
@@ -146,10 +149,12 @@ const GoalPlanStateSchema = Type.Object(
 );
 const checkGoalPlan = Compile(GoalPlanStateSchema);
 const checkAutomationSchedule = Compile(AutomationScheduleSchema);
+const checkScheduledTaskConfig = Compile(ScheduledTaskConfigSchema);
 const checkGoalPlanSpec = Compile(GoalPlanSpecSchema);
 const checkAutomationSpec = Compile(
 	Type.Object(
 		{
+			execution: Type.Optional(ScheduledTaskConfigSchema),
 			title: Type.String({ minLength: 1, maxLength: 500 }),
 			objective: Type.String({ minLength: 1, maxLength: 20_000 }),
 			successCriteria: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
@@ -176,6 +181,7 @@ export interface CommitMutationOptions {
 	snapshot: SessionSnapshot;
 	idempotency?: MutationIdempotency;
 	operation?: DurableOperation;
+	interruptRunningOperation?: string;
 	attachGoalRun?: {
 		goalId: string;
 		parentSessionId: string;
@@ -331,6 +337,7 @@ interface GoalRow {
 }
 
 interface AutomationRow {
+	execution_json: string | null;
 	automation_id: string;
 	parent_session_id: string;
 	title: string;
@@ -381,13 +388,24 @@ export interface AttachPlanStepGoalOptions {
 	verifyBudgetReservation: () => void;
 }
 
+export interface DeleteAutomationOptions {
+	automationId: string;
+	parentSessionId: string;
+	expectedUpdatedAt: number;
+	now: number;
+	isRunFinished: (run: DurableAutomationRun) => boolean;
+	idempotency: MutationIdempotency;
+}
+
 export interface CommitAutomationMutationOptions {
 	automation: DurableGoalAutomation;
 	expectedUpdatedAt?: number;
+	requireUnarchived?: boolean;
 	idempotency: MutationIdempotency;
 }
 
 export interface ClaimAutomationRunOptions {
+	isRunFinished?: (run: DurableAutomationRun) => boolean;
 	automationId: string;
 	runId: string;
 	trigger: "schedule" | "manual";
@@ -568,6 +586,15 @@ function mapAutomation(row: AutomationRow): DurableGoalAutomation {
 			`Automation schedule ${row.automation_id}`
 		),
 		enabled: row.enabled !== 0,
+		...(row.execution_json == null
+			? {}
+			: {
+					execution: parseChecked<NonNullable<DurableGoalAutomation["execution"]>>(
+						row.execution_json,
+						checkScheduledTaskConfig,
+						"Scheduled task execution"
+					),
+				}),
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		...(row.next_run_at === null ? {} : { nextRunAt: row.next_run_at }),
@@ -585,6 +612,11 @@ function mapAutomation(row: AutomationRow): DurableGoalAutomation {
 				}),
 	};
 	if (automation.plan) assertPlanGraph(automation.plan, "corrupt_storage");
+	try {
+		assertAutomation(automation);
+	} catch (error) {
+		throw new OrchestratorError("corrupt_storage", error instanceof Error ? error.message : String(error));
+	}
 	return automation;
 }
 
@@ -611,7 +643,7 @@ function mapAutomationRun(row: AutomationRunRow): DurableAutomationRun {
 }
 
 const AUTOMATION_COLUMNS =
-	"automation_id, parent_session_id, title, objective, schedule_json, enabled, created_at, updated_at, next_run_at, last_run_at, success_criteria, max_rounds, plan_json";
+	"automation_id, parent_session_id, title, objective, schedule_json, enabled, created_at, updated_at, next_run_at, last_run_at, success_criteria, max_rounds, plan_json, execution_json";
 const AUTOMATION_RUN_COLUMNS =
 	"run_id, automation_id, parent_session_id, trigger, trigger_key, scheduled_for, triggered_at, updated_at, spec_json, goal_id, dispatch_error";
 const GOAL_COLUMNS =
@@ -659,11 +691,20 @@ function assertGoal(goal: DurableGoal): void {
 }
 
 function assertAutomation(automation: DurableGoalAutomation): void {
+	if (automation.execution && !checkScheduledTaskConfig.Check(automation.execution))
+		throw new OrchestratorError("conflict", "Invalid scheduled task execution configuration");
 	if (!automation.id || !automation.parentSessionId || !automation.title.trim() || !automation.objective.trim()) {
 		throw new OrchestratorError("conflict", "Automation contains empty required fields");
 	}
 	if (!checkAutomationSchedule.Check(automation.schedule))
 		throw new OrchestratorError("conflict", `Automation ${automation.id} has an invalid schedule`);
+	if (automation.schedule.kind === "calendar") {
+		try {
+			validateCalendarSchedule(automation.schedule);
+		} catch (error) {
+			throw new OrchestratorError("conflict", error instanceof Error ? error.message : String(error));
+		}
+	}
 	if ((automation.successCriteria === undefined) !== (automation.maxRounds === undefined)) {
 		throw new OrchestratorError("conflict", `Automation ${automation.id} review configuration is incomplete`);
 	}
@@ -691,6 +732,7 @@ function assertAutomation(automation: DurableGoalAutomation): void {
 
 function automationSpec(automation: DurableGoalAutomation): DurableAutomationRun["spec"] {
 	return {
+		...(automation.execution ? { execution: automation.execution } : {}),
 		title: automation.title,
 		objective: automation.objective,
 		...(automation.successCriteria === undefined ? {} : { successCriteria: automation.successCriteria }),
@@ -1028,6 +1070,16 @@ export class SqliteOrchestratorStore implements Disposable {
 		}>;
 		if (!automationColumns.some((column) => column.name === "plan_json"))
 			this.#db.exec("ALTER TABLE goal_automations ADD COLUMN plan_json TEXT");
+		if (
+			!(this.#db.prepare("PRAGMA table_info(goal_automations)").all() as { name: string }[]).some(
+				(column) => column.name === "execution_json"
+			)
+		)
+			this.#db.exec("ALTER TABLE goal_automations ADD COLUMN execution_json TEXT");
+		this.#db.exec("CREATE TABLE IF NOT EXISTS scheduled_task_sessions (session_id TEXT PRIMARY KEY)");
+		this.#db.exec(
+			"INSERT OR IGNORE INTO scheduled_task_sessions SELECT parent_session_id FROM goal_automations WHERE execution_json IS NOT NULL"
+		);
 		const operationColumns = this.#db.prepare("PRAGMA table_info(operations)").all() as unknown as Array<{
 			name: string;
 		}>;
@@ -1963,12 +2015,81 @@ export class SqliteOrchestratorStore implements Disposable {
 	}
 
 	listDueAutomations(now: number, limit = 20): DurableGoalAutomation[] {
+		this.skipMissedScheduledTasks(now);
 		const rows = this.#db
 			.prepare(
 				`SELECT ${AUTOMATION_COLUMNS} FROM goal_automations WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ? AND parent_session_id IN (SELECT session_id FROM session_snapshots WHERE archived_at IS NULL) ORDER BY next_run_at, automation_id LIMIT ?`
 			)
 			.all(now, Math.max(1, Math.min(100, Math.trunc(limit)))) as unknown as AutomationRow[];
 		return rows.map(mapAutomation);
+	}
+
+	scheduledTaskSessionIds(): string[] {
+		return (this.#db.prepare("SELECT session_id FROM scheduled_task_sessions").all() as { session_id: string }[]).map(
+			(row) => row.session_id
+		);
+	}
+
+	listScheduledTasks(
+		workspaceIds: string[],
+		offset = 0,
+		limit = 100
+	): { tasks: DurableGoalAutomation[]; total: number } {
+		if (!workspaceIds.length) return { tasks: [], total: 0 };
+		const filter =
+			"execution_json IS NOT NULL AND json_extract(execution_json, '$.workspaceId') IN (" +
+			workspaceIds.map(() => "?").join(",") +
+			")";
+		const rows = this.#db
+			.prepare(
+				"SELECT " +
+					AUTOMATION_COLUMNS +
+					" FROM goal_automations WHERE " +
+					filter +
+					" ORDER BY created_at DESC, automation_id DESC LIMIT ? OFFSET ?"
+			)
+			.all(...workspaceIds, limit, offset) as unknown as AutomationRow[];
+		const count = this.#db
+			.prepare("SELECT COUNT(*) AS total FROM goal_automations WHERE " + filter)
+			.get(...workspaceIds) as { total: number };
+		return { tasks: rows.map(mapAutomation), total: count.total };
+	}
+
+	loadAutomationRunForGoal(goalId: string): DurableAutomationRun | undefined {
+		const row = this.#db
+			.prepare("SELECT " + AUTOMATION_RUN_COLUMNS + " FROM automation_runs WHERE goal_id = ?")
+			.get(goalId) as AutomationRunRow | undefined;
+		return row ? mapAutomationRun(row) : undefined;
+	}
+
+	// Only the current minute is eligible; legacy automations retain catch-up.
+	skipMissedScheduledTasks(now: number): void {
+		const minuteStart = Math.floor(now / 60_000) * 60_000;
+		const rows = this.#db
+			.prepare(
+				"SELECT " +
+					AUTOMATION_COLUMNS +
+					" FROM goal_automations WHERE execution_json IS NOT NULL AND enabled = 1 AND next_run_at < ?"
+			)
+			.all(minuteStart) as unknown as AutomationRow[];
+		for (const row of rows) {
+			const task = mapAutomation(row);
+			const schedule = task.schedule;
+			const next =
+				schedule.kind === "once"
+					? undefined
+					: schedule.kind === "calendar"
+						? nextCalendarRun(schedule, minuteStart - 1)
+						: schedule.startsAt +
+							Math.max(0, Math.ceil((minuteStart - schedule.startsAt) / (schedule.everyMinutes * 60_000))) *
+								schedule.everyMinutes *
+								60_000;
+			this.#db
+				.prepare(
+					"UPDATE goal_automations SET next_run_at = ?, enabled = ?, updated_at = ? WHERE automation_id = ? AND updated_at = ?"
+				)
+				.run(next ?? null, next === undefined ? 0 : 1, Math.max(now, task.updatedAt + 1), task.id, task.updatedAt);
+		}
 	}
 
 	commitAutomationMutation(options: CommitAutomationMutationOptions): {
@@ -2001,12 +2122,22 @@ export class SqliteOrchestratorStore implements Disposable {
 				return { deduplicated: true, result };
 			}
 			assertAutomation(options.automation);
+			if (options.automation.execution)
+				this.#db
+					.prepare("INSERT OR IGNORE INTO scheduled_task_sessions(session_id) VALUES (?)")
+					.run(options.automation.parentSessionId);
+			if (options.requireUnarchived) {
+				const parent = this.loadSnapshot(options.automation.parentSessionId);
+				if (!parent) throw new OrchestratorError("not_found", "Automation parent session does not exist");
+				if (parent.session.archivedAt !== undefined)
+					throw new OrchestratorError("conflict", "Archived sessions cannot update automations");
+			}
 			if (!checkCommandResult.Check(options.idempotency.result))
 				throw new OrchestratorError("conflict", "Automation mutation contains an invalid command result");
 			if (options.expectedUpdatedAt === undefined) {
 				this.#db
 					.prepare(
-						"INSERT INTO goal_automations(automation_id, parent_session_id, title, objective, schedule_json, enabled, created_at, updated_at, next_run_at, last_run_at, success_criteria, max_rounds, plan_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+						"INSERT INTO goal_automations(automation_id, parent_session_id, title, objective, schedule_json, enabled, created_at, updated_at, next_run_at, last_run_at, success_criteria, max_rounds, plan_json, execution_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 					)
 					.run(
 						options.automation.id,
@@ -2021,12 +2152,13 @@ export class SqliteOrchestratorStore implements Disposable {
 						options.automation.lastRunAt ?? null,
 						options.automation.successCriteria ?? null,
 						options.automation.maxRounds ?? null,
-						options.automation.plan ? JSON.stringify(options.automation.plan) : null
+						options.automation.plan ? JSON.stringify(options.automation.plan) : null,
+						options.automation.execution ? JSON.stringify(options.automation.execution) : null
 					);
 			} else {
 				const updated = this.#db
 					.prepare(
-						"UPDATE goal_automations SET title = ?, objective = ?, schedule_json = ?, enabled = ?, updated_at = ?, next_run_at = ?, last_run_at = ?, success_criteria = ?, max_rounds = ?, plan_json = ? WHERE automation_id = ? AND parent_session_id = ? AND updated_at = ?"
+						"UPDATE goal_automations SET title = ?, objective = ?, schedule_json = ?, enabled = ?, updated_at = ?, next_run_at = ?, last_run_at = ?, success_criteria = ?, max_rounds = ?, plan_json = ?, execution_json = ? WHERE automation_id = ? AND parent_session_id = ? AND updated_at = ?"
 					)
 					.run(
 						options.automation.title,
@@ -2039,6 +2171,7 @@ export class SqliteOrchestratorStore implements Disposable {
 						options.automation.successCriteria ?? null,
 						options.automation.maxRounds ?? null,
 						options.automation.plan ? JSON.stringify(options.automation.plan) : null,
+						options.automation.execution ? JSON.stringify(options.automation.execution) : null,
 						options.automation.id,
 						options.automation.parentSessionId,
 						options.expectedUpdatedAt
@@ -2056,6 +2189,67 @@ export class SqliteOrchestratorStore implements Disposable {
 					options.idempotency.commandHash,
 					JSON.stringify(options.idempotency.result),
 					options.automation.updatedAt,
+					options.idempotency.expiresAt
+				);
+			this.#db.exec("COMMIT");
+			return { deduplicated: false, result: options.idempotency.result };
+		} catch (error) {
+			this.#db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+	deleteAutomation(options: DeleteAutomationOptions): { deduplicated: boolean; result: CommandResult } {
+		this.#db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.getIdempotencyResult(
+				options.idempotency.principalId,
+				options.idempotency.key,
+				options.idempotency.commandHash,
+				options.now
+			);
+			if (existing) {
+				this.#db.exec("COMMIT");
+				return { deduplicated: true, result: existing };
+			}
+			const automation = this.loadAutomation(options.automationId);
+			if (!automation || automation.parentSessionId !== options.parentSessionId)
+				throw new OrchestratorError("not_found", `Automation ${options.automationId} does not exist`);
+			const parent = this.loadSnapshot(options.parentSessionId);
+			if (!parent) throw new OrchestratorError("not_found", "Automation parent session does not exist");
+			if (parent.session.archivedAt !== undefined)
+				throw new OrchestratorError("conflict", "Archived sessions cannot delete automations");
+			if (automation.updatedAt !== options.expectedUpdatedAt)
+				throw new OrchestratorError("conflict", `Automation ${automation.id} changed concurrently`);
+			// Do not use the paginated run-list API: even an older unfinished run blocks deletion.
+			const rows = this.#db
+				.prepare(`SELECT ${AUTOMATION_RUN_COLUMNS} FROM automation_runs WHERE automation_id = ?`)
+				.all(automation.id) as unknown as AutomationRunRow[];
+			if (rows.some((row) => !options.isRunFinished(mapAutomationRun(row))))
+				throw new OrchestratorError("conflict", "Automations with unfinished runs cannot be deleted");
+			if (
+				!checkCommandResult.Check(options.idempotency.result) ||
+				options.idempotency.result.type !== "automation.deleted" ||
+				options.idempotency.result.automationId !== automation.id
+			)
+				throw new OrchestratorError("conflict", "Automation deletion contains an invalid command result");
+			// Keep Goals and their sessions; only remove the definition and its scheduling records.
+			this.#db.prepare("DELETE FROM automation_runs WHERE automation_id = ?").run(automation.id);
+			const deleted = this.#db
+				.prepare("DELETE FROM goal_automations WHERE automation_id = ? AND parent_session_id = ? AND updated_at = ?")
+				.run(automation.id, options.parentSessionId, options.expectedUpdatedAt);
+			if (Number(deleted.changes) !== 1)
+				throw new OrchestratorError("conflict", `Automation ${automation.id} changed concurrently`);
+			this.#db
+				.prepare(
+					"INSERT INTO idempotency_results(principal_id, idempotency_key, command_hash, result_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)"
+				)
+				.run(
+					options.idempotency.principalId,
+					options.idempotency.key,
+					options.idempotency.commandHash,
+					JSON.stringify(options.idempotency.result),
+					options.now,
 					options.idempotency.expiresAt
 				);
 			this.#db.exec("COMMIT");
@@ -2088,10 +2282,17 @@ export class SqliteOrchestratorStore implements Disposable {
 				return undefined;
 			}
 			const updatedAt = Math.max(options.now, automation.updatedAt + 1);
-			const nextRunAt =
-				automation.schedule.kind === "once"
-					? undefined
-					: nextIntervalRun(automation.schedule, options.scheduledFor, options.now);
+			let nextRunAt: number | undefined;
+			try {
+				nextRunAt =
+					automation.schedule.kind === "once"
+						? undefined
+						: automation.schedule.kind === "calendar"
+							? nextCalendarRun(automation.schedule, options.now)
+							: nextIntervalRun(automation.schedule, options.scheduledFor, options.now);
+			} catch (error) {
+				throw new OrchestratorError("conflict", error instanceof Error ? error.message : String(error));
+			}
 			const updated = this.#db
 				.prepare(
 					"UPDATE goal_automations SET enabled = ?, updated_at = ?, next_run_at = ?, last_run_at = ? WHERE automation_id = ? AND enabled = 1 AND next_run_at = ? AND updated_at = ?"
@@ -2106,6 +2307,14 @@ export class SqliteOrchestratorStore implements Disposable {
 					automation.updatedAt
 				);
 			if (Number(updated.changes) !== 1) {
+				this.#db.exec("COMMIT");
+				return undefined;
+			}
+			if (
+				automation.execution &&
+				options.isRunFinished &&
+				this.listAllAutomationRuns(automation.id).some((run) => !options.isRunFinished!(run))
+			) {
 				this.#db.exec("COMMIT");
 				return undefined;
 			}
@@ -2141,6 +2350,14 @@ export class SqliteOrchestratorStore implements Disposable {
 			this.#db.exec("ROLLBACK");
 			throw error;
 		}
+	}
+
+	listAllAutomationRuns(automationId: string): DurableAutomationRun[] {
+		return (
+			this.#db
+				.prepare("SELECT " + AUTOMATION_RUN_COLUMNS + " FROM automation_runs WHERE automation_id = ?")
+				.all(automationId) as unknown as AutomationRunRow[]
+		).map(mapAutomationRun);
 	}
 
 	claimManualAutomationRun(
@@ -2183,6 +2400,12 @@ export class SqliteOrchestratorStore implements Disposable {
 			if (!row) throw new OrchestratorError("not_found", `Automation ${options.automationId} does not exist`);
 			const automation = mapAutomation(row);
 			const updatedAt = Math.max(options.now, automation.updatedAt + 1);
+			if (
+				automation.execution &&
+				options.isRunFinished &&
+				this.listAllAutomationRuns(automation.id).some((run) => !options.isRunFinished!(run))
+			)
+				throw new OrchestratorError("conflict", "任务正在执行，请等待本次运行结束");
 			const run: DurableAutomationRun = {
 				id: options.runId,
 				automationId: automation.id,
@@ -2506,6 +2729,14 @@ export class SqliteOrchestratorStore implements Disposable {
 					type: "operation.accepted",
 					mode: operation.payload.mode,
 				});
+			}
+			if (options.interruptRunningOperation) {
+				// Persist cancellation with the new input, so other workers and restarts see both or neither.
+				this.#db
+					.prepare(
+						"UPDATE operations SET abort_requested = 1, updated_at = ?, error = ? WHERE session_id = ? AND (status = 'running' OR (status = 'queued' AND json_extract(payload_json, '$.mode') = 'prompt')) AND abort_requested = 0"
+					)
+					.run(options.snapshot.session.updatedAt, options.interruptRunningOperation, options.sessionId);
 			}
 			if (options.attachGoalRun) {
 				if (options.attachGoalRun.review && !checkGoalReview.Check(options.attachGoalRun.review)) {
@@ -2863,14 +3094,14 @@ export class SqliteOrchestratorStore implements Disposable {
 		try {
 			const row = this.#db
 				.prepare(
-					"SELECT operation_id, session_id, type, status, payload_json, attempt, created_at, updated_at, started_at, finished_at, abort_requested, trace_id, error, retry_after, usage_json, tools_json, failure_kind, retry_history_json, approval_id, approval_tool_call_id, capability_plan_json, context_plan_json FROM operations WHERE session_id = ? AND status = 'queued' ORDER BY created_at, operation_id LIMIT 1"
+					"SELECT operation_id, session_id, type, status, payload_json, attempt, created_at, updated_at, started_at, finished_at, abort_requested, trace_id, error, retry_after, usage_json, tools_json, failure_kind, retry_history_json, approval_id, approval_tool_call_id, capability_plan_json, context_plan_json FROM operations WHERE session_id = ? AND status = 'queued' ORDER BY CASE json_extract(payload_json, '$.mode') WHEN 'prompt' THEN 0 WHEN 'steer' THEN 1 ELSE 2 END, created_at, rowid LIMIT 1"
 				)
 				.get(sessionId) as unknown as OperationRow | undefined;
 			if (!row) {
 				this.#db.exec("COMMIT");
 				return undefined;
 			}
-			if (row.retry_after !== null && row.retry_after > now) {
+			if (!row.abort_requested && row.retry_after !== null && row.retry_after > now) {
 				this.#db.exec("COMMIT");
 				return undefined;
 			}

@@ -1459,6 +1459,9 @@ describe("PiAgentRuntime", () => {
 		["404 model_not_found", false, "provider"],
 		["Request timed out while reading provider response", true, "provider_timeout"],
 		["401 invalid API key", false, "provider_auth"],
+		["Request rejected [HTTP 401; request_id=req-test]", false, "provider_auth"],
+		["Request rejected [HTTP 429]", true, "provider_rate_limit"],
+		["Model response idle timeout after 600000ms without stream events", true, "provider_timeout"],
 		["400 invalid request parameter", false, "provider"],
 	] as const)("classifies provider failure %s as retryable=%s", async (errorMessage, retryable, kind) => {
 		const session = new FakePiSession();

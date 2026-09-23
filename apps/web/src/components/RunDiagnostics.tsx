@@ -3,6 +3,7 @@ import { Download } from "lucide-react";
 import { useEffect, useState } from "react";
 import { sessionUsageRequests, type RunSummary, type SessionSnapshot } from "@wuming/protocol";
 import { diagnoseRun, diagnosticReport } from "../lib/run-diagnostics";
+import { redactDiagnostic } from "../lib/redact.js";
 import "./task-observability.css";
 
 function elapsed(start?: number, end?: number) {
@@ -19,7 +20,11 @@ export function RunDiagnostics({ snapshot, runs }: { snapshot: SessionSnapshot; 
 	}, [snapshot.session.phase]);
 	const diagnosis = diagnoseRun(snapshot, runs, t);
 	const requests = sessionUsageRequests(snapshot).slice(-10).reverse();
-	const pending = snapshot.session.phase === "turn" && requests[0]?.status === "pending" ? requests[0] : undefined;
+	const pending =
+		snapshot.session.phase === "turn" && diagnosis.phase !== "tool" && requests[0]?.status === "pending"
+			? requests[0]
+			: undefined;
+	const activeRun = runs.find((run) => run.status === "running");
 	const download = () => {
 		const url = URL.createObjectURL(
 			new Blob([JSON.stringify(diagnosticReport(snapshot, runs), null, 2)], { type: "application/json" })
@@ -47,8 +52,20 @@ export function RunDiagnostics({ snapshot, runs }: { snapshot: SessionSnapshot; 
 			<p className={diagnosis.attention ? "diagnosis-attention" : ""}>
 				{diagnosis.label}
 				{pending && ` · ${elapsed(pending.startedAt, now)}`}
+				{diagnosis.toolStartedAt !== undefined && ` · ${elapsed(diagnosis.toolStartedAt, now)}`}
 			</p>
 			{diagnosis.toolName && <code className="diagnosis-tool">{diagnosis.toolName}</code>}
+			{diagnosis.command && <code className="diagnosis-tool">{redactDiagnostic(diagnosis.command)}</code>}
+			{diagnosis.phase === "tool" && (
+				<p>
+					{diagnosis.lastProgressAt === undefined
+						? t("diagnosisNoOutput")
+						: t("diagnosisLastOutput", { duration: elapsed(diagnosis.lastProgressAt, now) })}
+				</p>
+			)}
+			{activeRun?.retryHistory?.length && ["tool", "streaming"].includes(diagnosis.phase) ? (
+				<p>{t("diagnosisRecovered")}</p>
+			) : null}
 			{requests.length > 0 && (
 				<details className="request-history">
 					<summary>{t("recentRequests")}</summary>

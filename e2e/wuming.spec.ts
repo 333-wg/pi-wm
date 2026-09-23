@@ -289,7 +289,10 @@ test("archives, browses, and restores a chat", async ({ page }) => {
 	await archive.click();
 	await expect(page.getByRole("heading", { name: "开始一个新任务" })).toBeVisible();
 	await expect(
-		page.getByRole("navigation", { name: "会话" }).locator(".session-open").filter({ hasText: /^归档交互 E2E$/ })
+		page
+			.getByRole("navigation", { name: "会话" })
+			.locator(".session-open")
+			.filter({ hasText: /^归档交互 E2E$/ })
 	).toHaveCount(0);
 
 	await page.getByRole("button", { name: "查看归档聊天" }).click();
@@ -305,7 +308,10 @@ test("archives, browses, and restores a chat", async ({ page }) => {
 
 	await page.getByRole("button", { name: "返回聊天" }).click();
 	await expect(
-		page.getByRole("navigation", { name: "会话" }).locator(".session-open").filter({ hasText: /^归档交互 E2E$/ })
+		page
+			.getByRole("navigation", { name: "会话" })
+			.locator(".session-open")
+			.filter({ hasText: /^归档交互 E2E$/ })
 	).toBeVisible();
 });
 
@@ -594,6 +600,48 @@ test("shows a thinking activity before the first model event", async ({ page }) 
 	await expect(thinking).toHaveText("正在处理请求");
 	await page.getByRole("button", { name: "停止任务" }).click();
 	await expect(thinking).toBeHidden();
+});
+
+test("immediate input interrupts active work and overtakes queued follow-ups", async ({ page }) => {
+	await createSession(page);
+	await sendMessage(page, "/inject");
+	await expect(page.getByRole("status", { name: "正在处理请求" })).toBeVisible();
+	const composer = page.locator(".composer");
+	await composer.getByRole("button", { name: "后续任务", exact: true }).click();
+	await expect(composer.getByRole("button", { name: "后续任务", exact: true })).toHaveAttribute("aria-pressed", "true");
+	await sendMessage(page, "queued follow-up");
+	await expect(page.getByText(/Demo runtime received: queued follow-up/)).toHaveCount(0);
+	await composer.getByRole("button", { name: "立即补充", exact: true }).click();
+	await sendMessage(page, "immediate correction");
+	await expect(page.getByText(/Demo runtime received: immediate correction/)).toBeVisible();
+	await expect(page.getByText(/Demo runtime received: queued follow-up/)).toBeVisible();
+	await waitForIdle(page);
+	const replies = await page.locator(".transcript").innerText();
+	expect(replies.indexOf("Demo runtime received: immediate correction")).toBeLessThan(
+		replies.indexOf("Demo runtime received: queued follow-up")
+	);
+	await page.screenshot({ path: "test-results/turn-scheduling-desktop.png", fullPage: true });
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.locator(".rail-mobile-close").click();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+	await page.screenshot({ path: "test-results/turn-scheduling-mobile.png", fullPage: true });
+});
+
+test("follow-up input waits for active work to finish before starting", async ({ page }) => {
+	await createSession(page);
+	await sendMessage(page, "/demo-live-tool");
+	await expect(
+		page.locator(".transcript").getByText("我先运行项目测试，确认当前状态。", { exact: true })
+	).toBeVisible();
+	await page.locator(".composer").getByRole("button", { name: "后续任务", exact: true }).click();
+	await sendMessage(page, "after the tests finish");
+	await expect(page.getByText(/Demo runtime received: after the tests finish/)).toBeVisible();
+	await waitForIdle(page);
+	const transcript = await page.locator(".transcript").innerText();
+	expect(transcript.indexOf("测试完成：4 项通过。")).toBeGreaterThanOrEqual(0);
+	expect(transcript.indexOf("测试完成：4 项通过。")).toBeLessThan(
+		transcript.indexOf("Demo runtime received: after the tests finish")
+	);
 });
 
 test("shows progress and compact live activity with command details on demand", async ({ page }) => {

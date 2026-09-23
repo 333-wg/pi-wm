@@ -5406,6 +5406,67 @@ button {
 	color: var(--muted);
 	font-size: 10px;
 }
+.sidebar-scheduled { display: flex; align-items: center; gap: 10px; margin: 0 12px 12px; padding: 10px 12px; border: 0; border-radius: 6px; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.sidebar-scheduled:hover, .sidebar-scheduled.selected { background: var(--surface); color: var(--green); }
+.scheduled-tasks { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 28px; color: var(--text); background: var(--panel); }
+.scheduled-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.scheduled-heading h1 { font-size: 22px; margin: 0 0 6px; }
+.scheduled-heading span { color: var(--muted); font-size: 12px; }
+.scheduled-heading > div:last-child { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.scheduled-tasks button, .scheduled-modal button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text); background: var(--surface); cursor: pointer; font-size: 12px; }
+.scheduled-tasks button:disabled, .scheduled-modal button:disabled { opacity: .5; cursor: not-allowed; }
+.scheduled-tasks .scheduled-primary, .scheduled-modal .scheduled-primary { background: var(--solid); color: var(--solid-text); border-color: var(--solid); }
+.scheduled-notice { padding: 12px 0; margin: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.6; color: var(--muted); }
+.scheduled-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 16px; }
+.scheduled-task { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: var(--surface); }
+.scheduled-task > header { display: flex; align-items: center; gap: 9px; }
+.scheduled-task > header > svg { flex-shrink: 0; color: var(--green); }
+.scheduled-task h2 { flex: 1; min-width: 0; font-size: 15px; margin: 0; overflow-wrap: anywhere; }
+.scheduled-task header > span { flex-shrink: 0; font-size: 11px; color: var(--muted); }
+.scheduled-task header > .scheduled-active { color: var(--green); }
+.scheduled-task > p { font-size: 12px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
+.scheduled-task dl { margin: 16px 0; font-size: 11px; line-height: 1.6; }
+.scheduled-task dl > div { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 8px; margin: 5px 0; }
+.scheduled-task dt { color: var(--muted); }
+.scheduled-task dd { margin: 0; overflow-wrap: anywhere; }
+.scheduled-task footer { display: flex; gap: 6px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; }
+.scheduled-empty { padding: 80px 0; text-align: center; color: var(--muted); }
+.scheduled-error { color: var(--red); overflow-wrap: anywhere; font-size: 12px; }
+.scheduled-modal { width: min(600px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); margin: auto; padding: 0; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--text); }
+.scheduled-modal::backdrop { background: rgb(0 0 0 / 42%); }
+.scheduled-modal > header { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line); background: var(--panel); z-index: 1; }
+.scheduled-modal h2 { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
+.scheduled-form, .scheduled-logs, .scheduled-confirm { padding: 18px 20px; }
+.scheduled-form > fieldset { display: grid; gap: 14px; min-width: 0; padding: 0; margin: 0; border: 0; }
+.scheduled-form label { display: grid; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); }
+.scheduled-form input, .scheduled-form textarea, .scheduled-form select { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.scheduled-form textarea { resize: vertical; min-height: 110px; }
+.scheduled-form-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.scheduled-permission { display: flex; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.7; }
+.scheduled-permission > svg { flex-shrink: 0; margin-top: 3px; color: var(--red); }
+.scheduled-permission small { color: var(--muted); overflow-wrap: anywhere; }
+.scheduled-form footer, .scheduled-confirm footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.scheduled-form footer { position: sticky; bottom: -18px; margin: 18px -20px -18px; padding: 12px 20px; background: var(--panel); border-top: 1px solid var(--line); }
+.scheduled-form .automation-calendar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 10px 0 0; }
+.scheduled-form .automation-calendar > label:nth-of-type(3), .scheduled-form .automation-calendar > small, .scheduled-form .automation-weekdays { grid-column: 1 / -1; }
+.scheduled-form .automation-preview { background: transparent; padding: 0; }
+.scheduled-form .automation-weekdays label { display: flex; align-items: center; }
+.scheduled-run { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.scheduled-run header { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.scheduled-run p, .scheduled-run header span { font-size: 12px; color: var(--muted); }
+.scheduled-run pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 300px; overflow: auto; }
+.scheduled-run details { margin-bottom: 10px; font-size: 12px; }
+@media (max-width: 720px) {
+	.scheduled-tasks { padding: 16px 12px; }
+	.scheduled-heading h1 { font-size: 19px; }
+	.scheduled-heading { align-items: flex-start; }
+	.scheduled-heading > div:last-child { gap: 4px; }
+	.scheduled-form-row { grid-template-columns: minmax(0, 1fr); }
+	.scheduled-form, .scheduled-logs, .scheduled-confirm { padding: 14px; }
+	.scheduled-form footer { bottom: -14px; margin: 18px -14px -14px; padding: 12px 14px; }
+	.scheduled-task footer { gap: 4px; }
+	.scheduled-task footer button { padding: 6px 8px; }
+}
 .automation-heading-actions {
 	display: flex;
 	align-items: center;
@@ -5415,10 +5476,35 @@ button {
 	max-height: calc(100vh - 150px);
 	overflow-y: auto;
 }
+.automation-create select {
+	width: 100%;
+	min-width: 0;
+	height: 30px;
+	padding: 0 8px;
+	border: 1px solid var(--line-strong);
+	border-radius: 5px;
+	background: var(--surface);
+	color: var(--text);
+	font-size: 11px;
+}
+.automation-context {
+	color: var(--muted);
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
+.automation-calendar { min-width: 0; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; display: grid; gap: 10px; }
+.automation-calendar label { min-width: 0; }
+.automation-calendar small { color: var(--muted); font-size: 11px; }
+.automation-weekdays { display: flex; flex-wrap: wrap; gap: 8px; }
+.automation-weekdays label { display: flex; align-items: center; gap: 4px; }
+.automation-weekdays input[type="checkbox"] { width: 14px; height: 14px; }
+.automation-preview { padding: 10px; background: var(--surface); border-radius: 6px; font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+.automation-actions { flex-wrap: wrap; }
+.automations-workbench .goal-readonly { flex-shrink: 0; }
 .automation-schedule-kind {
 	min-width: 0;
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 2px;
 	padding: 2px;
 	border: 1px solid var(--line);

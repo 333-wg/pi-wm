@@ -5,6 +5,7 @@ import { AgentTeamCommandSchemas, AgentTeamResultSchema, AgentTeamListResultSche
 import { AgentTemplateCommandSchemas, AgentTemplateResultSchema } from "./agent-templates.js";
 export * from "./agent-templates.js";
 export * from "./agent-teams.js";
+export * from "./automation-schedule.js";
 
 export const PROTOCOL_VERSION = 1 as const;
 
@@ -1347,6 +1348,17 @@ export const AutomationScheduleSchema = Type.Union([
 		startsAt: Timestamp,
 		everyMinutes: Type.Integer({ minimum: 1, maximum: 525_600 }),
 	}),
+	StrictObject({
+		kind: Type.Literal("calendar"),
+		frequency: Type.Union([Type.Literal("daily"), Type.Literal("weekly"), Type.Literal("monthly")]),
+		timeZone: Type.String({ minLength: 1, maxLength: 200 }),
+		hour: Type.Integer({ minimum: 0, maximum: 23 }),
+		minute: Type.Integer({ minimum: 0, maximum: 59 }),
+		weekdays: Type.Optional(
+			Type.Array(Type.Integer({ minimum: 0, maximum: 6 }), { minItems: 1, maxItems: 7, uniqueItems: true })
+		),
+		dayOfMonth: Type.Optional(Type.Integer({ minimum: 1, maximum: 31 })),
+	}),
 ]);
 export type AutomationSchedule = Static<typeof AutomationScheduleSchema>;
 
@@ -1378,6 +1390,23 @@ export const AutomationRunSummarySchema = StrictObject({
 });
 export type AutomationRunSummary = Static<typeof AutomationRunSummarySchema>;
 
+export const ScheduledTaskConfigSchema = StrictObject({
+	description: Type.String({ minLength: 1, maxLength: 2000 }),
+	workspaceId: Id,
+	model: ModelRefSchema,
+	permission: Type.Literal("full_access"),
+	missedRuns: Type.Literal("skip"),
+});
+export type ScheduledTaskConfig = Static<typeof ScheduledTaskConfigSchema>;
+
+export const ScheduledTaskInputSchema = StrictObject({
+	title: Type.String({ minLength: 1, maxLength: 500 }),
+	objective: Type.String({ minLength: 1, maxLength: 20_000 }),
+	schedule: AutomationScheduleSchema,
+	execution: ScheduledTaskConfigSchema,
+});
+export type ScheduledTaskInput = Static<typeof ScheduledTaskInputSchema>;
+
 export const GoalAutomationSummarySchema = StrictObject({
 	id: Id,
 	parentSessionId: Id,
@@ -1385,6 +1414,7 @@ export const GoalAutomationSummarySchema = StrictObject({
 	objective: Type.String({ minLength: 1, maxLength: 20_000 }),
 	schedule: AutomationScheduleSchema,
 	status: AutomationStatusSchema,
+	execution: Type.Optional(ScheduledTaskConfigSchema),
 	createdAt: Timestamp,
 	updatedAt: Timestamp,
 	nextRunAt: Type.Optional(Timestamp),
@@ -1435,6 +1465,7 @@ export const TranscriptItemSchema = Type.Union([
 		type: Type.Literal("tool"),
 		toolCallId: Id,
 		toolName: Id,
+		lastProgressAt: Type.Optional(Timestamp),
 		status: Type.Union([
 			Type.Literal("pending"),
 			Type.Literal("awaiting_approval"),
@@ -1736,6 +1767,22 @@ export const CommandSchema = Type.Union([
 	StrictObject({ type: Type.Literal("goal.resume"), sessionId: Id, goalId: Id }),
 	StrictObject({ type: Type.Literal("goal.delete"), sessionId: Id, goalId: Id }),
 	StrictObject({ type: Type.Literal("goal.cancel"), sessionId: Id, goalId: Id }),
+	StrictObject({ type: Type.Literal("scheduled.create"), input: ScheduledTaskInputSchema }),
+	StrictObject({
+		type: Type.Literal("scheduled.update"),
+		automationId: Id,
+		expectedUpdatedAt: Timestamp,
+		input: ScheduledTaskInputSchema,
+	}),
+	StrictObject({
+		type: Type.Literal("scheduled.list"),
+		offset: Type.Optional(Type.Integer({ minimum: 0 })),
+		limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+	}),
+	StrictObject({ type: Type.Literal("scheduled.delete"), automationId: Id, expectedUpdatedAt: Timestamp }),
+	StrictObject({ type: Type.Literal("scheduled.set_enabled"), automationId: Id, enabled: Type.Boolean() }),
+	StrictObject({ type: Type.Literal("scheduled.trigger"), automationId: Id }),
+	StrictObject({ type: Type.Literal("scheduled.run.list"), automationId: Id }),
 	StrictObject({
 		type: Type.Literal("automation.create"),
 		sessionId: Id,
@@ -1745,6 +1792,24 @@ export const CommandSchema = Type.Union([
 		successCriteria: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
 		maxRounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
 		plan: Type.Optional(GoalPlanSpecSchema),
+	}),
+	StrictObject({
+		type: Type.Literal("automation.update"),
+		sessionId: Id,
+		automationId: Id,
+		expectedUpdatedAt: Timestamp,
+		title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+		objective: Type.String({ minLength: 1, maxLength: 20_000 }),
+		schedule: AutomationScheduleSchema,
+		successCriteria: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
+		maxRounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
+		plan: Type.Optional(GoalPlanSpecSchema),
+	}),
+	StrictObject({
+		type: Type.Literal("automation.delete"),
+		sessionId: Id,
+		automationId: Id,
+		expectedUpdatedAt: Timestamp,
 	}),
 	StrictObject({
 		type: Type.Literal("automation.list"),
@@ -2027,7 +2092,13 @@ export const CommandResultSchema = Type.Union([
 		type: Type.Literal("automation.configured"),
 		automation: GoalAutomationSummarySchema,
 	}),
+	StrictObject({ type: Type.Literal("automation.deleted"), automationId: Id }),
 	StrictObject({ type: Type.Literal("automation.triggered"), run: AutomationRunSummarySchema }),
+	StrictObject({
+		type: Type.Literal("scheduled.list"),
+		tasks: Type.Array(GoalAutomationSummarySchema, { maxItems: 100 }),
+		total: Type.Integer({ minimum: 0 }),
+	}),
 	StrictObject({
 		type: Type.Literal("automation.run.list"),
 		sessionId: Id,

@@ -132,6 +132,7 @@ export interface DurableGoal {
 }
 
 export interface DurableGoalAutomation {
+	execution?: import("@wuming/protocol").ScheduledTaskConfig;
 	id: string;
 	parentSessionId: string;
 	title: string;
@@ -157,6 +158,7 @@ export interface DurableAutomationRun {
 	triggeredAt: number;
 	updatedAt: number;
 	spec: {
+		execution?: import("@wuming/protocol").ScheduledTaskConfig;
 		title: string;
 		objective: string;
 		successCriteria?: string;

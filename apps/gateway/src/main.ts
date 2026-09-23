@@ -1191,6 +1191,7 @@ async function main(): Promise<void> {
 				agentDir,
 				sessionDataDir: join(dataDir, "pi-sessions"),
 				resolveWorkspace: workspacePathFor,
+				modelIdleTimeoutMs: envNonNegativeNumber("WUMING_MODEL_IDLE_TIMEOUT_MS", 10 * 60_000),
 				autoCompaction: envBoolean("WUMING_PI_AUTO_COMPACTION", true),
 				...(cacheRetention === undefined ? {} : { cacheRetention }),
 				createCustomTools: async (snapshot) => {
@@ -1323,7 +1324,7 @@ async function main(): Promise<void> {
 		}
 	);
 	const orchestrator = new SessionOrchestrator(store, runtime, {
-		turnTimeoutMs: envPositiveNumber("WUMING_TURN_TIMEOUT_MS", 20 * 60_000),
+		turnTimeoutMs: envNonNegativeNumber("WUMING_TURN_TIMEOUT_MS", 0),
 		abortGraceMs: envPositiveNumber("WUMING_ABORT_GRACE_MS", 5_000),
 		forceTerminateTimeoutMs: envPositiveNumber("WUMING_FORCE_TERMINATE_TIMEOUT_MS", 2_000),
 		maxRetries: envNonNegativeNumber("WUMING_MAX_RETRIES", 5),
@@ -1538,7 +1539,7 @@ async function main(): Promise<void> {
 	const runAutomationTick = async () => {
 		if (automationTickPromise || shuttingDown) return automationTickPromise;
 		const tick = orchestrator
-			.runDueAutomations()
+			.runDueAutomations(undefined, 20, false)
 			.then(() => undefined)
 			.catch((error) => logger.log("error", "gateway.automation.tick_failed", { error }))
 			.finally(() => {
@@ -1582,6 +1583,7 @@ async function main(): Promise<void> {
 			await computerDisposal;
 			if (Symbol.asyncDispose in runtime) await (runtime as AgentRuntime & AsyncDisposable)[Symbol.asyncDispose]();
 			await Promise.allSettled([recoveryPromise, automationTickPromise]);
+			await orchestrator.settleAutomationDispatches();
 			await teams.settled();
 			if (browserManager) await browserManager[Symbol.asyncDispose]();
 			await Promise.all([...previewManagers.values()].map((manager) => manager[Symbol.asyncDispose]()));
@@ -1603,6 +1605,7 @@ async function main(): Promise<void> {
 			recovering ||
 			server.activeRequestCount > 0 ||
 			Boolean(automationTickPromise) ||
+			orchestrator.hasAutomationDispatches ||
 			(terminal?.activeCount ?? 0) > 0 ||
 			store.listOperationsByStatus("running").length > 0 ||
 			store.listOperationsByStatus("queued").length > 0 ||

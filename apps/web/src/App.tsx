@@ -1,6 +1,7 @@
 import { GoalPlanEditor, GoalPlanView, newGoalPlan } from "./components/GoalPlan";
 import clover from "./assets/wuming-clover.png";
 import { findToolSubagent } from "./lib/subagent-navigation.js";
+import { redactDiagnostic } from "./lib/redact.js";
 import {
 	activeRecovery,
 	activeTurnFailure,
@@ -104,6 +105,9 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { validateCalendarSchedule, type CalendarSchedule } from "@wuming/protocol";
+import { CalendarScheduleEditor, SchedulePreview, scheduleLabel } from "./components/AutomationScheduleEditor";
+import { ScheduledTasks } from "./components/ScheduledTasks";
 import type {
 	ArtifactRef,
 	AutomationRunSummary,
@@ -1280,13 +1284,6 @@ function failureKindLabel(value: string, t: Translate = createTranslator("zh")):
 	return key ? t(key) : value;
 }
 
-function redactDiagnostic(value: string): string {
-	return value
-		.replace(/Bearer\s+[^\s,;]+/gi, "Bearer [已隐藏]")
-		.replace(/\b(sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/g, "$1-[已隐藏]")
-		.replace(/((?:api[_ -]?key|authorization)\s*[=:]\s*)[^\s,;]+/gi, "$1[已隐藏]");
-}
-
 function runDiagnostic(snapshot: SessionSnapshot | undefined, run: RunSummary): string {
 	return [
 		"Pi-Wm 运行诊断",
@@ -2421,6 +2418,7 @@ function Composer({
 							<button
 								type="button"
 								className={queueMode === "steer" ? "active" : ""}
+								aria-pressed={queueMode === "steer"}
 								onClick={() => setQueueMode("steer")}
 							>
 								{t("steerNow")}
@@ -2428,6 +2426,7 @@ function Composer({
 							<button
 								type="button"
 								className={queueMode === "follow_up" ? "active" : ""}
+								aria-pressed={queueMode === "follow_up"}
 								onClick={() => setQueueMode("follow_up")}
 							>
 								{t("followUp")}
@@ -2904,16 +2903,21 @@ function dateTimeLocalValue(timestamp: number): string {
 }
 
 function automationScheduleLabel(schedule: AutomationSchedule): string {
-	return schedule.kind === "once"
-		? `一次 · ${formatAutomationTime(schedule.runAt)}`
-		: `每 ${schedule.everyMinutes} 分钟 · ${formatAutomationTime(schedule.startsAt)} 起`;
+	return schedule.kind === "calendar"
+		? scheduleLabel(schedule)
+		: schedule.kind === "once"
+			? `一次 · ${formatAutomationTime(schedule.runAt)}`
+			: `每 ${schedule.everyMinutes} 分钟 · ${formatAutomationTime(schedule.startsAt)} 起`;
 }
 
 function AutomationsView({
 	automations,
 	disabled,
 	archived,
+	draftContext,
 	onCreate,
+	onUpdate,
+	onDelete,
 	onSetEnabled,
 	onTrigger,
 	onListRuns,
@@ -2924,14 +2928,32 @@ function AutomationsView({
 	automations: GoalAutomationSummary[];
 	disabled: boolean;
 	archived: boolean;
-	onCreate: (input: {
-		objective: string;
-		title?: string;
-		schedule: AutomationSchedule;
-		successCriteria?: string;
-		maxRounds?: number;
-		plan?: GoalPlanSpec;
-	}) => Promise<GoalAutomationSummary>;
+	draftContext:
+		{ workspaces: WorkspaceSummary[]; workspaceId: string | undefined; modelName: string | undefined } | undefined;
+	onCreate: (
+		input: {
+			objective: string;
+			title?: string;
+			schedule: AutomationSchedule;
+			successCriteria?: string;
+			maxRounds?: number;
+			plan?: GoalPlanSpec;
+		},
+		workspaceId?: string
+	) => Promise<GoalAutomationSummary>;
+	onUpdate: (
+		automationId: string,
+		expectedUpdatedAt: number,
+		input: {
+			objective: string;
+			title?: string;
+			schedule: AutomationSchedule;
+			successCriteria?: string;
+			maxRounds?: number;
+			plan?: GoalPlanSpec;
+		}
+	) => Promise<GoalAutomationSummary>;
+	onDelete: (automationId: string, expectedUpdatedAt: number) => Promise<void>;
 	onSetEnabled: (automationId: string, enabled: boolean) => Promise<GoalAutomationSummary>;
 	onTrigger: (automationId: string) => Promise<AutomationRunSummary>;
 	onListRuns: (automationId: string, limit?: number) => Promise<AutomationRunSummary[]>;
@@ -2940,10 +2962,31 @@ function AutomationsView({
 	onOpenSession: (sessionId: string) => Promise<void>;
 }) {
 	const [selectedId, setSelectedId] = useState<string>();
+	const [draftWorkspaceId, setDraftWorkspaceId] = useState<string>();
+	const creationWorkspaceId =
+		draftContext?.workspaces.find((workspace) => workspace.id === draftWorkspaceId)?.id ??
+		draftContext?.workspaceId ??
+		draftContext?.workspaces[0]?.id;
+	const creationError = draftContext
+		? !creationWorkspaceId
+			? "项目不可用"
+			: !draftContext.modelName
+				? "请先添加并验证模型"
+				: undefined
+		: undefined;
 	const [showCreate, setShowCreate] = useState(false);
 	const [title, setTitle] = useState("");
 	const [objective, setObjective] = useState("");
 	const [scheduleKind, setScheduleKind] = useState<AutomationSchedule["kind"]>("interval");
+	const [calendar, setCalendar] = useState<CalendarSchedule>({
+		kind: "calendar",
+		frequency: "daily",
+		timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+		hour: 9,
+		minute: 0,
+	});
+	const [editing, setEditing] = useState<GoalAutomationSummary>();
+	const [confirmDelete, setConfirmDelete] = useState<string>();
 	const [scheduledAt, setScheduledAt] = useState(() => dateTimeLocalValue(Date.now() + 5 * 60_000));
 	const [everyMinutes, setEveryMinutes] = useState(60);
 	const [reviewEnabled, setReviewEnabled] = useState(false);
@@ -2951,7 +2994,7 @@ function AutomationsView({
 	const [maxRounds, setMaxRounds] = useState(3);
 	const [creating, setCreating] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
-	const [action, setAction] = useState<{ automationId: string; kind: "toggle" | "trigger" }>();
+	const [action, setAction] = useState<{ automationId: string; kind: "toggle" | "trigger" | "delete" }>();
 	const [runs, setRuns] = useState<AutomationRunSummary[]>([]);
 	const [runsLoading, setRunsLoading] = useState(false);
 	const [formError, setFormError] = useState<string>();
@@ -2960,6 +3003,31 @@ function AutomationsView({
 	const [planEnabled, setPlanEnabled] = useState(false);
 	const [plan, setPlan] = useState<GoalPlanSpec>(newGoalPlan);
 	const hasActiveRuns = runs.some((run) => AUTOMATION_RUN_ACTIVE_STATUSES.includes(run.status));
+	const runRequest = useRef(0);
+	const draftSchedule: AutomationSchedule =
+		scheduleKind === "calendar"
+			? calendar
+			: scheduleKind === "once"
+				? { kind: "once", runAt: new Date(scheduledAt).getTime() }
+				: { kind: "interval", startsAt: new Date(scheduledAt).getTime(), everyMinutes };
+	const beginEdit = (item: GoalAutomationSummary) => {
+		setEditing(item);
+		setTitle(item.title);
+		setObjective(item.objective);
+		setScheduleKind(item.schedule.kind);
+		if (item.schedule.kind === "calendar") setCalendar(item.schedule);
+		else {
+			setScheduledAt(dateTimeLocalValue(item.schedule.kind === "once" ? item.schedule.runAt : item.schedule.startsAt));
+			if (item.schedule.kind === "interval") setEveryMinutes(item.schedule.everyMinutes);
+		}
+		setReviewEnabled(!!item.successCriteria);
+		setSuccessCriteria(item.successCriteria ?? "");
+		setMaxRounds(item.maxRounds ?? 3);
+		setPlanEnabled(!!item.plan);
+		setPlan(item.plan ?? newGoalPlan());
+		setFormError(undefined);
+		setShowCreate(true);
+	};
 
 	useEffect(() => {
 		if (!selectedId || !automations.some((automation) => automation.id === selectedId))
@@ -2968,62 +3036,83 @@ function AutomationsView({
 
 	const loadRuns = useCallback(
 		async (automationId: string, quiet = false) => {
+			const request = ++runRequest.current;
 			if (!quiet) setRunsLoading(true);
 			try {
 				const nextRuns = await onListRuns(automationId);
+				if (request !== runRequest.current) return;
 				setRuns(nextRuns);
 				setActionError(undefined);
 			} catch (cause) {
 				setActionError(cause instanceof Error ? cause.message : String(cause));
 			} finally {
-				if (!quiet) setRunsLoading(false);
+				if (!quiet && request === runRequest.current) setRunsLoading(false);
 			}
 		},
 		[onListRuns]
 	);
 
 	useEffect(() => {
+		setRuns([]);
+		setConfirmDelete(undefined);
 		if (!selected) {
-			setRuns([]);
+			++runRequest.current;
 			return;
 		}
 		void loadRuns(selected.id);
+		return () => {
+			++runRequest.current;
+		};
 	}, [loadRuns, selected?.id]);
 
 	useEffect(() => {
-		if (!selected || !hasActiveRuns) return;
-		const timer = setInterval(() => void loadRuns(selected.id, true), 1500);
+		if (!selected) return;
+		const timer = setInterval(
+			() => {
+				void loadRuns(selected.id, true);
+				void onRefresh().catch(() => undefined);
+			},
+			hasActiveRuns ? 1500 : 5000
+		);
 		return () => clearInterval(timer);
-	}, [hasActiveRuns, loadRuns, selected?.id]);
+	}, [hasActiveRuns, loadRuns, selected?.id, onRefresh]);
 
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
-		if (creating || disabled) return;
+		if (creating || disabled || creationError) return;
 		const normalizedObjective = objective.trim();
 		const normalizedCriteria = successCriteria.trim();
 		const timestamp = new Date(scheduledAt).getTime();
 		if (!normalizedObjective) return setFormError("请填写自动化目标");
-		if (!Number.isFinite(timestamp)) return setFormError("请选择有效的执行时间");
+		if (scheduleKind !== "calendar" && !Number.isFinite(timestamp)) return setFormError("请选择有效的执行时间");
+		if (scheduleKind === "calendar") {
+			try {
+				validateCalendarSchedule(calendar);
+			} catch {
+				return setFormError("请填写有效时区、时刻及至少一个星期。");
+			}
+		}
 		if (
 			scheduleKind === "interval" &&
 			(!Number.isSafeInteger(everyMinutes) || everyMinutes < 1 || everyMinutes > 525_600)
 		)
 			return setFormError("执行间隔必须在 1 到 525600 分钟之间");
 		if (reviewEnabled && !normalizedCriteria) return setFormError("启用评审循环时请填写成功标准");
-		const schedule: AutomationSchedule =
-			scheduleKind === "once"
-				? { kind: "once", runAt: timestamp }
-				: { kind: "interval", startsAt: timestamp, everyMinutes };
+		const schedule = draftSchedule;
 		setCreating(true);
 		setFormError(undefined);
 		try {
-			const created = await onCreate({
+			const input = {
 				objective: normalizedObjective,
 				schedule,
 				...(planEnabled ? { plan } : {}),
 				...(title.trim() ? { title: title.trim() } : {}),
 				...(reviewEnabled ? { successCriteria: normalizedCriteria, maxRounds } : {}),
-			});
+			};
+			const created = editing
+				? await onUpdate(editing.id, editing.updatedAt, input)
+				: await onCreate(input, creationWorkspaceId);
+			setEditing(undefined);
 			setSelectedId(created.id);
 			setShowCreate(false);
 			setPlanEnabled(false);
@@ -3055,12 +3144,17 @@ function AutomationsView({
 		}
 	};
 
-	const act = async (automation: GoalAutomationSummary, kind: "toggle" | "trigger") => {
+	const act = async (automation: GoalAutomationSummary, kind: "toggle" | "trigger" | "delete") => {
 		if (action || disabled) return;
 		setAction({ automationId: automation.id, kind });
 		setActionError(undefined);
 		try {
-			if (kind === "toggle") {
+			if (kind === "delete") {
+				await onDelete(automation.id, automation.updatedAt);
+				setConfirmDelete(undefined);
+				setShowCreate(false);
+				setEditing(undefined);
+			} else if (kind === "toggle") {
 				await onSetEnabled(automation.id, automation.status !== "active");
 			} else {
 				const run = await onTrigger(automation.id);
@@ -3086,9 +3180,15 @@ function AutomationsView({
 							className="icon-button"
 							type="button"
 							title={showCreate ? "关闭创建表单" : "新建自动化"}
-							disabled={disabled}
+							disabled={disabled || creating}
 							onClick={() => {
 								setShowCreate((value) => !value);
+								setEditing(undefined);
+								setTitle("");
+								setObjective("");
+								setReviewEnabled(false);
+								setPlanEnabled(false);
+								setPlan(newGoalPlan());
 								setFormError(undefined);
 							}}
 						>
@@ -3105,8 +3205,31 @@ function AutomationsView({
 						</button>
 					</div>
 				</div>
+				<div className="goal-readonly">
+					本地服务运行、电脑唤醒时才会执行。错过多次合并补一次；沿用所属会话的项目、模型和权限，不会自动提权。
+				</div>
 				{showCreate && (
 					<form className="subagent-create automation-create" onSubmit={(event) => void submit(event)}>
+						<strong>{editing ? "编辑定时任务" : "新建定时任务"}</strong>
+						{draftContext && (
+							<>
+								<label>
+									<span>项目</span>
+									<select
+										value={creationWorkspaceId ?? ""}
+										disabled={disabled || creating}
+										onChange={(event) => setDraftWorkspaceId(event.target.value)}
+									>
+										{draftContext.workspaces.map((workspace) => (
+											<option key={workspace.id} value={workspace.id}>
+												{isImplicitWorkspace(workspace) ? "无项目（本地工作区）" : workspaceName(workspace.name)}
+											</option>
+										))}
+									</select>
+								</label>
+								<div className="automation-context">关联会话模型：{draftContext.modelName ?? "未配置"}</div>
+							</>
+						)}
 						<label>
 							<span>目标</span>
 							<textarea
@@ -3146,17 +3269,29 @@ function AutomationsView({
 							>
 								固定间隔
 							</button>
+							<button
+								type="button"
+								className={scheduleKind === "calendar" ? "active" : ""}
+								aria-pressed={scheduleKind === "calendar"}
+								onClick={() => setScheduleKind("calendar")}
+							>
+								日历日程
+							</button>
 						</div>
-						<label>
-							<span>{scheduleKind === "once" ? "执行时间" : "开始时间"}</span>
-							<input
-								type="datetime-local"
-								required
-								value={scheduledAt}
-								readOnly={disabled}
-								onChange={(event) => setScheduledAt(event.target.value)}
-							/>
-						</label>
+						{scheduleKind === "calendar" ? (
+							<CalendarScheduleEditor value={calendar} onChange={setCalendar} disabled={disabled || creating} />
+						) : (
+							<label>
+								<span>{scheduleKind === "once" ? "执行时间" : "开始时间"}</span>
+								<input
+									type="datetime-local"
+									required
+									value={scheduledAt}
+									readOnly={disabled}
+									onChange={(event) => setScheduledAt(event.target.value)}
+								/>
+							</label>
+						)}
 						{scheduleKind === "interval" && (
 							<label>
 								<span>间隔（分钟）</span>
@@ -3228,11 +3363,24 @@ function AutomationsView({
 						<button
 							className="subagent-create-button"
 							type="submit"
-							disabled={disabled || creating || !objective.trim() || (reviewEnabled && !successCriteria.trim())}
+							disabled={
+								disabled ||
+								creating ||
+								!!creationError ||
+								!objective.trim() ||
+								(reviewEnabled && !successCriteria.trim())
+							}
+							title={creationError}
 						>
 							{creating ? <RefreshCw className="spin" size={15} /> : <CalendarClock size={15} />}
-							{creating ? "正在创建..." : "创建自动化"}
+							{creating ? "正在保存..." : editing ? "保存修改" : "创建自动化"}
 						</button>
+						<SchedulePreview schedule={draftSchedule} />
+						{creationError && (
+							<div className="workbench-error" role="alert">
+								{creationError}
+							</div>
+						)}
 						{formError && (
 							<div className="workbench-error">
 								<CircleAlert size={14} />
@@ -3280,6 +3428,20 @@ function AutomationsView({
 								</span>
 							</div>
 							<div className="goal-actions automation-actions">
+								<button
+									className="subagent-secondary-action"
+									disabled={disabled || !!action || creating}
+									onClick={() => beginEdit(selected)}
+								>
+									编辑
+								</button>
+								<button
+									className="subagent-secondary-action"
+									disabled={disabled || !!action || hasActiveRuns}
+									onClick={() => setConfirmDelete(selected.id)}
+								>
+									删除
+								</button>
 								{selected.status !== "completed" && (
 									<button
 										className="subagent-secondary-action"
@@ -3320,12 +3482,19 @@ function AutomationsView({
 									<i />
 									{AUTOMATION_STATUS_LABELS[selected.status]}
 								</span>
-								<span>
-									{selected.schedule.kind === "once" ? "一次性" : `每 ${selected.schedule.everyMinutes} 分钟`}
-								</span>
+								<span>{scheduleLabel(selected.schedule)}</span>
 								{selected.nextRunAt !== undefined && <span>下次 {formatAutomationTime(selected.nextRunAt)}</span>}
 								{selected.lastRunAt !== undefined && <span>上次 {formatAutomationTime(selected.lastRunAt)}</span>}
 							</div>
+							{confirmDelete === selected.id && (
+								<div className="workbench-error" role="alert">
+									<span>删除任务及运行记录？历史会话仍保留，此操作不可撤销。</span>
+									<button disabled={!!action} onClick={() => void act(selected, "delete")}>
+										确认删除
+									</button>
+									<button onClick={() => setConfirmDelete(undefined)}>取消</button>
+								</div>
+							)}
 							{actionError && (
 								<div className="workbench-error">
 									<CircleAlert size={14} />
@@ -3339,6 +3508,7 @@ function AutomationsView({
 							<section className="subagent-section automation-schedule">
 								<h2>日程</h2>
 								<p>{automationScheduleLabel(selected.schedule)}</p>
+								{selected.status === "active" && <SchedulePreview schedule={selected.schedule} />}
 							</section>
 							{selected.plan && (
 								<section className="subagent-section">
@@ -4777,7 +4947,17 @@ export function App() {
 		client.executionEnvironment?.placement === "local_device"
 	);
 	const [workbenchView, setWorkbenchView] = useState<
-		"chat" | "automations" | "files" | "changes" | "terminal" | "tools" | "skills" | "mcp" | "teams" | "subtasks"
+		| "chat"
+		| "automations"
+		| "scheduled"
+		| "files"
+		| "changes"
+		| "terminal"
+		| "tools"
+		| "skills"
+		| "mcp"
+		| "teams"
+		| "subtasks"
 	>("chat");
 	const [terminalVisited, setTerminalVisited] = useState(false);
 	useEffect(() => {
@@ -5392,6 +5572,10 @@ export function App() {
 	}, [client.snapshot?.session.id]);
 
 	const sessionId = client.snapshot?.session.id;
+	const refreshCurrentAutomations = useCallback(
+		() => (sessionId ? client.refreshAutomations(sessionId) : Promise.resolve([])),
+		[client.refreshAutomations, sessionId]
+	);
 	const canCompact = client.capabilities.includes("session.compaction");
 	const demoRuntime = client.toolRuntime === "demo";
 	// Slash commands act on the shell and the session. They are memoised because
@@ -5942,6 +6126,19 @@ export function App() {
 					{newChatBusy ? <RefreshCw className="spin" size={18} /> : <SquarePen size={18} />}
 					<span>{newChatBusy ? t("newChatBusy") : t("newChat")}</span>
 				</button>
+				{client.capabilities.includes("automations") && (
+					<button
+						className={"sidebar-scheduled" + (workbenchView === "scheduled" ? " selected" : "")}
+						onClick={() => {
+							setWorkbenchView("scheduled");
+							setMobileNav(false);
+							setShowRight(false);
+						}}
+					>
+						<CalendarClock size={18} />
+						<span>定时任务</span>
+					</button>
+				)}
 				<section className="project-section">
 					<div className="project-section-heading">
 						<span className="nav-label">{t("projects")}</span>
@@ -6143,6 +6340,22 @@ export function App() {
 							<MessageSquareCode size={15} />
 							<span>{t("chat")}</span>
 						</button>
+						{client.capabilities.includes("automations") && (
+							<button
+								role="tab"
+								aria-selected={workbenchView === "scheduled"}
+								className={workbenchView === "scheduled" ? "active" : ""}
+								title={locale === "en" ? "Scheduled tasks" : "定时任务"}
+								aria-label={locale === "en" ? "Scheduled tasks" : "定时任务"}
+								onClick={() => {
+									setWorkbenchView("scheduled");
+									setShowRight(false);
+								}}
+							>
+								<CalendarClock size={15} />
+								<span>{locale === "en" ? "Scheduled tasks" : "定时任务"}</span>
+							</button>
+						)}
 						<button
 							role="tab"
 							aria-selected={workbenchView === "files"}
@@ -6711,21 +6924,58 @@ export function App() {
 							</div>
 						</section>
 					))}
+				{workbenchView === "scheduled" && (
+					<ScheduledTasks
+						request={client.scheduledRequest}
+						workspaces={client.workspaces}
+						models={client.models}
+						connected={client.connection === "connected"}
+						onOpenSession={async (id) => {
+							await client.attachSession(id);
+							setShowRight(false);
+							setWorkbenchView("chat");
+						}}
+					/>
+				)}
 				{workbenchView === "automations" && (
 					<AutomationsView
 						automations={client.automations}
 						disabled={
-							!client.snapshot || client.snapshot.session.archivedAt !== undefined || client.connection !== "connected"
+							newChatBusy || client.snapshot?.session.archivedAt !== undefined || client.connection !== "connected"
+						}
+						draftContext={
+							client.snapshot
+								? undefined
+								: {
+										workspaces: client.workspaces,
+										workspaceId: selectedWorkspace?.id,
+										modelName: selectedModel?.name,
+									}
 						}
 						archived={client.snapshot?.session.archivedAt !== undefined}
-						onCreate={client.createAutomation}
+						onCreate={async (input, workspaceId) => {
+							if (newChatPending.current) throw new Error("正在创建关联会话");
+							const committingDraft = !client.snapshot;
+							if (committingDraft) {
+								newChatPending.current = true;
+								setNewChatBusy(true);
+							}
+							try {
+								return await client.createAutomation(input, workspaceId);
+							} finally {
+								if (committingDraft) {
+									newChatPending.current = false;
+									setNewChatBusy(false);
+								}
+							}
+						}}
+						onUpdate={client.updateAutomation}
+						onDelete={client.deleteAutomation}
 						onSetEnabled={client.setAutomationEnabled}
 						onTrigger={client.triggerAutomation}
 						onListRuns={client.listAutomationRuns}
 						onRespondApproval={client.respondApproval}
-						onRefresh={() =>
-							client.snapshot ? client.refreshAutomations(client.snapshot.session.id) : Promise.resolve([])
-						}
+						onRefresh={refreshCurrentAutomations}
 						onOpenSession={async (sessionId) => {
 							await client.attachSession(sessionId);
 							setShowRight(false);

@@ -66,7 +66,7 @@ export async function startDesktopWorkflowFixture() {
 					call = {
 						name: "exec",
 						arguments: {
-							command: `node -e "require('node:assert/strict').equal(require('node:fs').readFileSync('input.txt','utf8'),require('node:fs').readFileSync('result.txt','utf8'));console.log('DESKTOP_EXEC_OK')"`,
+							command: `node -e "const assert=require('node:assert/strict');assert.equal(require('node:fs').readFileSync('input.txt','utf8'),require('node:fs').readFileSync('result.txt','utf8'));for(const key of ['WUMING_DESKTOP','WUMING_TOKEN','WUMING_DATA_DIR','NODE_CHANNEL_FD','NODE_ENV','PLAYWRIGHT_BROWSERS_PATH'])assert.equal(process.env[key],undefined);console.log('DESKTOP_EXEC_OK')"`,
 							timeout: 10,
 						},
 					};
@@ -82,18 +82,16 @@ export async function startDesktopWorkflowFixture() {
 				answer = scenario === "deny" ? "DESKTOP_DENIAL_OBSERVED" : "DESKTOP_RESTART_VERIFIED";
 			}
 			if (!body.stream) {
-				response
-					.writeHead(200, { "content-type": "application/json" })
-					.end(
-						JSON.stringify({
-							id: "fixture",
-							object: "chat.completion",
-							created: 1,
-							model: body.model,
-							choices: [{ index: 0, message: { role: "assistant", content: answer }, finish_reason: "stop" }],
-							usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-						})
-					);
+				response.writeHead(200, { "content-type": "application/json" }).end(
+					JSON.stringify({
+						id: "fixture",
+						object: "chat.completion",
+						created: 1,
+						model: body.model,
+						choices: [{ index: 0, message: { role: "assistant", content: answer }, finish_reason: "stop" }],
+						usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+					})
+				);
 				return;
 			}
 			const delta = call

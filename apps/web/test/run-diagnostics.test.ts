@@ -30,6 +30,47 @@ const run: RunSummary = {
 };
 
 describe("run diagnostics", () => {
+	it("shows the actual command and durable output timing after recovery without displaying a model wait", () => {
+		const active: SessionSnapshot = {
+			...snapshot,
+			transcript: [
+				{
+					type: "tool",
+					id: "tool",
+					toolCallId: "call",
+					toolName: "exec",
+					status: "running",
+					createdAt: 1000,
+					lastProgressAt: 2000,
+					input: { command: "npm test --api-key=secret-value" },
+					content: [],
+					isError: false,
+				},
+			],
+		};
+		expect(diagnoseRun(active, [run])).toMatchObject({
+			phase: "tool",
+			toolStartedAt: 1000,
+			lastProgressAt: 2000,
+			command: "npm test --api-key=secret-value",
+		});
+		const html = renderToStaticMarkup(
+			createElement(RunDiagnostics, {
+				snapshot: active,
+				runs: [
+					{
+						...run,
+						retryHistory: [{ attempt: 1, maxAttempts: 6, delayMs: 1000, timestamp: 1, error: "Connection error." }],
+					},
+				],
+			})
+		);
+		expect(html).toContain("npm test");
+		expect(html).not.toContain("secret-value");
+		expect(html).toContain("距最近输出");
+		expect(html).toContain("此前连接异常已恢复");
+		expect(html).not.toContain("等待模型响应");
+	});
 	it("renders recorded request timing and keeps legacy timing explicitly unknown", () => {
 		const html = renderToStaticMarkup(
 			createElement(RunDiagnostics, {

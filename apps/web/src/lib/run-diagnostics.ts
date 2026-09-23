@@ -17,7 +17,22 @@ export function diagnoseRun(snapshot: SessionSnapshot, runs: RunSummary[], t: Tr
 			(item) => item.type === "tool" && (item.status === "running" || item.status === "pending")
 		);
 		if (tool?.type === "tool")
-			return { phase: "tool", label: t("diagnosisTool"), toolName: tool.toolName, attention: false };
+			return {
+				phase: "tool",
+				label: t("diagnosisTool"),
+				toolName: tool.toolName,
+				attention: false,
+				toolStartedAt: tool.createdAt,
+				lastProgressAt: tool.lastProgressAt,
+				command:
+					tool.input && typeof tool.input === "object" && !Array.isArray(tool.input)
+						? typeof tool.input.command === "string"
+							? tool.input.command
+							: typeof tool.input.cmd === "string"
+								? tool.input.cmd
+								: undefined
+						: undefined,
+			};
 		const assistant = items.findLast((item) => item.type === "assistant");
 		if (assistant?.type === "assistant" && assistant.status === "streaming" && assistant.content.length > 0)
 			return { phase: "streaming", label: t("diagnosisStreaming"), attention: false };

@@ -15,10 +15,11 @@ function appendBounded(current: string, chunk: string, maxBytes: number): { valu
 function killTree(child: ChildProcess): void {
 	if (!child.pid) return;
 	if (process.platform === "win32") {
-		spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "taskkill", "/pid", String(child.pid), "/t", "/f"], {
+		const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
 			windowsHide: true,
 			stdio: "ignore",
 		});
+		killer.once("error", () => child.kill());
 		return;
 	}
 	try {
@@ -26,6 +27,20 @@ function killTree(child: ChildProcess): void {
 	} catch {
 		child.kill("SIGKILL");
 	}
+}
+
+export function workspaceProcessEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	// Gateway configuration and IPC handles belong to the host, not workspace commands.
+	const desktop = Object.entries(environment).some(
+		([key, value]) => key.toUpperCase() === "WUMING_DESKTOP" && value === "true"
+	);
+	return Object.fromEntries(
+		Object.entries(environment).filter(
+			([key]) =>
+				!/^(WUMING_|ELECTRON_|NODE_CHANNEL_FD$|NODE_CHANNEL_SERIALIZATION_MODE$)/i.test(key) &&
+				!(desktop && /^(NODE_ENV|PLAYWRIGHT_BROWSERS_PATH)$/i.test(key))
+		)
+	);
 }
 
 export interface LocalProcessSandboxOptions {
@@ -59,6 +74,7 @@ export class LocalProcessSandbox implements ProcessSandbox {
 		command: string,
 		options: { timeoutMs?: number; signal?: AbortSignal; onOutput?: (chunk: string) => void } = {}
 	): Promise<ProcessResult> {
+		options.signal?.throwIfAborted();
 		if (!command.trim()) throw new SandboxError("process_failed", "Command must not be empty");
 		if (command.length > 64 * 1024) throw new SandboxError("process_failed", "Command exceeds 64 KiB limit");
 		const timeoutMs = Math.min(this.#maxTimeoutMs, Math.max(1, options.timeoutMs ?? this.#defaultTimeoutMs));
@@ -68,7 +84,7 @@ export class LocalProcessSandbox implements ProcessSandbox {
 		const child = spawn(shell, args, {
 			windowsVerbatimArguments: process.platform === "win32",
 			cwd: this.#workspaceRoot,
-			env: process.env,
+			env: workspaceProcessEnvironment(process.env),
 			windowsHide: true,
 			detached: process.platform !== "win32",
 			stdio: ["ignore", "pipe", "pipe"],

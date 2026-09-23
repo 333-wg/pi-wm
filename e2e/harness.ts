@@ -134,6 +134,22 @@ export async function stopWebApp(): Promise<void> {
 	gatewayRestartEnvironment = undefined;
 }
 
+/** Retained session automation is reachable through its command, not the new task center. */
+export async function openLegacyAutomations(page: Page): Promise<void> {
+	await expect(page.locator(".connection")).toHaveClass(/(?:^|\s)connected(?:\s|$)/);
+	const savedSession = await page.evaluate(() =>
+		localStorage.getItem("wuming.sessionId." + localStorage.getItem("wuming.workspaceId"))
+	);
+	if (savedSession) await expect(page.locator(".session-entry.selected")).toHaveCount(1);
+	const close = page.locator(".right-rail").getByRole("button", { name: "关闭运行面板", exact: true });
+	if ((page.viewportSize()?.width ?? 1440) < 720 && (await close.isVisible())) await close.click();
+	await page.getByRole("tab", { name: "对话", exact: true }).click();
+	const composer = page.getByRole("textbox", { name: "消息", exact: true });
+	await composer.fill("/automations");
+	await page.getByRole("listbox", { name: "快捷命令" }).getByRole("option").filter({ hasText: "/automations" }).click();
+	await expect(page.getByRole("region", { name: "自动化", exact: true })).toBeVisible();
+}
+
 /** Opens the app with the password and onboarding already settled. */
 export async function openApp(page: Page, url: string): Promise<void> {
 	await page.addInitScript((value) => localStorage.setItem("wuming.token", value), token);

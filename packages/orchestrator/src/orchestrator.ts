@@ -2,7 +2,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { HookPipeline, type CapabilityJson, type HookPoint } from "@wuming/capability-kernel";
 import { EMPTY_USAGE, reduceSessionEvent, type SessionEvent } from "@wuming/domain";
-import { clampModelThinkingLevel, mergeUsageRequests, sessionUsageRequests } from "@wuming/protocol";
+import {
+	AutomationScheduleSchema,
+	clampModelThinkingLevel,
+	mergeUsageRequests,
+	nextCalendarRun,
+	sessionUsageRequests,
+	validateCalendarSchedule,
+} from "@wuming/protocol";
+import { Compile } from "typebox/compile";
 import type {
 	ApprovalPolicy,
 	AutomationRunSummary,
@@ -203,6 +211,7 @@ export interface GoalCommandInput {
 }
 
 export interface CreateAutomationInput {
+	execution?: import("@wuming/protocol").ScheduledTaskConfig;
 	principalId: string;
 	idempotencyKey: string;
 	sessionId: string;
@@ -221,6 +230,15 @@ export interface AutomationCommandInput {
 	automationId: string;
 }
 
+export interface UpdateAutomationInput extends CreateAutomationInput {
+	automationId: string;
+	expectedUpdatedAt: number;
+}
+
+export interface DeleteAutomationInput extends AutomationCommandInput {
+	expectedUpdatedAt: number;
+}
+
 export interface SetAutomationEnabledInput extends AutomationCommandInput {
 	enabled: boolean;
 }
@@ -230,6 +248,7 @@ export interface SessionOrchestratorOptions {
 	idFactory?: () => string;
 	idempotencyTtlMs?: number;
 	leaseTtlMs?: number;
+	/** Total turn deadline in milliseconds. Omitted or zero disables the deadline. */
 	turnTimeoutMs?: number;
 	abortGraceMs?: number;
 	forceTerminateTimeoutMs?: number;
@@ -238,6 +257,46 @@ export interface SessionOrchestratorOptions {
 	retryBaseDelayMs?: number;
 	logger?: StructuredLogger;
 	hookPipeline?: HookPipeline;
+}
+
+const checkAutomationSchedule = Compile(AutomationScheduleSchema);
+
+function automationConfiguration(input: CreateAutomationInput) {
+	const objective = input.objective.trim();
+	if (!objective) throw new OrchestratorError("conflict", "Automation objective cannot be empty");
+	const successCriteria = input.successCriteria?.trim();
+	if (input.successCriteria !== undefined && !successCriteria)
+		throw new OrchestratorError("conflict", "Automation success criteria cannot be empty");
+	if (input.maxRounds !== undefined && !successCriteria)
+		throw new OrchestratorError("conflict", "Automation max rounds require success criteria");
+	const maxRounds = successCriteria ? (input.maxRounds ?? 3) : undefined;
+	if (maxRounds !== undefined && (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 5))
+		throw new OrchestratorError("conflict", "Automation max rounds must be between 1 and 5");
+	if (input.plan && successCriteria)
+		throw new OrchestratorError("conflict", "Automation Goal plans cannot combine with a top-level review loop");
+	const plan = input.plan ? normalizeGoalPlanSpec(input.plan) : undefined;
+	if (!checkAutomationSchedule.Check(input.schedule))
+		throw new OrchestratorError("conflict", "Automation schedule is invalid");
+	try {
+		if (input.schedule.kind === "calendar") validateCalendarSchedule(input.schedule);
+		else if (!Number.isSafeInteger(input.schedule.kind === "once" ? input.schedule.runAt : input.schedule.startsAt))
+			throw new RangeError("Automation run time is invalid");
+	} catch (error) {
+		throw new OrchestratorError("conflict", error instanceof Error ? error.message : String(error));
+	}
+	return { objective, successCriteria, maxRounds, plan };
+}
+
+function initialAutomationRun(schedule: AutomationSchedule, now: number): number {
+	try {
+		return schedule.kind === "calendar"
+			? nextCalendarRun(schedule, now)
+			: schedule.kind === "once"
+				? schedule.runAt
+				: schedule.startsAt;
+	} catch (error) {
+		throw new OrchestratorError("conflict", error instanceof Error ? error.message : String(error));
+	}
 }
 
 function canonicalize(value: unknown): string {
@@ -683,6 +742,7 @@ function summarizeAutomation(automation: DurableGoalAutomation): GoalAutomationS
 		...(automation.successCriteria === undefined ? {} : { successCriteria: automation.successCriteria }),
 		...(automation.maxRounds === undefined ? {} : { maxRounds: automation.maxRounds }),
 		...(automation.plan === undefined ? {} : { plan: automation.plan }),
+		...(automation.execution === undefined ? {} : { execution: automation.execution }),
 	};
 }
 
@@ -815,6 +875,8 @@ function compactionMemories(
 	);
 }
 
+const STEER_INTERRUPTION_REASON = "Turn interrupted by immediate input";
+
 export class SessionOrchestrator {
 	readonly #clock: () => number;
 	readonly #idFactory: () => string;
@@ -830,6 +892,7 @@ export class SessionOrchestrator {
 	readonly #hookPipeline: HookPipeline;
 	readonly #progressListeners = new Set<(event: ProgressEvent) => void>();
 	readonly #commandTails = new Map<string, Promise<void>>();
+	readonly #automationDispatches = new Set<Promise<void>>();
 	readonly #activeTurns = new Map<string, { operationId: string; controller: AbortController }>();
 
 	constructor(
@@ -841,7 +904,7 @@ export class SessionOrchestrator {
 		this.#idFactory = options.idFactory ?? randomUUID;
 		this.#idempotencyTtlMs = options.idempotencyTtlMs ?? 24 * 60 * 60 * 1000;
 		this.#leaseTtlMs = options.leaseTtlMs ?? 30_000;
-		this.#turnTimeoutMs = options.turnTimeoutMs ?? 20 * 60 * 1000;
+		this.#turnTimeoutMs = options.turnTimeoutMs ?? 0;
 		this.#abortGraceMs = options.abortGraceMs ?? 5_000;
 		this.#forceTerminateTimeoutMs = options.forceTerminateTimeoutMs ?? 2_000;
 		this.#defaultCostBudgetUsd = options.defaultCostBudgetUsd;
@@ -873,7 +936,7 @@ export class SessionOrchestrator {
 				activeApprovalExecutions.length === 1 && activeApprovalExecutions[0]?.mode === "preflight"
 					? activeApprovalExecutions[0]
 					: undefined;
-			if (recoverableApproval?.state === "waiting") {
+			if (!operation.abortRequested && recoverableApproval?.state === "waiting") {
 				const snapshot = this.store.loadSnapshot(operation.sessionId);
 				if (
 					snapshot?.pendingApprovals.length === 1 &&
@@ -889,6 +952,7 @@ export class SessionOrchestrator {
 				}
 			}
 			if (
+				!operation.abortRequested &&
 				recoverableApproval?.state === "approved" &&
 				this.store.requeueOperationForApproval(operation.id, recoverableApproval.approvalId, this.#clock())
 			) {
@@ -900,7 +964,7 @@ export class SessionOrchestrator {
 				recovered += 1;
 				continue;
 			}
-			if (operation.retryAfter !== undefined && approvalExecutions.length === 0) {
+			if (!operation.abortRequested && operation.retryAfter !== undefined && approvalExecutions.length === 0) {
 				this.store.recoverRetryOperation(operation.id, this.#clock());
 				this.#logger.log("info", "orchestrator.recovery.retry_requeued", {
 					sessionId: operation.sessionId,
@@ -1439,46 +1503,60 @@ export class SessionOrchestrator {
 		return this.store.listGoals(parentSessionId, limit).map((goal) => this.#summarizeStoredGoal(goal));
 	}
 
+	async createScheduledTask(
+		input: import("@wuming/protocol").ScheduledTaskInput & { principalId: string; idempotencyKey: string }
+	) {
+		if (!input.title.trim() || !input.execution.description.trim())
+			throw new OrchestratorError("conflict", "名称和描述不能为空");
+		automationConfiguration({ ...input, sessionId: "scheduled" });
+		return this.#serializeCommand("scheduled:create:" + input.principalId + ":" + input.idempotencyKey, async () => {
+			const hash = commandHash({
+				type: "scheduled.create",
+				title: input.title,
+				objective: input.objective,
+				schedule: input.schedule,
+				execution: input.execution,
+			});
+			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, this.#clock());
+			if (existing) return existing as Extract<CommandResult, { type: "automation.created" }>;
+			// Own an execution anchor instead of changing the selected chat's settings.
+			const parent = await this.createSession({
+				principalId: input.principalId,
+				idempotencyKey: "scheduled-parent:" + input.idempotencyKey,
+				workspaceId: input.execution.workspaceId,
+				name: "定时任务: " + input.title,
+				model: input.execution.model,
+				thinkingLevel: "off",
+				sandboxMode: "unrestricted",
+				approvalPolicy: "never",
+			});
+			return this.createAutomation({ ...input, sessionId: parent.snapshot.session.id, scheduledHash: hash });
+		});
+	}
+
+	listScheduledTasks(workspaceIds: string[], offset = 0, limit = 100) {
+		const page = this.store.listScheduledTasks(workspaceIds, offset, limit);
+		return { tasks: page.tasks.map(summarizeAutomation), total: page.total };
+	}
+
 	async createAutomation(
-		input: CreateAutomationInput
+		input: CreateAutomationInput & { scheduledHash?: string }
 	): Promise<Extract<CommandResult, { type: "automation.created" }>> {
 		return this.#serializeCommand(`automation:create:${input.sessionId}`, () => {
 			const now = this.#clock();
-			const objective = input.objective.trim();
-			if (!objective) throw new OrchestratorError("conflict", "Automation objective cannot be empty");
-			const successCriteria = input.successCriteria?.trim();
-			if (input.successCriteria !== undefined && !successCriteria)
-				throw new OrchestratorError("conflict", "Automation success criteria cannot be empty");
-			if (input.maxRounds !== undefined && !successCriteria)
-				throw new OrchestratorError("conflict", "Automation max rounds require success criteria");
-			const maxRounds = successCriteria ? (input.maxRounds ?? 3) : undefined;
-			if (maxRounds !== undefined && (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 5))
-				throw new OrchestratorError("conflict", "Automation max rounds must be between 1 and 5");
-			if (input.plan && successCriteria)
-				throw new OrchestratorError("conflict", "Automation Goal plans cannot combine with a top-level review loop");
-			const plan = input.plan ? normalizeGoalPlanSpec(input.plan) : undefined;
-			if (input.schedule.kind === "once") {
-				if (!Number.isSafeInteger(input.schedule.runAt) || input.schedule.runAt < 0)
-					throw new OrchestratorError("conflict", "Automation run time is invalid");
-			} else if (
-				!Number.isSafeInteger(input.schedule.startsAt) ||
-				input.schedule.startsAt < 0 ||
-				!Number.isInteger(input.schedule.everyMinutes) ||
-				input.schedule.everyMinutes < 1 ||
-				input.schedule.everyMinutes > 525_600
-			) {
-				throw new OrchestratorError("conflict", "Automation interval schedule is invalid");
-			}
-			const hash = commandHash({
-				type: "automation.create",
-				sessionId: input.sessionId,
-				objective,
-				title: input.title,
-				schedule: input.schedule,
-				successCriteria,
-				maxRounds,
-				plan,
-			});
+			const { objective, successCriteria, maxRounds, plan } = automationConfiguration(input);
+			const hash =
+				input.scheduledHash ??
+				commandHash({
+					type: "automation.create",
+					sessionId: input.sessionId,
+					objective,
+					title: input.title,
+					schedule: input.schedule,
+					successCriteria,
+					maxRounds,
+					plan,
+				});
 			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
 			if (existing) return existing as Extract<CommandResult, { type: "automation.created" }>;
 			const parent = this.store.loadSnapshot(input.sessionId);
@@ -1496,7 +1574,8 @@ export class SessionOrchestrator {
 				enabled: true,
 				createdAt: now,
 				updatedAt: now,
-				nextRunAt: input.schedule.kind === "once" ? input.schedule.runAt : input.schedule.startsAt,
+				nextRunAt: initialAutomationRun(input.schedule, now),
+				...(input.execution ? { execution: input.execution } : {}),
 				...(successCriteria === undefined || maxRounds === undefined ? {} : { successCriteria, maxRounds }),
 				...(plan === undefined ? {} : { plan }),
 			};
@@ -1514,6 +1593,105 @@ export class SessionOrchestrator {
 					expiresAt: now + this.#idempotencyTtlMs,
 				},
 			}).result as Extract<CommandResult, { type: "automation.created" }>;
+		});
+	}
+
+	async updateAutomation(
+		input: UpdateAutomationInput
+	): Promise<Extract<CommandResult, { type: "automation.configured" }>> {
+		return this.#serializeCommand(`automation:configure:${input.sessionId}:${input.automationId}`, () => {
+			const now = this.#clock();
+			const { objective, successCriteria, maxRounds, plan } = automationConfiguration(input);
+			const hash = commandHash({
+				type: "automation.update",
+				sessionId: input.sessionId,
+				automationId: input.automationId,
+				expectedUpdatedAt: input.expectedUpdatedAt,
+				title: input.title,
+				objective,
+				schedule: input.schedule,
+				successCriteria,
+				maxRounds,
+				plan,
+				execution: input.execution,
+			});
+			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
+			if (existing) return existing as Extract<CommandResult, { type: "automation.configured" }>;
+			const automation = this.store.loadAutomation(input.automationId);
+			if (!automation || automation.parentSessionId !== input.sessionId)
+				throw new OrchestratorError("not_found", `Automation ${input.automationId} does not exist`);
+			if (automation.updatedAt !== input.expectedUpdatedAt)
+				throw new OrchestratorError("conflict", `Automation ${input.automationId} changed concurrently`);
+			const parent = this.store.loadSnapshot(input.sessionId);
+			if (!parent) throw new OrchestratorError("not_found", `Session ${input.sessionId} does not exist`);
+			if (parent.session.archivedAt !== undefined)
+				throw new OrchestratorError("conflict", "Archived sessions cannot update automations");
+			const updated: DurableGoalAutomation = {
+				id: automation.id,
+				parentSessionId: automation.parentSessionId,
+				title: (input.title?.trim() || objective.replace(/\s+/g, " ").slice(0, 80)).slice(0, 500),
+				objective,
+				schedule: input.schedule,
+				enabled: automation.enabled,
+				...(input.execution
+					? { execution: input.execution }
+					: automation.execution
+						? { execution: automation.execution }
+						: {}),
+				createdAt: automation.createdAt,
+				updatedAt: Math.max(now, automation.updatedAt + 1),
+				...(automation.lastRunAt === undefined ? {} : { lastRunAt: automation.lastRunAt }),
+				...(isDeepStrictEqual(automation.schedule, input.schedule)
+					? automation.nextRunAt === undefined
+						? {}
+						: { nextRunAt: automation.nextRunAt }
+					: { nextRunAt: initialAutomationRun(input.schedule, now) }),
+				...(successCriteria === undefined || maxRounds === undefined ? {} : { successCriteria, maxRounds }),
+				...(plan === undefined ? {} : { plan }),
+			};
+			const result = { type: "automation.configured", automation: summarizeAutomation(updated) } as const;
+			return this.store.commitAutomationMutation({
+				automation: updated,
+				expectedUpdatedAt: input.expectedUpdatedAt,
+				requireUnarchived: true,
+				idempotency: {
+					principalId: input.principalId,
+					key: input.idempotencyKey,
+					commandHash: hash,
+					result,
+					expiresAt: now + this.#idempotencyTtlMs,
+				},
+			}).result as Extract<CommandResult, { type: "automation.configured" }>;
+		});
+	}
+
+	/** Removes the schedule and its run records, but retains historical Goals and sessions. */
+	async deleteAutomation(
+		input: DeleteAutomationInput
+	): Promise<Extract<CommandResult, { type: "automation.deleted" }>> {
+		return this.#serializeCommand(`automation:configure:${input.sessionId}:${input.automationId}`, () => {
+			const now = this.#clock();
+			const hash = commandHash({
+				type: "automation.delete",
+				sessionId: input.sessionId,
+				automationId: input.automationId,
+				expectedUpdatedAt: input.expectedUpdatedAt,
+			});
+			const result = { type: "automation.deleted", automationId: input.automationId } as const;
+			return this.store.deleteAutomation({
+				automationId: input.automationId,
+				parentSessionId: input.sessionId,
+				expectedUpdatedAt: input.expectedUpdatedAt,
+				now,
+				isRunFinished: (run) => this.#isAutomationRunFinished(run),
+				idempotency: {
+					principalId: input.principalId,
+					key: input.idempotencyKey,
+					commandHash: hash,
+					result,
+					expiresAt: now + this.#idempotencyTtlMs,
+				},
+			}).result as Extract<CommandResult, { type: "automation.deleted" }>;
 		});
 	}
 
@@ -1599,6 +1777,7 @@ export class SessionOrchestrator {
 			};
 			const result = { type: "automation.triggered", run: initialRun } as const;
 			return this.store.claimManualAutomationRun({
+				isRunFinished: (run) => this.#isAutomationRunFinished(run),
 				automationId: automation.id,
 				runId,
 				trigger: "manual",
@@ -1621,6 +1800,27 @@ export class SessionOrchestrator {
 		if (!automation || automation.parentSessionId !== parentSessionId)
 			throw new OrchestratorError("not_found", `Automation ${automationId} does not exist`);
 		return this.store.listAutomationRuns(automationId, limit).map((run) => this.#summarizeAutomationRun(run));
+	}
+
+	#isAutomationRunFinished(run: DurableAutomationRun): boolean {
+		if (!["completed", "failed", "cancelled"].includes(this.#summarizeAutomationRun(run).status)) return false;
+		const goal = run.goalId ? this.store.loadGoal(run.goalId) : undefined;
+		if (!goal) return run.dispatchError !== undefined;
+		// Cancellation/failure can be visible before workers have actually stopped.
+		const goals = [goal, ...(goal.plan ? this.store.listPlanStepGoals(goal.id) : [])];
+		return goals.every((candidate) => {
+			const operation = candidate.operationId ? this.store.getOperation(candidate.operationId) : undefined;
+			if (operation && (operation.status === "queued" || operation.status === "running")) return false;
+			const sessions = [
+				candidate.runSessionId,
+				...(candidate.review?.runs.flatMap((round) => [round.workerSessionId, round.reviewerSessionId]) ?? []),
+			];
+			return sessions.every(
+				(sessionId) =>
+					!sessionId ||
+					(!this.store.getRunningOperation(sessionId) && this.store.countQueuedOperations(sessionId) === 0)
+			);
+		});
 	}
 
 	#summarizeAutomationRun(run: DurableAutomationRun): AutomationRunSummary {
@@ -1691,10 +1891,19 @@ export class SessionOrchestrator {
 		});
 	}
 
-	async runDueAutomations(now = this.#clock(), limit = 20): Promise<number> {
+	get hasAutomationDispatches(): boolean {
+		return this.#automationDispatches.size > 0;
+	}
+
+	async settleAutomationDispatches(): Promise<void> {
+		await Promise.allSettled(this.#automationDispatches);
+	}
+
+	async runDueAutomations(now = this.#clock(), limit = 20, waitForCompletion = true): Promise<number> {
 		const claimed: DurableAutomationRun[] = [];
 		for (const automation of this.store.listDueAutomations(now, limit)) {
 			const run = this.store.claimScheduledAutomationRun({
+				isRunFinished: (run) => this.#isAutomationRunFinished(run),
 				automationId: automation.id,
 				runId: this.#idFactory(),
 				scheduledFor: automation.nextRunAt!,
@@ -1702,7 +1911,7 @@ export class SessionOrchestrator {
 			});
 			if (run) claimed.push(run);
 		}
-		await Promise.all(
+		const dispatch = Promise.all(
 			claimed.map((run) =>
 				this.dispatchAutomationRun(run.id).catch((error) => {
 					if (!(error instanceof OrchestratorError && error.code === "lease_conflict"))
@@ -1713,7 +1922,13 @@ export class SessionOrchestrator {
 						});
 				})
 			)
+		).then(() => undefined);
+		this.#automationDispatches.add(dispatch);
+		void dispatch.then(
+			() => this.#automationDispatches.delete(dispatch),
+			() => this.#automationDispatches.delete(dispatch)
 		);
+		if (waitForCompletion) await dispatch;
 		return claimed.length;
 	}
 
@@ -2012,8 +2227,19 @@ export class SessionOrchestrator {
 			}
 			const task = goal.ownerGoalId ? this.#goalPlanStepExecutionPrompt(goal) : goal.objective;
 			const stepBudget = this.#goalPlanStepBudget(goal);
+			const execution = this.store.loadAutomationRunForGoal(goal.id)?.spec.execution;
+			const executionParent = execution
+				? {
+						...parent,
+						session: { ...parent.session, workspaceId: execution.workspaceId },
+						model: execution.model,
+						thinkingLevel: "off" as const,
+						sandboxMode: "unrestricted" as const,
+						approvalPolicy: "never" as const,
+					}
+				: parent;
 			const prepared = this.#prepareSubagent(
-				parent,
+				executionParent,
 				{
 					task,
 					name: `Goal: ${goal.title}`.slice(0, 500),
@@ -3873,9 +4099,6 @@ export class SessionOrchestrator {
 		if (input.mode === "prompt" && current.session.phase !== "idle") {
 			throw new OrchestratorError("conflict", `Session ${input.sessionId} is not idle`);
 		}
-		if (input.mode !== "prompt" && current.session.phase === "idle") {
-			throw new OrchestratorError("conflict", `${input.mode} requires an active turn`);
-		}
 
 		const userItemId = this.#idFactory();
 		const events: SessionEvent[] = [];
@@ -3897,7 +4120,7 @@ export class SessionOrchestrator {
 		events.push(itemEvent);
 		snapshot = reduceSessionEvent(snapshot, itemEvent);
 
-		if (input.mode === "prompt") {
+		if (input.mode === "prompt" || current.session.phase === "idle") {
 			const phaseEvent: SessionEvent = {
 				type: "session.phase.changed",
 				eventId: this.#idFactory(),
@@ -3908,7 +4131,8 @@ export class SessionOrchestrator {
 			};
 			events.push(phaseEvent);
 			snapshot = reduceSessionEvent(snapshot, phaseEvent);
-		} else {
+		}
+		if (input.mode !== "prompt") {
 			const queueEvent: SessionEvent = {
 				type: "session.queue.changed",
 				eventId: this.#idFactory(),
@@ -3985,6 +4209,7 @@ export class SessionOrchestrator {
 			events,
 			snapshot,
 			operation,
+			...(input.mode === "steer" ? { interruptRunningOperation: STEER_INTERRUPTION_REASON } : {}),
 			...(goal === undefined
 				? {}
 				: {
@@ -4006,6 +4231,12 @@ export class SessionOrchestrator {
 			},
 		});
 		if (!committed.result) throw new OrchestratorError("conflict", `Turn ${operation.id} did not persist a result`);
+		if (input.mode === "steer" && !committed.deduplicated) {
+			const active = this.#activeTurns.get(input.sessionId);
+			if (active && this.store.getOperation(active.operationId)?.abortRequested) {
+				active.controller.abort(new Error(STEER_INTERRUPTION_REASON));
+			}
+		}
 		return committed.result;
 	}
 
@@ -4074,6 +4305,21 @@ export class SessionOrchestrator {
 		let completed = 0;
 		try {
 			for (;;) {
+				// A recovered approval can be waiting without an in-process runtime to abort.
+				const interrupted = this.store.getRunningOperation(sessionId);
+				if (interrupted && !interrupted.abortRequested) break;
+				if (interrupted?.abortRequested) {
+					for (const approval of this.store.listApprovalExecutionsForOperation(interrupted.id)) {
+						this.store.interruptApprovalExecution(approval.approvalId, this.#clock());
+					}
+					this.#commitRuntimeFailure(
+						interrupted,
+						lease,
+						interrupted.error === STEER_INTERRUPTION_REASON ? STEER_INTERRUPTION_REASON : "Turn aborted by user",
+						true,
+						true
+					);
+				}
 				const operation = this.store.claimNextOperation(sessionId, this.#clock(), traceId);
 				if (!operation) break;
 				this.#logger.log("info", "orchestrator.operation.claimed", {
@@ -4252,7 +4498,9 @@ export class SessionOrchestrator {
 		const checkAbortRequest = () => {
 			const persisted = this.store.getOperation(operation.id);
 			if (persisted?.abortRequested && !abortController.signal.aborted) {
-				abortController.abort(new Error("Turn aborted by user"));
+				abortController.abort(
+					new Error(persisted.error === STEER_INTERRUPTION_REASON ? STEER_INTERRUPTION_REASON : "Turn aborted by user")
+				);
 			}
 		};
 		checkAbortRequest();
@@ -4268,11 +4516,10 @@ export class SessionOrchestrator {
 			},
 			Math.max(10, Math.floor(this.#leaseTtlMs / 3))
 		);
-		const timeout = setTimeout(() => abortController.abort(new Error("Turn timed out")), this.#turnTimeoutMs);
-		const injectionStop = new AbortController();
-		const injectionPump = this.runtime.injectTurn
-			? this.#pumpInjectedOperations(operation.sessionId, abortController.signal, injectionStop.signal)
-			: Promise.resolve();
+		const timeout =
+			this.#turnTimeoutMs > 0
+				? setTimeout(() => abortController.abort(new Error("Turn timed out")), this.#turnTimeoutMs)
+				: undefined;
 		const checkpoint = new TranscriptCheckpoint(
 			(items) => {
 				const current = this.store.loadSnapshot(operation.sessionId);
@@ -4425,8 +4672,6 @@ export class SessionOrchestrator {
 					durableTraceId
 				);
 				if (result.tools) operation = { ...operation, tools: mergeTools(operation.tools, result.tools) ?? [] };
-				injectionStop.abort();
-				await injectionPump;
 				if (leaseFailure) throw leaseFailure;
 				if (abortController.signal.aborted) throw abortController.signal.reason;
 				checkpoint.flush();
@@ -4583,12 +4828,14 @@ export class SessionOrchestrator {
 				return lease;
 			}
 		} catch (error) {
-			injectionStop.abort();
-			await injectionPump;
 			if (leaseFailure) throw leaseFailure;
 			checkpoint.flush();
 			checkpoint.close();
 			const aborted = this.store.getOperation(operation.id)?.abortRequested ?? false;
+			const interruptionMessage =
+				this.store.getOperation(operation.id)?.error === STEER_INTERRUPTION_REASON
+					? STEER_INTERRUPTION_REASON
+					: "Turn aborted by user";
 			const failureKind = aborted
 				? "user_abort"
 				: error instanceof OrchestratorError && error.code === "budget_exceeded"
@@ -4604,7 +4851,7 @@ export class SessionOrchestrator {
 						mode: operation.payload.mode,
 						attempt: operation.attempt,
 						failureKind,
-						error: (aborted ? "Turn aborted by user" : errorMessage(error)).slice(0, 1000),
+						error: (aborted ? interruptionMessage : errorMessage(error)).slice(0, 1000),
 						willRetry: false,
 					},
 					abortController.signal,
@@ -4622,9 +4869,9 @@ export class SessionOrchestrator {
 			this.#commitRuntimeFailure(
 				operation,
 				lease,
-				aborted ? "Turn aborted by user" : errorMessage(error),
+				aborted ? interruptionMessage : errorMessage(error),
 				aborted,
-				false,
+				aborted,
 				undefined,
 				undefined,
 				undefined,
@@ -4646,7 +4893,7 @@ export class SessionOrchestrator {
 		} finally {
 			checkpoint.close();
 			clearInterval(heartbeat);
-			clearTimeout(timeout);
+			if (timeout !== undefined) clearTimeout(timeout);
 			clearInterval(abortPoll);
 			if (this.#activeTurns.get(operation.sessionId) === activeTurn) this.#activeTurns.delete(operation.sessionId);
 		}
@@ -4693,119 +4940,6 @@ export class SessionOrchestrator {
 			if (graceTimer) clearTimeout(graceTimer);
 			if (terminateTimer) clearTimeout(terminateTimer);
 		}
-	}
-
-	async #pumpInjectedOperations(sessionId: string, turnSignal: AbortSignal, stopSignal: AbortSignal): Promise<void> {
-		const injectTurn = this.runtime.injectTurn;
-		if (!injectTurn) return;
-		while (!stopSignal.aborted && !turnSignal.aborted) {
-			let operation = this.store.claimNextOperation(sessionId, this.#clock());
-			if (!operation) {
-				await waitForWork(75, stopSignal);
-				continue;
-			}
-			if (operation.payload.mode === "prompt") {
-				this.store.requeueOperation(operation.id, this.#clock());
-				return;
-			}
-			const snapshot = this.store.loadSnapshot(sessionId);
-			if (!snapshot) throw new OrchestratorError("not_found", `Session ${sessionId} does not exist`);
-			try {
-				operation = await this.#ensureCapabilityPlan(operation, snapshot, turnSignal, operation.traceId);
-				operation = await this.#ensureContextPlan(operation, snapshot, turnSignal, operation.traceId);
-				await this.#dispatchOperationHooks(
-					"operation.before_execute",
-					operation,
-					{
-						mode: operation.payload.mode,
-						attempt: operation.attempt,
-						model: snapshot.model,
-						sandboxMode: snapshot.sandboxMode,
-						approvalPolicy: snapshot.approvalPolicy,
-						capabilityPlanDigest: operation.capabilityPlan?.digest ?? "",
-						contextPlanDigest: operation.contextPlan?.digest ?? "",
-						injected: true,
-					},
-					turnSignal,
-					operation.traceId
-				);
-				await injectTurn.call(this.runtime, {
-					operation,
-					snapshot,
-					signal: turnSignal,
-					...(operation.capabilityPlan === undefined ? {} : { capabilityPlan: operation.capabilityPlan }),
-					...(operation.contextPlan === undefined ? {} : { contextPlan: operation.contextPlan }),
-				});
-				await this.#dispatchOperationHooks(
-					"operation.after_execute",
-					operation,
-					{
-						mode: operation.payload.mode,
-						attempt: operation.attempt,
-						itemCount: 0,
-						usage: null,
-						tools: [],
-						injected: true,
-					},
-					turnSignal,
-					operation.traceId
-				);
-				this.#commitInjectedOperation(operation, turnSignal.aborted);
-			} catch (error) {
-				try {
-					await this.#dispatchOperationHooks(
-						"operation.on_error",
-						operation,
-						{
-							mode: operation.payload.mode,
-							attempt: operation.attempt,
-							failureKind: "unknown",
-							error: errorMessage(error).slice(0, 1000),
-							willRetry: true,
-							injected: true,
-						},
-						turnSignal,
-						operation.traceId,
-						false
-					);
-				} catch (hookError) {
-					this.#logger.log("warn", "orchestrator.hook.error_dispatch_failed", {
-						sessionId,
-						operationId: operation.id,
-						error: errorMessage(hookError),
-						...(operation.traceId === undefined ? {} : { traceId: operation.traceId }),
-					});
-				}
-				this.store.requeueOperation(operation.id, this.#clock(), errorMessage(error));
-				return;
-			}
-		}
-	}
-
-	#commitInjectedOperation(operation: DurableOperation, interrupted: boolean): void {
-		const current = this.store.loadSnapshot(operation.sessionId);
-		if (!current) throw new OrchestratorError("not_found", `Session ${operation.sessionId} does not exist`);
-		const now = this.#clock();
-		const event: SessionEvent = {
-			type: "session.queue.changed",
-			eventId: this.#idFactory(),
-			sessionId: operation.sessionId,
-			revision: current.revision + 1,
-			timestamp: now,
-			queuedSteerCount: Math.max(0, current.queuedSteerCount - (operation.payload.mode === "steer" ? 1 : 0)),
-			queuedFollowUpCount: Math.max(0, current.queuedFollowUpCount - (operation.payload.mode === "follow_up" ? 1 : 0)),
-		};
-		this.store.commitMutation({
-			sessionId: operation.sessionId,
-			expectedRevision: current.revision,
-			events: [event],
-			snapshot: reduceSessionEvent(current, event),
-			settleOperation: {
-				id: operation.id,
-				status: interrupted ? "interrupted" : "completed",
-				...(interrupted ? { error: "active turn aborted" } : {}),
-			},
-		});
 	}
 
 	#appendRequestUsage(

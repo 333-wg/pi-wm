@@ -4,6 +4,7 @@ import { WebEvidenceSchema, type WebEvidence } from "@wuming/protocol";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, Usage as PiUsage } from "@earendil-works/pi-ai";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
+import { providerErrorMessage as errorMessage } from "./provider-error.js";
 import { CapabilityRegistry, type CapabilityManifest, type CapabilityPlan } from "@wuming/capability-kernel";
 import { ContextEngine, type ContextAssembly, type ContextFragment } from "@wuming/context-engine";
 import type { AgentRuntime, DurableOperation, RuntimeCompactionRecord, RuntimeTurnResult } from "@wuming/orchestrator";
@@ -179,15 +180,6 @@ function operationContent(operation: DurableOperation, snapshot: SessionSnapshot
 	];
 }
 
-function errorMessage(error: unknown): string {
-	const raw = error instanceof Error ? error.message : String(error);
-	return raw
-		.replace(/Bearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
-		.replace(/\b(sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/g, "$1-[REDACTED]")
-		.replace(/((?:api[_ -]?key|authorization)\s*[=:]\s*)[^\s,;]+/gi, "$1[REDACTED]")
-		.slice(0, 4000);
-}
-
 function assistantErrorMessage(message: AssistantMessage): string | undefined {
 	const malformedBrowserCall = message.content.some((part) => {
 		if (part.type !== "toolCall" || part.name !== "browser_open") return false;
@@ -218,7 +210,7 @@ function providerFailure(
 			? candidate.status
 			: typeof candidate.statusCode === "number"
 				? candidate.statusCode
-				: undefined;
+				: Number(message.match(/\bHTTP ([45]\d{2})\b/)?.[1]) || undefined;
 	const code = typeof candidate.code === "string" ? candidate.code : "";
 	const text = `${code} ${message}`.toLowerCase();
 	if (
@@ -888,6 +880,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 					id: "tool:" + event.toolCallId,
 					type: "tool",
 					createdAt: toolStartedAt.get(event.toolCallId) ?? this.#clock(),
+					lastProgressAt: this.#clock(),
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
 					status: "running",
