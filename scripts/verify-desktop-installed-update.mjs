@@ -233,7 +233,12 @@ try {
 			updater.setFeedURL({ provider: "generic", url: options.feed });
 			const originalSpawn = updater.spawnLog.bind(updater);
 			updater.spawnLog = async (command, args, ...rest) => {
-				if (command !== updater.installerPath || !args.includes("/S") || !args.includes("--force-run"))
+				if (
+					command !== updater.installerPath ||
+					!args.includes("--updated") ||
+					!args.includes("--force-run") ||
+					args.some((arg) => !["--updated", "--force-run", "/S"].includes(arg))
+				)
 					throw new Error("Unexpected installation command");
 				require("node:fs").writeFileSync(
 					options.handoff,
