@@ -403,6 +403,13 @@ export const PromptCacheDiagnosticSchema = StrictObject({
 });
 export type PromptCacheDiagnostic = Static<typeof PromptCacheDiagnosticSchema>;
 
+export const CacheUsageEvidenceSchema = StrictObject({
+	source: Type.Union([Type.Literal("provider_response"), Type.Literal("unavailable")]),
+	read: Type.Union([Type.Literal("reported"), Type.Literal("unknown")]),
+	write: Type.Union([Type.Literal("reported"), Type.Literal("unknown")]),
+});
+export type CacheUsageEvidence = Static<typeof CacheUsageEvidenceSchema>;
+
 export const UsageRequestSummarySchema = StrictObject({
 	requestId: Id,
 	model: ModelRefSchema,
@@ -411,6 +418,9 @@ export const UsageRequestSummarySchema = StrictObject({
 	finishedAt: Type.Optional(Timestamp),
 	firstContentAt: Type.Optional(Timestamp),
 	cacheDiagnostic: Type.Optional(PromptCacheDiagnosticSchema),
+	cacheUsageEvidence: Type.Optional(CacheUsageEvidenceSchema),
+	purpose: Type.Optional(Type.Union([Type.Literal("inference"), Type.Literal("compaction")])),
+	dataSource: Type.Optional(Type.Union([Type.Literal("provider"), Type.Literal("demo")])),
 	status: Type.Optional(
 		Type.Union([Type.Literal("pending"), Type.Literal("complete"), Type.Literal("error"), Type.Literal("aborted")])
 	),

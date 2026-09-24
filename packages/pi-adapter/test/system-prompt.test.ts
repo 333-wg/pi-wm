@@ -1,7 +1,11 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { buildWumingSystemPrompt, type WumingSystemPromptOptions } from "../src/system-prompt.js";
+import {
+	buildWumingSystemPrompt,
+	refreshWumingSystemDate,
+	type WumingSystemPromptOptions,
+} from "../src/system-prompt.js";
 
 type PromptTool = WumingSystemPromptOptions["tools"][number];
 
@@ -247,6 +251,25 @@ describe("buildWumingSystemPrompt guidelines", () => {
 });
 
 describe("buildWumingSystemPrompt environment", () => {
+	it("refreshes only the owned date through successive days and preserves appended policy", () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(new Date("2026-09-24T15:59:00Z"));
+			const base = build(fullToolset);
+			const suffix = "\n\nPOLICY: retain the literal date 2026-09-24\n<current_date>\nquoted date\n</current_date>";
+			let active = base + suffix;
+			expect(refreshWumingSystemDate(active, base)).toBe(active);
+			for (const day of [25, 26]) {
+				vi.setSystemTime(new Date(`2026-09-${day}T04:00:00Z`));
+				active = refreshWumingSystemDate(active, base);
+				expect(active).toBe(build(fullToolset) + suffix);
+			}
+			expect(refreshWumingSystemDate("custom " + base, base)).toBe("custom " + base);
+			expect(refreshWumingSystemDate("custom", "custom")).toBe("custom");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	it.each([
 		{ tools: [] },
 		{ tools: [tool("subagent")] },

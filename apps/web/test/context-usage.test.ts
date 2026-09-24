@@ -163,6 +163,65 @@ describe("context cache details", () => {
 		expect(value.cache?.requestCount).toBe(1);
 		expect(value.cache?.session.inputTokens).toBe(90000);
 	});
+	it("does not turn unknown zeros into misses or mix compaction into inference", () => {
+		const requests = [
+			{ requestId: "unknown", model, usage: { ...usage, inputTokens: 900 } },
+			{
+				requestId: "known",
+				model,
+				purpose: "inference" as const,
+				usage: { ...usage, inputTokens: 100, cacheReadTokens: 900 },
+				cacheUsageEvidence: {
+					source: "provider_response" as const,
+					read: "reported" as const,
+					write: "unknown" as const,
+				},
+			},
+			{ requestId: "summary", model, purpose: "compaction" as const, usage: { ...usage, inputTokens: 5000 } },
+		];
+		const value = estimateContext({ ...snapshot, usageRequests: requests }, 128000)!;
+		expect(value.cache).toMatchObject({
+			requestCount: 2,
+			knownRequestCount: 1,
+			knownInputTokens: 1000,
+			compactionCount: 1,
+			session: { inputTokens: 1900, hitRatio: 0.9, readKnown: false },
+			latest: { hitRatio: 0.9 },
+		});
+		const unknown = estimateContext({ ...snapshot, usageRequests: [requests[0]!] }, 128000)!;
+		expect(unknown.cache?.latest?.hitRatio).toBeNull();
+		expect(unknown.cache?.session.hitRatio).toBeNull();
+		expect(renderToStaticMarkup(createElement(ContextDetails, { usage: unknown }))).toContain("未上报 / 未知");
+		expect(renderToStaticMarkup(createElement(ContextDetails, { usage: value }))).toContain("另有 1 次压缩请求");
+	});
+	it("includes explicit zero reads in the denominator and excludes overwritten unknown reads", () => {
+		const requests = [0, 1000].map((cacheReadTokens, index) => ({
+			requestId: `observed-${index}`,
+			model,
+			usage: { ...usage, inputTokens: 1000 - cacheReadTokens, cacheReadTokens },
+			cacheUsageEvidence: {
+				source: "provider_response" as const,
+				read: "reported" as const,
+				write: "unknown" as const,
+			},
+		}));
+		const value = estimateContext({ ...snapshot, usageRequests: requests }, 128000)!;
+		expect(value.cache).toMatchObject({ knownRequestCount: 2, knownInputTokens: 2000, session: { hitRatio: 0.5 } });
+		expect(renderToStaticMarkup(createElement(ContextDetails, { usage: value }))).toContain("50.0%");
+		const overwritten = {
+			...requests[0]!,
+			requestId: "overwritten",
+			cacheUsageEvidence: { source: "provider_response" as const, read: "unknown" as const, write: "unknown" as const },
+		};
+		const withUnknown = estimateContext({ ...snapshot, usageRequests: [...requests, overwritten] }, 128000)!;
+		expect(withUnknown.cache).toMatchObject({
+			requestCount: 3,
+			knownRequestCount: 2,
+			knownInputTokens: 2000,
+			latest: { hitRatio: null },
+			session: { hitRatio: 0.5 },
+		});
+	});
 	it("uses all input categories but excludes output from the hit ratio", () => {
 		expect(cacheUsage({ inputTokens: 100, cacheReadTokens: 800, cacheWriteTokens: 100 })).toEqual({
 			inputTokens: 1000,
@@ -185,8 +244,18 @@ describe("context cache details", () => {
 					{
 						...turn,
 						requests: [
-							{ requestId: "r1", model, usage: first },
-							{ requestId: "r2", model, usage: last },
+							{
+								requestId: "r1",
+								model,
+								usage: first,
+								cacheUsageEvidence: { source: "provider_response", read: "reported", write: "reported" },
+							},
+							{
+								requestId: "r2",
+								model,
+								usage: last,
+								cacheUsageEvidence: { source: "provider_response", read: "reported", write: "reported" },
+							},
 						],
 					},
 				],

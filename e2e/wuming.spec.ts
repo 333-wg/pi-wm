@@ -125,7 +125,7 @@ async function sendMessage(page: Page, message: string): Promise<void> {
 }
 
 async function waitForIdle(page: Page): Promise<void> {
-	await expect(page.locator(".session-entry.selected .dot-idle")).toHaveCount(1);
+	await expect(page.locator(".session-entry.selected")).toHaveAttribute("data-phase", "idle");
 }
 
 test.beforeAll(async () => {
@@ -201,6 +201,24 @@ test(firstConnectionTitle, async ({ page }) => {
 	await page.reload();
 	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
 	await expect(page.getByRole("dialog", { name: "首次设置" })).toBeHidden();
+});
+
+test("subtasks use the heading network icon instead of the changes branch icon", async ({ page }) => {
+	await createSession(page);
+	for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+		await page.setViewportSize(viewport);
+		const subtasks = page.getByRole("tab", { name: "子任务", exact: true });
+		const changes = page.getByRole("tab", { name: "更改", exact: true });
+		await expect(subtasks.locator("svg.lucide-network")).toHaveCount(1);
+		await expect(subtasks.locator("svg.lucide-git-branch")).toHaveCount(0);
+		await expect(changes.locator("svg.lucide-git-branch")).toHaveCount(1);
+		await subtasks.click();
+		await expect(subtasks).toHaveAttribute("aria-selected", "true");
+		await expect(page.locator(".teams-heading > div > svg.lucide-network")).toBeVisible();
+		await page.screenshot({ path: `test-results/subtasks-icon-${viewport.width}.png` });
+		await changes.click();
+		await expect(changes).toHaveAttribute("aria-selected", "true");
+	}
 });
 
 test("starts projectless and groups imported projects", async ({ page }) => {
@@ -413,7 +431,7 @@ for (const viewport of [
 	});
 }
 
-test("edits in the current session and only creates a fork when explicitly requested", async ({ page }) => {
+test("keeps forks out of message actions while retaining editing and conversation-level forking", async ({ page }) => {
 	await createSession(page);
 	const originalName = await page.locator(".session-entry.selected .session-open span").innerText();
 	await sendMessage(page, "第一问");
@@ -425,6 +443,9 @@ test("edits in the current session and only creates a fork when explicitly reque
 	await expect(page.getByText("Demo runtime received: 第二问")).toBeVisible();
 	await waitForIdle(page);
 	const originalCount = await page.locator(".session-entry").count();
+	await expect(page.locator(".message-actions").getByRole("button", { name: "从这里分叉出新会话" })).toHaveCount(0);
+	await expect(page.locator(".message-row.user").first().locator(".message-actions button")).toHaveCount(2);
+	await expect(page.locator(".message-row.assistant").first().locator(".message-actions button")).toHaveCount(1);
 
 	// The action row is faded until its message is hovered *or* focused, so
 	// focusing a button has to reveal it: that is what keeps these reachable
@@ -454,15 +475,12 @@ test("edits in the current session and only creates a fork when explicitly reque
 	await expect(page.getByText("Demo runtime received: 第一问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第二问")).toHaveCount(0);
 
-	// Forking at a reply keeps that reply — `session.fork` includes the item it is
-	// given — and drops the turn that followed it.
-	const firstReply = page.locator(".message-row.assistant").first();
-	await firstReply.hover();
-	await firstReply.getByRole("button", { name: "从这里分叉出新会话" }).click();
+	// The separate conversation-level action still forks the entire transcript.
+	await page.getByRole("button", { name: "派生会话", exact: true }).click();
 	await expect(page.locator(".session-entry.selected .session-open")).toHaveText(`${originalName} (fork)`);
 	await expect(page.locator(".session-entry")).toHaveCount(originalCount + 1);
 	await expect(page.getByText("Demo runtime received: 第一问")).toBeVisible();
-	await expect(page.getByText("Demo runtime received: 改写的第二问")).toHaveCount(0);
+	await expect(page.getByText("Demo runtime received: 改写的第二问")).toBeVisible();
 
 	// Editing the first message also retains the current conversation identity.
 	const firstPrompt = page.locator(".message-row.user").first();
@@ -478,6 +496,8 @@ test("edits in the current session and only creates a fork when explicitly reque
 	await page.setViewportSize({ width: 390, height: 844 });
 	await page.locator(".rail-mobile-close").click();
 	await expect(page.getByText("Demo runtime received: 重写第一问")).toBeVisible();
+	await expect(page.locator(".message-actions").getByRole("button", { name: "从这里分叉出新会话" })).toHaveCount(0);
+	await expect(page.locator(".message-row.user").first().getByRole("button", { name: "编辑并重新发送" })).toBeEnabled();
 	await page.screenshot({ path: "test-results/edit-current-session-mobile.png" });
 });
 
@@ -636,6 +656,46 @@ test("immediate input interrupts active work and overtakes queued follow-ups", a
 	await page.locator(".rail-mobile-close").click();
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 	await page.screenshot({ path: "test-results/turn-scheduling-mobile.png", fullPage: true });
+});
+
+test("deleting a queued follow-up synchronizes recent runs in both clients", async ({ page }) => {
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await createSession(page);
+	await sendMessage(page, "/inject");
+	await expect(page.getByRole("status", { name: "正在处理请求" })).toBeVisible();
+	await sendMessage(page, "delete this queued follow-up");
+	const queue = page.getByRole("region", { name: "后续任务队列" });
+	const run = page.locator(".run-row").filter({ hasText: "后续任务" });
+	await expect(queue).toContainText("delete this queued follow-up");
+	await expect(run).toContainText("排队中");
+
+	const observer = await page.context().newPage();
+	try {
+		await observer.goto(page.url());
+		await expect(observer.getByRole("region", { name: "后续任务队列" })).toBeVisible();
+		const observedRun = observer.locator(".run-row").filter({ hasText: "后续任务" });
+		await expect(observedRun).toContainText("排队中");
+		await queue.getByRole("button", { name: "删除待发送任务" }).click();
+		await expect(queue).toBeHidden();
+		await expect(run).toContainText("中断");
+		await expect(run).not.toContainText("排队中");
+		await expect(observer.getByRole("region", { name: "后续任务队列" })).toBeHidden();
+		await expect(observedRun).toContainText("中断");
+		await expect(page.getByRole("status", { name: "正在处理请求" })).toBeVisible();
+		await page.screenshot({ path: "test-results/follow-up-delete-desktop.png", fullPage: true });
+		await page.setViewportSize({ width: 390, height: 844 });
+		await expect(run).toBeVisible();
+		await page.screenshot({ path: "test-results/follow-up-delete-mobile.png", fullPage: true });
+		await page.locator(".rail-mobile-close").click();
+		await page.getByRole("button", { name: "停止任务" }).click();
+		await waitForIdle(page);
+		await expect(page.getByText(/Demo runtime received: delete this queued follow-up/)).toHaveCount(0);
+		await page.reload();
+		await page.getByRole("button", { name: "显示或隐藏运行面板" }).click();
+		await expect(run).toContainText("中断");
+	} finally {
+		await observer.close();
+	}
 });
 
 test("follow-up input waits for active work to finish before starting", async ({ page }) => {

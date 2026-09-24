@@ -156,6 +156,39 @@ class FakePiSession implements PiSessionLike {
 	}
 }
 
+it.each(["stop", "error"] as const)(
+	"uses the final assistant outcome after in-turn recovery (%s)",
+	async (stopReason) => {
+		const session = new FakePiSession();
+		session.emitScript = async (current) => {
+			for (const message of [
+				{ ...assistant([], "error", 2, 0), errorMessage: "Earlier failure" },
+				{
+					...assistant([{ type: "text", text: "Final response" }], stopReason, 3, 1),
+					...(stopReason === "error" ? { errorMessage: "Final failure" } : {}),
+				},
+			]) {
+				current.emit({ type: "message_start", message });
+				current.emit({ type: "message_end", message });
+			}
+		};
+		const runtime = new PiAgentRuntime({ createSession: async () => session });
+		const result = await runtime.executeTurn({
+			operation: operation([{ type: "text", text: "recover" }]),
+			snapshot,
+			signal: new AbortController().signal,
+			onProgress: () => {},
+		});
+		if (stopReason === "stop") expect(result.failure).toBeUndefined();
+		else expect(result.failure?.message).toBe("Final failure");
+		expect(result.requests?.map((request) => request.status)).toEqual([
+			"error",
+			stopReason === "stop" ? "complete" : "error",
+		]);
+		expect(result.usage?.inputTokens).toBe(5);
+	}
+);
+
 it("records request timing, first content and failure without carrying timing into the next request", async () => {
 	const session = new FakePiSession();
 	const observations: UsageRequestSummary[] = [];
@@ -385,6 +418,8 @@ it("captures native automatic compaction summaries and accounts for their model 
 	expect(result.requests).toEqual([
 		{
 			requestId: "compaction-request-1",
+			purpose: "compaction",
+			dataSource: "provider",
 			model: snapshot.model,
 			usage: expect.objectContaining({ totalTokens: 25 }),
 		},

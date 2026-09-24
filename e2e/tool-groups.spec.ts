@@ -100,6 +100,12 @@ test("keeps progress visible between mixed activity groups with details accessib
 	await page.reload();
 	// Projectless startup intentionally opens a draft; reopen the saved conversation.
 	await page.locator(".session-open").filter({ hasText: "检查项目文件" }).click();
+	const processSummary = page.locator(".turn-process-summary");
+	await expect(processSummary).toHaveAttribute("aria-expanded", "false");
+	await expect(page.getByText("我会先检查页面和数据接口，确认问题出现在哪一层。", { exact: true })).toBeHidden();
+	await expect(page.locator(".message-row.assistant").filter({ hasText: "Demo runtime received:" })).toBeVisible();
+	await processSummary.click();
+	await expect(processSummary).toHaveAttribute("aria-expanded", "true");
 	const groups = page.locator(".tool-group");
 	await expect(groups).toHaveCount(2);
 	const summary = groups.first().locator(".tool-group-summary");
@@ -117,7 +123,7 @@ test("keeps progress visible between mixed activity groups with details accessib
 	).toHaveCount(1);
 	expect(
 		await page
-			.locator(".transcript > .message-row, .transcript > .tool-row")
+			.locator(".transcript > .message-row, .turn-process-items > .message-row, .turn-process-items > .tool-row")
 			.evaluateAll((rows) =>
 				rows.map((row) =>
 					row.classList.contains("tool-group") ? "activity" : row.classList.contains("tool-error") ? "error" : "message"
@@ -125,7 +131,7 @@ test("keeps progress visible between mixed activity groups with details accessib
 			)
 	).toEqual(["message", "message", "activity", "message", "activity", "message"]);
 	await expect(summary).toHaveAttribute("aria-expanded", "false");
-	await expect(page.locator(".transcript > .tool-row")).toHaveCount(2);
+	await expect(page.locator(".turn-process-items > .tool-row")).toHaveCount(2);
 	const failedSummary = groups.last().locator(".tool-group-summary");
 	await expect(failedSummary).not.toContainText("失败");
 	await expect(failedSummary).toContainText("3 项操作已结束");
@@ -138,6 +144,12 @@ test("keeps progress visible between mixed activity groups with details accessib
 	for (const width of [1440, 390, 320]) {
 		await page.setViewportSize({ width, height: width < 600 ? 844 : 900 });
 		if (await closeRail.isVisible()) await closeRail.click();
+		await processSummary.click();
+		await expect(page.getByText("我会先检查页面和数据接口，确认问题出现在哪一层。", { exact: true })).toBeHidden();
+		await expect(page.locator(".message-row.assistant").filter({ hasText: "Demo runtime received:" })).toBeVisible();
+		await processSummary.scrollIntoViewIfNeeded();
+		await page.screenshot({ path: testInfo.outputPath("process-collapsed-" + width + ".png") });
+		await processSummary.click();
 		await summary.scrollIntoViewIfNeeded();
 		await page.screenshot({ path: testInfo.outputPath("collapsed-" + width + ".png") });
 		await summary.click();

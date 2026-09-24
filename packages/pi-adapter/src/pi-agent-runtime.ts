@@ -759,6 +759,8 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 					requestId: this.#idFactory(),
 					model: input.snapshot.model,
 					usage: preflightCompaction.usage,
+					purpose: "compaction",
+					dataSource: "provider",
 				});
 			}
 			this.#pendingCompactions.delete(input.snapshot.session.id);
@@ -944,6 +946,9 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				recordRequest({
 					requestId: item.id,
 					...(cacheDiagnostic ? { cacheDiagnostic } : {}),
+					...(session.getCacheUsageEvidence ? { cacheUsageEvidence: session.getCacheUsageEvidence() } : {}),
+					purpose: "inference",
+					dataSource: "provider",
 					model: { provider: assistant.provider, id: assistant.model },
 					usage: mapUsage(assistant.usage),
 					...(requestStartedAt === undefined ? {} : { startedAt: requestStartedAt }),
@@ -1027,7 +1032,13 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				const usage = event.result.usage ? mapUsage(event.result.usage) : undefined;
 				if (usage) {
 					cumulativeUsage = addUsage(cumulativeUsage, usage);
-					recordRequest({ requestId: this.#idFactory(), model: input.snapshot.model, usage });
+					recordRequest({
+						requestId: this.#idFactory(),
+						model: input.snapshot.model,
+						usage,
+						purpose: "compaction",
+						dataSource: "provider",
+					});
 				}
 				compactions.push({
 					reason: event.reason,
@@ -1121,9 +1132,9 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				});
 			}
 			if (input.signal.aborted) throw input.signal.reason;
-			const failed = [...items].reverse().find((item) => item.type === "assistant" && item.status === "error");
-			if (failed?.type === "assistant") {
-				const failedMessage = failed.error ?? "Provider request failed";
+			const lastAssistant = items.findLast((item) => item.type === "assistant");
+			if (lastAssistant?.type === "assistant" && lastAssistant.status === "error") {
+				const failedMessage = lastAssistant.error ?? "Provider request failed";
 				const classified = providerFailure(failedMessage, lastFailedAssistant);
 				return {
 					items,

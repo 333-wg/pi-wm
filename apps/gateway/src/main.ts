@@ -560,6 +560,7 @@ class DemoRuntime implements AgentRuntime {
 				await delay(800, input.signal);
 				const first = {
 					requestId: `${input.operation.id}-request-1`,
+					dataSource: "demo" as const,
 					model: input.snapshot.model,
 					usage: {
 						inputTokens: 100,
@@ -575,6 +576,7 @@ class DemoRuntime implements AgentRuntime {
 				await delay(8000, input.signal);
 				const second = {
 					requestId: `${input.operation.id}-request-2`,
+					dataSource: "demo" as const,
 					model: input.snapshot.model,
 					usage: { ...first.usage, cacheReadTokens: 1900, outputTokens: 20, totalTokens: 2020 },
 				};
@@ -1097,7 +1099,7 @@ async function main(): Promise<void> {
 				const files = fileExecutors.get(snapshot.session.workspaceId);
 				if (!files) throw new Error("Unknown workspace");
 				const fragments: ContextFragment[] = [];
-				const teamContext = agency.teams?.context(snapshot.session.id);
+				const teamContext = agency.teams?.context(snapshot.session.id, "policy");
 				if (teamContext)
 					fragments.push({
 						id: "agent-team",
@@ -1108,6 +1110,19 @@ async function main(): Promise<void> {
 						cacheScope: "session",
 						truncation: "head_tail",
 						content: teamContext,
+					});
+				const teamState = agency.teams?.context(snapshot.session.id, "state");
+				if (teamState)
+					fragments.push({
+						id: "agent-team-state",
+						version: createHash("sha256").update(teamState).digest("hex"),
+						kind: "workspace",
+						source: "builtin:agent-team-state",
+						priority: 500,
+						cacheScope: "turn",
+						delivery: "user",
+						truncation: "head_tail",
+						content: teamState,
 					});
 				if (computer?.status().enabled)
 					fragments.push({

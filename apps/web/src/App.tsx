@@ -65,6 +65,7 @@ import {
 	Menu,
 	MoreHorizontal,
 	MessageSquareCode,
+	Network,
 	Plug,
 	PanelLeftClose,
 	PanelLeftOpen,
@@ -106,6 +107,7 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	Fragment,
 } from "react";
 import { validateCalendarSchedule, type CalendarSchedule } from "@wuming/protocol";
 import { CalendarScheduleEditor, SchedulePreview, scheduleLabel } from "./components/AutomationScheduleEditor";
@@ -188,6 +190,8 @@ import { estimateContext, formatTokens, type ContextUsage } from "./lib/context-
 import { formatItemTime, formatItemTimestamp, hasVisibleContent, messageText } from "./lib/transcript.js";
 import { groupConsecutiveTools } from "./lib/tool-groups.js";
 import { ToolGroup } from "./components/ToolGroup.js";
+import { TurnProcess } from "./components/TurnProcess.js";
+import { completedTurnProcesses } from "./lib/turn-process.js";
 import { isNearBottom } from "./lib/scroll.js";
 import { themeLabel } from "./lib/theme.js";
 import { ThemeSettings } from "./components/ThemeSettings.js";
@@ -223,6 +227,7 @@ const STATUS_LABELS: Record<string, LocaleKey> = {
 	paused: "statusPaused",
 	cancelled: "statusCancelled",
 	aborted: "statusAborted",
+	interrupted: "interrupted",
 	streaming: "statusStreaming",
 	complete: "statusComplete",
 	completed: "statusComplete",
@@ -1482,17 +1487,15 @@ function Content({
 }
 
 /**
- * What a message can do besides being read. Owned by `App` because forking and
- * re-sending both switch the attached session, which is not a decision a single
- * transcript row gets to make.
+ * What a message can do besides being read. Owned by `App` because editing
+ * updates the shared composer and session state.
  */
 interface MessageActionState {
 	busy: boolean;
-	/** Set while forking or re-sending is impossible: mid-turn, archived, offline. */
+	/** Set while re-sending is impossible: mid-turn, archived, offline. */
 	branchDisabled: boolean;
 	branchTitle: string;
 	error?: string | undefined;
-	onFork: () => void;
 	onEditStart: () => void;
 }
 
@@ -1747,7 +1750,6 @@ function TranscriptItemView({
 							busy={actions.busy}
 							branchDisabled={actions.branchDisabled}
 							branchTitle={actions.branchTitle}
-							onFork={actions.onFork}
 							{...(item.type === "user" ? { onEdit: actions.onEditStart } : {})}
 						/>
 					)}
@@ -2151,8 +2153,8 @@ function Composer({
 		try {
 			await onSend(value, attachments, "follow_up");
 			// A user may already be composing the next follow-up while this request settles.
-			setText((current) => current === text ? "" : current);
-			setAttachments((current) => current === attachments ? [] : current);
+			setText((current) => (current === text ? "" : current));
+			setAttachments((current) => (current === attachments ? [] : current));
 		} catch (error) {
 			setSendError(error instanceof Error ? error.message : String(error));
 		} finally {
@@ -4559,7 +4561,11 @@ function SessionNavigation({
 			)}
 			<nav className="session-nav" aria-label={t("sessions")}>
 				{sessions.map((session) => (
-					<div className={`session-entry ${selectedSessionId === session.id ? "selected" : ""}`} key={session.id}>
+					<div
+						className={`session-entry ${selectedSessionId === session.id ? "selected" : ""}`}
+						data-phase={session.phase}
+						key={session.id}
+					>
 						{!archived && renamingId === session.id ? (
 							<form className="session-rename" onSubmit={(event) => void submitRename(event)}>
 								<input
@@ -4588,9 +4594,9 @@ function SessionNavigation({
 											role="img"
 											aria-label={t(STATUS_LABELS[session.phase]!)}
 										/>
-									) : (
+									) : session.phase !== "idle" ? (
 										<i className={`session-phase dot-${session.phase}`} title={t(STATUS_LABELS[session.phase]!)} />
-									)}
+									) : null}
 								</button>
 								<div className={`session-actions ${archived ? "restore-only" : ""}`}>
 									{archived ? (
@@ -5472,7 +5478,24 @@ export function App() {
 		};
 	});
 
-	// Message-level actions. Editing and forking need an idle, writable,
+	const completedProcesses = completedTurnProcesses(transcript ?? [], active || liveTrace.length > 0, client.runs);
+	const processByItem = new Map(
+		completedProcesses.flatMap((process) => [...process.itemIds].map((id) => [id, process] as const))
+	);
+	const processGroups: Array<{
+		key: string;
+		process?: (typeof completedProcesses)[number];
+		groups: typeof traceGroups;
+	}> = [];
+	for (const group of traceGroups) {
+		const entry = group.entries[0];
+		const process = entry?.kind === "saved" ? processByItem.get(entry.item.id) : undefined;
+		const previous = processGroups.at(-1);
+		if (process && previous?.process === process) previous.groups.push(group);
+		else processGroups.push({ key: group.key, ...(process ? { process } : {}), groups: [group] });
+	}
+
+	// Message-level actions. Editing and retrying need an idle, writable,
 	// connected session, so they share one gate and one explanation of it.
 	const branchDisabled =
 		client.connection !== "connected" || active || client.snapshot?.session.archivedAt !== undefined;
@@ -5482,7 +5505,7 @@ export function App() {
 			: client.connection !== "connected"
 				? "未连接到网关"
 				: active
-					? "请先停止当前任务，再编辑或分叉"
+					? "请先停止当前任务，再编辑或重新执行"
 					: "";
 	const runMessageAction = async (itemId: string, action: () => Promise<void>) => {
 		setMessageBusyId(itemId);
@@ -5523,7 +5546,6 @@ export function App() {
 		branchDisabled,
 		branchTitle,
 		error: messageError?.itemId === item.id ? messageError.message : undefined,
-		onFork: () => void runMessageAction(item.id, () => client.forkSession(item.id)),
 		onEditStart: () => {
 			if (!client.snapshot) return;
 			setMessageError(undefined);
@@ -6455,7 +6477,7 @@ export function App() {
 								aria-label={locale === "en" ? "Subtasks" : "子任务"}
 								onClick={() => setWorkbenchView("subtasks")}
 							>
-								<GitBranch size={15} />
+								<Network size={15} />
 								<span>{locale === "en" ? "Subtasks" : "子任务"}</span>
 							</button>
 						)}
@@ -6669,76 +6691,89 @@ export function App() {
 										</ul>
 									</div>
 								)}
-							{traceGroups.map((group) => (
-								<ToolGroup tools={group.tools} key={`${client.snapshot?.session.id}:${group.key}`}>
-									{group.entries.map((entry) => {
-										if (entry.kind === "assistant")
+							{processGroups.map((section) => {
+								const content = section.groups.map((group) => (
+									<ToolGroup tools={group.tools} key={`${client.snapshot?.session.id}:${group.key}`}>
+										{group.entries.map((entry) => {
+											if (entry.kind === "assistant")
+												return (
+													<LiveAssistantView
+														item={entry.item}
+														compacting={compactionStatus === "running"}
+														key={`assistant:${entry.item.id}`}
+													/>
+												);
+											if (entry.kind === "tool")
+												return (
+													<LiveToolView
+														tool={entry.item}
+														onOpenSubagent={
+															entry.item.toolName === "subagent"
+																? openToolSubagent(entry.item.toolCallId, entry.item.input)
+																: undefined
+														}
+														onDownload={client.downloadArtifact}
+														onLoadArtifact={client.loadArtifact}
+														awaitingApproval={
+															client.snapshot?.pendingApprovals.some(
+																(approval) => approval.toolCallId === entry.item.toolCallId
+															) ?? false
+														}
+														key={`tool:${entry.item.toolCallId}`}
+													/>
+												);
+											const item = entry.item;
+											const failureRun =
+												item.type === "assistant" && item.error
+													? client.runs.find((run) => item.id === `${run.id}:error`)
+													: undefined;
 											return (
-												<LiveAssistantView
-													item={entry.item}
-													compacting={compactionStatus === "running"}
-													key={`assistant:${entry.item.id}`}
-												/>
-											);
-										if (entry.kind === "tool")
-											return (
-												<LiveToolView
-													tool={entry.item}
+												<TranscriptItemView
+													item={item}
 													onOpenSubagent={
-														entry.item.toolName === "subagent"
-															? openToolSubagent(entry.item.toolCallId, entry.item.input)
+														item.type === "tool" && item.toolName === "subagent"
+															? openToolSubagent(item.toolCallId, item.input)
 															: undefined
 													}
+													key={item.id}
+													transcript={client.snapshot?.transcript ?? []}
+													turnActive={reasoningPhase}
+													now={Date.now()}
 													onDownload={client.downloadArtifact}
 													onLoadArtifact={client.loadArtifact}
-													awaitingApproval={
-														client.snapshot?.pendingApprovals.some(
-															(approval) => approval.toolCallId === entry.item.toolCallId
-														) ?? false
+													renderedToolCalls={renderedToolCalls}
+													actions={item.type === "tool" ? undefined : messageActions(item)}
+													failureActions={
+														item.type === "assistant" && item.error
+															? {
+																	run: failureRun,
+																	resumeDesktop: desktopContinuation(client.snapshot?.transcript ?? [], item.id),
+																	busy: messageBusyId === item.id,
+																	disabled: branchDisabled,
+																	disabledTitle: branchTitle,
+																	onRetry: () => retryFailedTurn(item),
+																	onOpenSettings: () => openSettings("models"),
+																	onOpenUsage: () => openSettings("usage"),
+																}
+															: undefined
 													}
-													key={`tool:${entry.item.toolCallId}`}
 												/>
 											);
-										const item = entry.item;
-										const failureRun =
-											item.type === "assistant" && item.error
-												? client.runs.find((run) => item.id === `${run.id}:error`)
-												: undefined;
-										return (
-											<TranscriptItemView
-												item={item}
-												onOpenSubagent={
-													item.type === "tool" && item.toolName === "subagent"
-														? openToolSubagent(item.toolCallId, item.input)
-														: undefined
-												}
-												key={item.id}
-												transcript={client.snapshot?.transcript ?? []}
-												turnActive={reasoningPhase}
-												now={Date.now()}
-												onDownload={client.downloadArtifact}
-												onLoadArtifact={client.loadArtifact}
-												renderedToolCalls={renderedToolCalls}
-												actions={item.type === "tool" ? undefined : messageActions(item)}
-												failureActions={
-													item.type === "assistant" && item.error
-														? {
-																run: failureRun,
-																resumeDesktop: desktopContinuation(client.snapshot?.transcript ?? [], item.id),
-																busy: messageBusyId === item.id,
-																disabled: branchDisabled,
-																disabledTitle: branchTitle,
-																onRetry: () => retryFailedTurn(item),
-																onOpenSettings: () => openSettings("models"),
-																onOpenUsage: () => openSettings("usage"),
-															}
-														: undefined
-												}
-											/>
-										);
-									})}
-								</ToolGroup>
-							))}
+										})}
+									</ToolGroup>
+								));
+								return section.process ? (
+									<TurnProcess
+										key={`${client.snapshot?.session.id}:${section.key}`}
+										durationMs={section.process.durationMs}
+										reveal={!!searchTarget && section.process.itemIds.has(searchTarget.messageId)}
+									>
+										{content}
+									</TurnProcess>
+								) : (
+									<Fragment key={section.key}>{content}</Fragment>
+								);
+							})}
 							{compactionStatus && <CompactionActivity status={compactionStatus} />}
 							{recovery && compactionStatus !== "running" && (
 								<RetryActivity key={recovery.operationId} retry={recovery} />
@@ -6817,7 +6852,11 @@ export function App() {
 							)}
 							<FollowUpQueue
 								key={`queue:${client.snapshot?.session.id ?? "draft"}`}
-								entries={client.followUpQueue?.sessionId === client.snapshot?.session.id ? client.followUpQueue?.entries ?? [] : []}
+								entries={
+									client.followUpQueue?.sessionId === client.snapshot?.session.id
+										? (client.followUpQueue?.entries ?? [])
+										: []
+								}
 								disabled={client.connection !== "connected" || client.snapshot?.session.archivedAt !== undefined}
 								onChange={client.changeQueuedFollowUp}
 							/>

@@ -29,7 +29,27 @@ export function activeRecovery(
 				}
 			: undefined);
 	if (!retry || snapshot.transcript.some((item) => item.id === `${retry.operationId}:error`)) return undefined;
-	return { ...retry, waiting: snapshot.session.phase === "retry" };
+	const waiting = snapshot.session.phase === "retry";
+	if (!waiting) {
+		// Retry history is diagnostic history, not an active failure. Only progress
+		// after the latest retry proves recovery; older output must not hide a new retry.
+		const liveRecovered =
+			liveRetry?.recovered && (!last || liveRetry.operationId !== run?.id || liveRetry.attempt >= last.attempt);
+		const checkpointRecovered =
+			last &&
+			(!liveRetry || (liveRetry.operationId === run?.id && liveRetry.attempt <= last.attempt)) &&
+			snapshot.transcript.some(
+				(item) =>
+					item.createdAt > last.timestamp &&
+					(item.type === "tool" ||
+						(item.type === "assistant" &&
+							!item.error &&
+							["streaming", "complete"].includes(item.status) &&
+							item.content.length > 0))
+			);
+		if (liveRecovered || checkpointRecovered) return undefined;
+	}
+	return { ...retry, waiting };
 }
 
 export function activeTurnFailure(transcript: TranscriptItem[], itemId: string, active: boolean): boolean {

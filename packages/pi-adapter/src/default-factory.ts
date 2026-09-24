@@ -12,11 +12,12 @@ import type { AssistantMessage, CacheRetention, ToolResultMessage } from "@earen
 import { asCapabilityJson, type CapabilityManifest } from "@wuming/capability-kernel";
 import type { SessionSnapshot } from "@wuming/protocol";
 import { Value } from "typebox/value";
-import { buildWumingSystemPrompt } from "./system-prompt.js";
+import { buildWumingSystemPrompt, refreshWumingSystemDate } from "./system-prompt.js";
 import { ToolRecoveryMonitor } from "./tool-recovery.js";
 import { stableToolDefinitions } from "./prompt-cache.js";
 import { guardedModelStream } from "./model-stream.js";
 import { PromptCacheObserver } from "./cache-diagnostics.js";
+import { CacheUsageObserver } from "./cache-usage-evidence.js";
 import { pendingReferenceMessage } from "./reference-context.js";
 import { recoverDurableSession, requestDigest } from "./session-recovery.js";
 import { persistHistoryBranch, sessionHistoryDirectory } from "./session-history.js";
@@ -141,6 +142,9 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 			tools: customTools,
 			cwd,
 		});
+		let usesDefaultSystemPrompt = false;
+		const refreshSystemPrompt = (prompt: string) =>
+			usesDefaultSystemPrompt && systemPrompt !== undefined ? refreshWumingSystemDate(prompt, systemPrompt) : prompt;
 		let activeSystemPrompt: string | undefined;
 		let activeReferenceContext: string | undefined;
 		let pendingReference = () => pendingReferenceMessage(activeReferenceContext, []);
@@ -153,13 +157,19 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 				// audited per-turn context at that lifecycle boundary as well.
 				extensionFactories: [
 					(pi) => {
-						pi.on("before_agent_start", () => {
+						pi.on("before_agent_start", (event) => {
 							// Pi runs this after its own preflight compaction and persists the message.
 							const message = pendingReference();
 							return {
-								...(activeSystemPrompt === undefined ? {} : { systemPrompt: activeSystemPrompt }),
+								systemPrompt: refreshSystemPrompt(activeSystemPrompt ?? event.systemPrompt),
 								...(message ? { message } : {}),
 							};
+						});
+						pi.on("session_compact", () => {
+							// Overflow recovery continues without before_agent_start. Persist the
+							// missing snapshot now, without scheduling an extra model request.
+							const message = pendingReference();
+							if (message) pi.sendMessage(message, { triggerTurn: false });
 						});
 					},
 				],
@@ -173,7 +183,10 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 				// them or add skills the Wuming UI never showed.
 				noSkills: true,
 				// A project SYSTEM.md still wins; ours is the default, not an override.
-				systemPromptOverride: (base) => base ?? systemPrompt,
+				systemPromptOverride: (base) => {
+					usesDefaultSystemPrompt = base === undefined && options.buildSystemPrompt === undefined;
+					return base ?? systemPrompt;
+				},
 			},
 		});
 		for (const registration of (await options.registerProviders?.()) ?? [])
@@ -205,10 +218,13 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		let initialToolChoicePending =
 			options.initialToolChoice === "required" && session.agent.state.messages.length === 0;
 		const cacheObserver = new PromptCacheObserver();
+		let cacheUsageObserver = new CacheUsageObserver();
 		{
 			const streamFunction = session.agent.streamFunction.bind(session.agent);
 			session.agent.streamFunction = (streamModel, context, streamOptions) => {
 				cacheObserver.beginRequest();
+				const usageObserver = new CacheUsageObserver();
+				cacheUsageObserver = usageObserver;
 				const requireTool = initialToolChoicePending && (context.tools?.length ?? 0) > 0;
 				initialToolChoicePending = false;
 				const selectedModel = requireTool
@@ -220,16 +236,30 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 				return guardedModelStream(
 					selectedModel,
 					(signal) =>
-						streamFunction(selectedModel, context, {
-							...streamOptions,
-							signal,
-							...(options.cacheRetention === undefined ? {} : { cacheRetention: options.cacheRetention }),
-							onPayload: async (payload, model) => {
-								const replacement = await streamOptions?.onPayload?.(payload, model);
-								cacheObserver.observe(replacement === undefined ? payload : replacement, model);
-								return replacement;
+						streamFunction(
+							selectedModel,
+							{
+								...context,
+								...(context.systemPrompt === undefined
+									? {}
+									: { systemPrompt: refreshSystemPrompt(context.systemPrompt) }),
 							},
-						}),
+							{
+								...streamOptions,
+								signal,
+								...(["anthropic-messages", "openai-completions", "openai-responses", "openai-codex-responses"].includes(
+									selectedModel.api
+								)
+									? { fetch: usageObserver.wrapFetch(streamOptions?.fetch ?? globalThis.fetch, selectedModel.api) }
+									: {}),
+								...(options.cacheRetention === undefined ? {} : { cacheRetention: options.cacheRetention }),
+								onPayload: async (payload, model) => {
+									const replacement = await streamOptions?.onPayload?.(payload, model);
+									cacheObserver.observe(replacement === undefined ? payload : replacement, model);
+									return replacement;
+								},
+							}
+						),
 					streamOptions?.signal,
 					options.modelIdleTimeoutMs
 				);
@@ -298,9 +328,14 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		};
 		const prompt = session.prompt.bind(session);
 		Object.assign(session, {
-			branchHistory: (input: Parameters<typeof persistHistoryBranch>[3], operations: Parameters<typeof persistHistoryBranch>[4]) =>
-				persistHistoryBranch(options.sessionDataDir, cwd, sessionManager, input, operations),
-			prompt: (text: string, promptOptions?: Parameters<typeof session.prompt>[1] & { operationId?: string; userItemId?: string }) => {
+			branchHistory: (
+				input: Parameters<typeof persistHistoryBranch>[3],
+				operations: Parameters<typeof persistHistoryBranch>[4]
+			) => persistHistoryBranch(options.sessionDataDir, cwd, sessionManager, input, operations),
+			prompt: (
+				text: string,
+				promptOptions?: Parameters<typeof session.prompt>[1] & { operationId?: string; userItemId?: string }
+			) => {
 				if (promptOptions?.images?.length && !session.model?.input.includes("image")) {
 					return Promise.reject(
 						new Error("图片已上传，但当前模型不支持图片理解。请切换到支持视觉的模型后重试，无需重新上传图片。")
@@ -327,14 +362,15 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 				}
 			},
 			resumeApprovedTool,
-			getSystemPrompt: () => session.agent.state.systemPrompt,
+			getSystemPrompt: () => refreshSystemPrompt(session.agent.state.systemPrompt),
 			getCacheDiagnostic: () => cacheObserver.diagnostic,
+			getCacheUsageEvidence: () => cacheUsageObserver.evidence,
 			setReferenceContext: (content: string | undefined) => {
 				activeReferenceContext = content;
 			},
 			setSystemPrompt: (prompt: string) => {
-				activeSystemPrompt = prompt;
-				session.agent.state.systemPrompt = prompt;
+				activeSystemPrompt = refreshSystemPrompt(prompt);
+				session.agent.state.systemPrompt = activeSystemPrompt;
 			},
 			getCapabilityManifests: () => customTools.map(toolCapability),
 		});

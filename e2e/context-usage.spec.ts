@@ -25,6 +25,8 @@ for (const stop of [false, true]) {
 		await expect(popup).toContainText("等待首个请求用量");
 		await expect(popup).toContainText("90.0%");
 		await expect(popup).toContainText("1 次");
+		await expect(popup).toContainText("读取数据可用：1/1 次请求");
+		await expect(popup).toContainText("演示数据，非真实服务商命中率");
 		await expect(page.getByRole("button", { name: "停止任务" })).toBeVisible();
 		await page.reload();
 		await page.locator(".context-pill").click();
@@ -200,6 +202,8 @@ test("keeps populated cache statistics compact in light, dark and touch layouts"
 					const cacheReadTokens = index === 53 ? 178560 : index === 0 ? 6428800 : 0;
 					return {
 						requestId: "cache-" + index,
+						dataSource: "demo",
+						cacheUsageEvidence: { source: "provider_response", read: "reported", write: "reported" },
 						cacheDiagnostic: {
 							basis: "provider_payload",
 							change: "append_only",

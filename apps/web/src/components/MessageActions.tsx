@@ -1,5 +1,5 @@
 import { useT } from "../lib/locale.js";
-import { Check, Copy, GitBranch, Pencil } from "lucide-react";
+import { Check, Copy, Pencil } from "lucide-react";
 import { useCallback, useState } from "react";
 
 /**
@@ -12,16 +12,14 @@ export function MessageActions({
 	busy,
 	branchDisabled,
 	branchTitle,
-	onFork,
 	onEdit,
 }: {
 	/** What the copy button writes; the button is dropped when this is empty. */
 	text: string;
 	busy: boolean;
 	branchDisabled: boolean;
-	/** Why forking is unavailable, when it is — shown as the button's tooltip. */
+	/** Why editing is unavailable, when it is — shown as the button's tooltip. */
 	branchTitle: string;
-	onFork?: () => void;
 	onEdit?: () => void;
 }) {
 	const t = useT();
@@ -58,17 +56,6 @@ export function MessageActions({
 					onClick={onEdit}
 				>
 					<Pencil size={13} />
-				</button>
-			)}
-			{onFork && (
-				<button
-					type="button"
-					title={branchDisabled ? branchTitle : t("forkFromHere")}
-					aria-label={t("forkFromHere")}
-					disabled={branchDisabled || busy}
-					onClick={onFork}
-				>
-					<GitBranch size={13} />
 				</button>
 			)}
 		</div>

@@ -51,7 +51,12 @@ test("spins only for active execution phases", async ({ page }) => {
 			);
 		server.onMessage((message) => socket.send(message));
 	});
+	await page.addInitScript((id) => {
+		localStorage.setItem("wuming.workspaceId", "local-workspace");
+		localStorage.setItem("wuming.sessionId.local-workspace", id);
+	}, viewerId);
 	await openApp(page, webUrl);
+	await expect(page.locator(".session-entry.selected")).toHaveCount(1);
 	await page.locator(".session-open").filter({ hasText: "Sidebar viewer" }).click();
 	await expect(page.locator(".session-entry.selected")).toContainText("Sidebar viewer");
 	const row = page.locator(".session-entry").filter({ hasText: "Background worker" });
@@ -59,6 +64,9 @@ test("spins only for active execution phases", async ({ page }) => {
 		sendPhase!(phase);
 		if (["turn", "compaction", "retry"].includes(phase)) {
 			await expect(row.locator(".session-running")).toBeVisible();
+		} else if (phase === "idle") {
+			await expect(row).toHaveAttribute("data-phase", "idle");
+			await expect(row.locator(".session-running, .session-phase")).toHaveCount(0);
 		} else {
 			await expect(row.locator(".session-running")).toHaveCount(0);
 			await expect(row.locator(`.dot-${phase}`)).toBeVisible();
@@ -66,14 +74,15 @@ test("spins only for active execution phases", async ({ page }) => {
 	}
 });
 
-for (const width of [1365, 390]) {
+for (const width of [1440, 390]) {
 	test(`updates a background conversation spinner at ${width}px`, async ({ page, browser }, testInfo) => {
-		await page.setViewportSize({ width, height: 900 });
+		await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
 		await page.addInitScript((id) => {
 			localStorage.setItem("wuming.workspaceId", "local-workspace");
 			localStorage.setItem("wuming.sessionId.local-workspace", id);
 		}, viewerId);
 		await openApp(page, webUrl);
+		await expect(page.locator(".session-entry.selected")).toHaveCount(1);
 		if (width <= 720) await page.getByRole("button", { name: "打开导航", exact: true }).click();
 		await page.locator(".session-open").filter({ hasText: "Sidebar viewer" }).click();
 		await expect(page.locator(".session-entry.selected")).toContainText("Sidebar viewer");
@@ -81,7 +90,7 @@ for (const width of [1365, 390]) {
 		const row = page.locator(".session-entry").filter({ hasText: "Background worker" });
 		const spinner = row.locator(".session-running");
 		await expect(row).toBeVisible();
-		await expect(spinner).toHaveCount(0);
+		await expect(row.locator(".session-running, .session-phase")).toHaveCount(0);
 		const workerContext = await browser.newContext();
 		try {
 			const worker = await workerContext.newPage();
@@ -92,6 +101,21 @@ for (const width of [1365, 390]) {
 			await openApp(worker, webUrl);
 			await worker.locator(".session-open").filter({ hasText: "Background worker" }).click();
 			await expect(worker.locator(".session-entry.selected")).toContainText("Background worker");
+			await worker.getByRole("textbox", { name: "消息", exact: true }).fill("Completed sidebar task");
+			await worker.getByRole("button", { name: "发送", exact: true }).click();
+			await expect(worker.getByText("Demo runtime received: Completed sidebar task", { exact: false })).toBeVisible();
+			await expect(row).toHaveAttribute("data-phase", "idle");
+			await expect(row.locator(".session-running, .session-phase")).toHaveCount(0);
+			await page.reload();
+			await expect(page.locator(".session-entry.selected")).toHaveCount(1);
+			if (width <= 720) await page.getByRole("button", { name: "打开导航", exact: true }).click();
+			await page.locator(".session-open").filter({ hasText: "Sidebar viewer" }).click();
+			await expect(page.locator(".session-entry.selected")).toContainText("Sidebar viewer");
+			if (width <= 720) await page.getByRole("button", { name: "打开导航", exact: true }).click();
+			await expect(row).toBeVisible();
+			await expect(row).toHaveAttribute("data-phase", "idle");
+			await expect(row.locator(".session-running, .session-phase")).toHaveCount(0);
+			await page.screenshot({ path: testInfo.outputPath("sidebar-completed.png") });
 			await worker.getByRole("textbox", { name: "消息", exact: true }).fill("/long");
 			await worker.getByRole("button", { name: "发送", exact: true }).click();
 			await expect(spinner).toBeVisible();
@@ -106,7 +130,8 @@ for (const width of [1365, 390]) {
 			await expect(spinner).toHaveCSS("animation-name", "none");
 			await worker.getByRole("button", { name: "停止任务", exact: true }).click();
 			await expect(spinner).toHaveCount(0);
-			await expect(row.locator(".dot-idle")).toBeVisible();
+			await expect(row).toHaveAttribute("data-phase", "idle");
+			await expect(row.locator(".session-phase")).toHaveCount(0);
 			await expect(worker.locator(".session-running")).toHaveCount(0);
 		} finally {
 			await workerContext.close();

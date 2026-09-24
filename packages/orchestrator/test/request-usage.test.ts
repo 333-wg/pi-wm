@@ -15,6 +15,9 @@ const request: UsageRequestSummary = {
 	firstContentAt: 150,
 	finishedAt: 200,
 	status: "complete",
+	purpose: "inference",
+	dataSource: "provider",
+	cacheUsageEvidence: { source: "provider_response", read: "reported", write: "unknown" },
 	cacheDiagnostic: {
 		basis: "provider_payload",
 		change: "append_only",

@@ -48,6 +48,22 @@ function currentDate(): string {
 	}).format(new Date());
 }
 
+/** Refresh only the owned base prompt's date, leaving appended context untouched. */
+export function refreshWumingSystemDate(prompt: string, basePrompt: string): string {
+	const marker = "\n<current_date>\nCurrent date: ";
+	const start = basePrompt.lastIndexOf(marker);
+	if (start < 0) return prompt;
+	const dateStart = start + marker.length;
+	const today = currentDate();
+	const dateEnd = dateStart + today.length;
+	if (
+		!prompt.startsWith(basePrompt.slice(0, dateStart)) ||
+		prompt.slice(dateEnd, basePrompt.length) !== basePrompt.slice(dateEnd)
+	)
+		return prompt;
+	return prompt.slice(0, dateStart) + today + prompt.slice(dateEnd);
+}
+
 /** Guidance that only makes sense when the matching tool is registered. */
 const conditionalGuidelines: Array<{ requires: string[]; text: string }> = [
 	{

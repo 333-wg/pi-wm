@@ -96,6 +96,65 @@ describe("failure display and recovery", () => {
 		expect(activeRecovery({ ...snapshot, transcript: [user, error, terminal] }, [running], undefined)).toBeUndefined();
 		expect(activeRecovery(snapshot, [{ ...running, sessionId: "other" }], undefined)).toBeUndefined();
 	});
+	it("hides historical retries as soon as newer assistant or tool checkpoints arrive, including after reload", () => {
+		const running = { ...run, status: "running" as const };
+		const snapshot = { session: { id: "session", phase: "turn" }, transcript: [user, error] } as SessionSnapshot;
+		for (const recovered of [
+			{ ...tool, createdAt: 5, status: "running" as const },
+			{ ...tool, createdAt: 5, status: "pending" as const },
+			{
+				type: "assistant" as const,
+				model: error.model,
+				id: "recovered",
+				createdAt: 5,
+				status: "streaming" as const,
+				content: [{ type: "text" as const, text: "back" }],
+			},
+		]) {
+			expect(
+				activeRecovery({ ...snapshot, transcript: [user, error, recovered] }, [running], undefined)
+			).toBeUndefined();
+		}
+		// Old progress and a newly failed attempt are not recovery evidence.
+		expect(activeRecovery({ ...snapshot, transcript: [user, tool, error] }, [running], undefined)).toBeDefined();
+		expect(
+			activeRecovery(
+				{ ...snapshot, transcript: [user, error, { ...error, id: "again", createdAt: 5 }] },
+				[running],
+				undefined
+			)
+		).toBeDefined();
+		const latestRetry = {
+			...running,
+			retryHistory: [...running.retryHistory!, { ...running.retryHistory![0]!, attempt: 2, timestamp: 6 }],
+		};
+		expect(
+			activeRecovery({ ...snapshot, transcript: [user, { ...tool, createdAt: 5 }] }, [latestRetry], undefined)
+		).toBeDefined();
+	});
+	it("keeps live recovery evidence without letting it hide a later retry", () => {
+		const snapshot = { session: { id: "session", phase: "turn" }, transcript: [user, error] } as SessionSnapshot;
+		const running = { ...run, status: "running" as const };
+		const retry = activeRecovery(snapshot, [running], undefined)!;
+		expect(activeRecovery(snapshot, [running], { ...retry, recovered: true })).toBeUndefined();
+		expect(
+			activeRecovery({ ...snapshot, session: { ...snapshot.session, phase: "retry" } }, [running], {
+				...retry,
+				recovered: true,
+			})
+		).toMatchObject({ waiting: true });
+		const latestRetry = {
+			...running,
+			retryHistory: [...running.retryHistory!, { ...running.retryHistory![0]!, attempt: 2, timestamp: 6 }],
+		};
+		expect(activeRecovery(snapshot, [latestRetry], { ...retry, recovered: true })).toBeDefined();
+		expect(
+			activeRecovery({ ...snapshot, transcript: [user, { ...tool, createdAt: 5 }] }, [running], {
+				...retry,
+				attempt: 2,
+			})
+		).toBeDefined();
+	});
 	it("continues desktop work after successful or uncertain actions without including older turns", () => {
 		expect(desktopContinuation([user, tool, error], error.id)).toBe(true);
 		expect(desktopContinuation([user, { ...tool, status: "error", isError: true }, error], error.id)).toBe(true);

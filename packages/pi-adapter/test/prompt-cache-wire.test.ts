@@ -16,6 +16,7 @@ interface Scenario {
 	api: Api;
 	retention?: CacheRetention;
 	supportsLong: boolean;
+	omitCacheUsage?: boolean;
 }
 interface WireRequest {
 	messages?: Array<Record<string, unknown>>;
@@ -28,6 +29,11 @@ interface WireRequest {
 }
 
 const scenarios: Scenario[] = [
+	...(["openai-completions", "openai-responses", "anthropic-messages"] as const).map((api) => ({
+		api,
+		supportsLong: true,
+		omitCacheUsage: true,
+	})),
 	{ api: "openai-completions", supportsLong: true },
 	{ api: "openai-completions", retention: "long", supportsLong: true },
 	{ api: "openai-completions", retention: "long", supportsLong: false },
@@ -40,7 +46,14 @@ const scenarios: Scenario[] = [
 	{ api: "anthropic-messages", retention: "none", supportsLong: true },
 ];
 
-function sse(api: Api, step: number, cached: boolean): string {
+function sse(api: Api, step: number, cached: boolean, omitCacheUsage = false): string {
+	const serialize = (frame: unknown) =>
+		JSON.stringify(frame, (key, value) =>
+			omitCacheUsage &&
+			["cached_tokens", "cache_write_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].includes(key)
+				? undefined
+				: value
+		);
 	const read = cached ? 1024 : 0;
 	const write = cached ? 256 : 0;
 	const text = `reply-${step}`;
@@ -60,7 +73,7 @@ function sse(api: Api, step: number, cached: boolean): string {
 			]
 				.map(
 					(frame) =>
-						`data: ${JSON.stringify({ id: `completion_${step}`, object: "chat.completion.chunk", created: 1, model: "cache-model", ...frame })}\n\n`
+						`data: ${serialize({ id: `completion_${step}`, object: "chat.completion.chunk", created: 1, model: "cache-model", ...frame })}\n\n`
 				)
 				.join("") + "data: [DONE]\n\n"
 		);
@@ -119,7 +132,7 @@ function sse(api: Api, step: number, cached: boolean): string {
 					},
 				];
 	return events
-		.map((event, index) => `event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number: index })}\n\n`)
+		.map((event, index) => `event: ${event.type}\ndata: ${serialize({ ...event, sequence_number: index })}\n\n`)
 		.join("");
 }
 
@@ -150,7 +163,14 @@ it.each(scenarios)(
 				for await (const chunk of request) chunks.push(Buffer.from(chunk));
 				requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as WireRequest);
 				response.writeHead(200, { "Content-Type": "text/event-stream" });
-				response.end(sse(scenario.api, requests.length, scenario.retention !== "none"));
+				response.end(
+					sse(
+						scenario.api,
+						requests.length,
+						scenario.retention !== "none" && !scenario.omitCacheUsage,
+						scenario.omitCacheUsage
+					)
+				);
 			} catch (error) {
 				errors.push(error);
 				response.writeHead(500).end("local fixture failure");
@@ -175,9 +195,7 @@ it.each(scenarios)(
 				description: `Inspect ${name}`,
 				promptSnippet: `Inspect ${name}`,
 				parameters: Type.Object(
-					reopened
-						? { alpha: Type.Optional(Type.String()), zebra: Type.Optional(Type.String()) }
-						: { zebra: Type.Optional(Type.String()), alpha: Type.Optional(Type.String()) }
+					reopened ? { alpha: Type.String(), zebra: Type.String() } : { zebra: Type.String(), alpha: Type.String() }
 				),
 				execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
 			});
@@ -291,6 +309,15 @@ it.each(scenarios)(
 				});
 				expect(result.failure).toBeUndefined();
 				expect(result.requests).toHaveLength(1);
+				expect(result.requests?.[0]).toMatchObject({
+					purpose: "inference",
+					dataSource: "provider",
+					cacheUsageEvidence: {
+						source: "provider_response",
+						read: scenario.omitCacheUsage ? "unknown" : "reported",
+						write: scenario.omitCacheUsage ? "unknown" : "reported",
+					},
+				});
 				expect(result.requests?.[0]?.cacheDiagnostic?.change).toBe(
 					index === 0 || index === 2
 						? "first_observation"
@@ -301,9 +328,9 @@ it.each(scenarios)(
 								: "append_only"
 				);
 				expect(result.requests?.[0]?.usage).toMatchObject({
-					inputTokens: scenario.retention === "none" ? 1344 : 64,
-					cacheReadTokens: scenario.retention === "none" ? 0 : 1024,
-					cacheWriteTokens: scenario.retention === "none" ? 0 : 256,
+					inputTokens: scenario.retention === "none" || scenario.omitCacheUsage ? 1344 : 64,
+					cacheReadTokens: scenario.retention === "none" || scenario.omitCacheUsage ? 0 : 1024,
+					cacheWriteTokens: scenario.retention === "none" || scenario.omitCacheUsage ? 0 : 256,
 					outputTokens: 8,
 					totalTokens: 1352,
 				});

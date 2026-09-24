@@ -2,7 +2,7 @@ import type { AgentSessionEvent, ProviderConfig } from "@earendil-works/pi-codin
 import type { ToolResultMessage, Usage as PiUsage } from "@earendil-works/pi-ai";
 import type { CapabilityManifest } from "@wuming/capability-kernel";
 import type { ContextFragment } from "@wuming/context-engine";
-import type { ArtifactRef, PromptCacheDiagnostic, SessionSnapshot } from "@wuming/protocol";
+import type { ArtifactRef, CacheUsageEvidence, PromptCacheDiagnostic, SessionSnapshot } from "@wuming/protocol";
 import type { AgentRuntime, DurableOperation } from "@wuming/orchestrator";
 
 export interface PiPreparedPrompt {
@@ -19,10 +19,14 @@ export interface PiSessionRecovery {
 
 export interface PiSessionLike {
 	readonly isStreaming: boolean;
-	branchHistory?(input: Parameters<NonNullable<AgentRuntime["branchSession"]>>[0], operations: DurableOperation[]): Promise<void>;
+	branchHistory?(
+		input: Parameters<NonNullable<AgentRuntime["branchSession"]>>[0],
+		operations: DurableOperation[]
+	): Promise<void>;
 	prepareForPrompt?(recovery?: PiSessionRecovery): void | Promise<void>;
 	getSystemPrompt?(): string;
 	getCacheDiagnostic?(): PromptCacheDiagnostic | undefined;
+	getCacheUsageEvidence?(): CacheUsageEvidence;
 	setReferenceContext?(content: string | undefined): void;
 	setSystemPrompt?(prompt: string): void;
 	getCapabilityManifests?(): CapabilityManifest[];

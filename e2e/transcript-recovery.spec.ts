@@ -194,7 +194,11 @@ for (const restart of [false, true]) {
 			await expect(history).toContainText("STEP_ONE_SAVED");
 			await page.locator(".sidebar-new-chat").click();
 			await expect(history).not.toContainText("STREAM_PREFIX");
-			await page.getByRole("button", { name: restart ? "Restart history" : "Reload history", exact: true }).click();
+			// Running status is part of the button's accessible name; select by its visible title.
+			await page
+				.locator(".session-open")
+				.filter({ hasText: restart ? "Restart history" : "Reload history" })
+				.click();
 			await expect(history.getByText("STREAM_PREFIX", { exact: true })).toHaveCount(1);
 			await page.reload();
 			await expect(history).toContainText("EARLIER_REPLY_PRESERVED");
@@ -233,9 +237,15 @@ for (const restart of [false, true]) {
 						return snapshot.type === "session.snapshot" && snapshot.snapshot.session.phase;
 					})
 					.toBe("idle");
+				await expect(page.locator(".turn-process-summary")).toHaveAttribute("aria-expanded", "false");
+				await expect(history.getByText("STEP_ONE_SAVED", { exact: true })).toBeHidden();
+				await expect(history.getByText("STREAM_PREFIX_CONTINUED", { exact: true })).toBeVisible();
+				await page.locator(".turn-process-summary").click();
+				await expect(history.getByText("STEP_ONE_SAVED", { exact: true })).toBeVisible();
 				await page.reload();
-				await expect(history.getByText("STREAM_PREFIX_CONTINUED", { exact: true })).toHaveCount(1);
-				await expect(history.getByText("STEP_ONE_SAVED", { exact: true })).toHaveCount(1);
+				await expect(page.locator(".turn-process-summary")).toHaveAttribute("aria-expanded", "false");
+				await expect(history.getByText("STREAM_PREFIX_CONTINUED", { exact: true })).toBeVisible();
+				await expect(history.getByText("STEP_ONE_SAVED", { exact: true })).toBeHidden();
 			}
 			await page.setViewportSize({ width: 390, height: 844 });
 			await page.reload();

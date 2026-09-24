@@ -229,6 +229,8 @@ describe("persistent Agent Teams", () => {
 
 	it("refreshes lead workload and ready tasks without treating idle owners or blocked scopes as available", async () => {
 		const f = await fixture();
+		const stablePolicy = f.service.context(f.lead, "policy");
+		const previousState = f.service.context(f.lead, "state");
 		const a = await f.service.addMember(f.lead, "developer", "Implement feature", "developer");
 		const b = await f.service.addMember(f.lead, "tester", "Verify feature", "tester");
 		const active = f.service.createTask(f.lead, { ...taskInput(a.id), writePaths: ["src"] }, "active");
@@ -269,6 +271,11 @@ describe("persistent Agent Teams", () => {
 			.find((line) => line.startsWith("Dependency/scope-ready pending tasks"))!;
 		expect(refreshed).toContain(conflict.id);
 		expect(refreshed).toContain(dependent.id);
+		expect(f.service.context(f.lead, "policy")).toBe(stablePolicy);
+		expect(f.service.context(f.lead, "policy")).not.toContain("Board:");
+		expect(f.service.context(f.lead, "state")).not.toBe(previousState);
+		expect(f.service.context(f.lead, "state")).toContain('"status":"completed"');
+		expect(f.service.context(f.lead, "state")).not.toContain("Continuous delegation policy");
 	});
 
 	it.each(["completed", "failed"] as const)(

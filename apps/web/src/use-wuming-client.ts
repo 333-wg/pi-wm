@@ -96,6 +96,8 @@ export interface LiveGoalActivity {
 }
 
 export interface LiveRetry {
+	/** Keep recovery evidence until the next retry so history cannot revive the card. */
+	recovered?: boolean;
 	operationId: string;
 	attempt: number;
 	nextAttempt: number;
@@ -600,10 +602,12 @@ export function useWumingClient() {
 		if (result?.type === "turn.queue.list" && snapshotRef.current?.session.id === sessionId && version === queueRefreshVersion.current)
 			setState((current) => ({ ...current, followUpQueue: { sessionId, entries: result.entries } }));
 	}, []);
+	const runsRefreshVersion = useRef(0);
 	const refreshRuns = useCallback(async (sessionId: string) => {
+		const version = ++runsRefreshVersion.current;
 		await refreshFollowUpQueue(sessionId);
 		const result = await requestRef.current?.({ type: "session.run.list", sessionId, limit: 20 });
-		if (result?.type === "session.run.list" && snapshotRef.current?.session.id === sessionId) {
+		if (result?.type === "session.run.list" && snapshotRef.current?.session.id === sessionId && version === runsRefreshVersion.current) {
 			setState((current) => ({ ...current, runs: result.runs }));
 		}
 		return result?.type === "session.run.list" ? result.runs : [];
@@ -1058,6 +1062,13 @@ export function useWumingClient() {
 					});
 					if (!runsInCurrentSession) return;
 				}
+				if ((event.type === "assistant.delta" && event.delta.length > 0) || event.type === "tool.started") {
+					setState((current) =>
+						current.liveRetry && !current.liveRetry.recovered
+							? { ...current, liveRetry: { ...current.liveRetry, recovered: true } }
+							: current
+					);
+				}
 				// Checkpointed items arrive as complete replacements, not append-only deltas.
 				// Keep the legacy live path for runtimes that do not publish checkpoints.
 				if (
@@ -1204,7 +1215,7 @@ export function useWumingClient() {
 								: {}),
 						};
 					});
-					void refreshFollowUpQueue(event.snapshot.session.id).catch(() => undefined);
+					void refreshRuns(event.snapshot.session.id).catch(() => undefined);
 					void refreshSessions(event.snapshot.session.workspaceId);
 					void refreshUsageOverview(event.snapshot.session.workspaceId);
 				}
@@ -2071,9 +2082,9 @@ export function useWumingClient() {
 			});
 			if (result?.type !== "turn.queue.changed") throw new Error("队列更新失败");
 		} finally {
-			await refreshFollowUpQueue(sessionId);
+			await refreshRuns(sessionId);
 		}
-	}, [refreshFollowUpQueue]);
+	}, [refreshRuns]);
 
 	const renameSession = useCallback(
 		async (sessionId: string, name: string) => {

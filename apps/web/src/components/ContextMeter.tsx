@@ -20,7 +20,9 @@ function describeOccupancy(usage: ContextUsage, t: Translate): string {
 }
 
 function hitRate(cache: CacheUsage | undefined, t: Translate): string {
-	return cache?.hitRatio == null ? t("noData") : (cache.hitRatio * 100).toFixed(1) + "%";
+	return cache?.hitRatio == null
+		? t(cache && cache.inputTokens > 0 ? "cacheUnknown" : "noData")
+		: (cache.hitRatio * 100).toFixed(1) + "%";
 }
 
 const cacheChangeLabels = {
@@ -77,11 +79,18 @@ export function ContextDetails({ usage }: { usage: ContextUsage }) {
 					<strong>{hitRate(usage.cache?.session, t)}</strong>
 				</div>
 			</div>
+			{!!usage.cache?.requestCount && (
+				<div className="context-cache-evidence">
+					{t("cacheCoverage", { known: usage.cache.knownRequestCount, total: usage.cache.requestCount })}
+				</div>
+			)}
 			<details className="context-detail-disclosure">
 				<summary>
 					<ChevronRight size={12} />
 					{t("usageDetails")}
+					{usage.cache?.demo && <span title={t("cacheDemoHint")}> · {t("cacheDemoLabel")}</span>}
 				</summary>
+				{usage.cache?.demo && <p>{t("cacheDemoHint")}</p>}
 				<table>
 					<caption>{t("inputUsage")}</caption>
 					<thead>
@@ -101,8 +110,23 @@ export function ContextDetails({ usage }: { usage: ContextUsage }) {
 						).map(([label, key]) => (
 							<tr key={key}>
 								<th scope="row">{label}</th>
-								<td>{count(usage.cache?.latest?.[key])}</td>
-								<td>{count(usage.cache?.requestCount ? usage.cache.session[key] : undefined)}</td>
+								<td>
+									{count(
+										(key === "readTokens" && !usage.cache?.latest?.readKnown) ||
+											(key === "writeTokens" && !usage.cache?.latest?.writeKnown)
+											? undefined
+											: usage.cache?.latest?.[key]
+									)}
+								</td>
+								<td>
+									{count(
+										!usage.cache?.requestCount ||
+											(key === "readTokens" && !usage.cache.session.readKnown) ||
+											(key === "writeTokens" && !usage.cache.session.writeKnown)
+											? undefined
+											: usage.cache.session[key]
+									)}
+								</td>
 							</tr>
 						))}
 					</tbody>
@@ -112,6 +136,10 @@ export function ContextDetails({ usage }: { usage: ContextUsage }) {
 						{t("cachePrefixChange")}: {t(cacheChangeLabels[usage.cache.diagnostic.change])}
 					</p>
 				)}
+				{!!usage.cache?.compactionCount && (
+					<p>{t("cacheCompactionExcluded", { count: usage.cache.compactionCount })}</p>
+				)}
+				{!!usage.cache?.requestCount && <p>{t("cacheKnownInput", { count: count(usage.cache.knownInputTokens) })}</p>}
 				<p>{t("cacheRateHint")}</p>
 				<p>{t("cacheReportedHint")}</p>
 			</details>

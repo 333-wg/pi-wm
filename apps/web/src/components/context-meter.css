@@ -136,7 +136,7 @@
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: 12px;
-	margin: 7px 0 11px;
+	margin: 7px 0 6px;
 }
 .context-cache-summary > div {
 	display: flex;
@@ -163,6 +163,12 @@
 }
 .context-cache-summary .context-cache-waiting {
 	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+.context-cache-evidence {
+	font-size: 10px;
+	line-height: 14px;
+	color: var(--text-soft);
 	overflow-wrap: anywhere;
 }
 .context-detail-disclosure {

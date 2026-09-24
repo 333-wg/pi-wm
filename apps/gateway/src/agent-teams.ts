@@ -830,12 +830,26 @@ export class AgentTeamService {
 			this.onError(error);
 		}
 	}
-	context(sessionId: string): string {
+	context(sessionId: string, section: "all" | "policy" | "state" = "all"): string {
 		const team = this.get(sessionId);
 		const member = team?.members.find((value) => value.sessionId === sessionId);
 		if (!team || !member) return "";
 		if (team.status !== "running")
-			return `Agent Team ${team.id} is ${team.status}. Automatic collaboration has ended. TaskList/TaskGet can inspect the records, but team mutations are disabled. New teams are launched through the team skill in an ordinary conversation.`;
+			return section === "state"
+				? ""
+				: `Agent Team ${team.id} is ${team.status}. Automatic collaboration has ended. TaskList/TaskGet can inspect the records, but team mutations are disabled. New teams are launched through the team skill in an ordinary conversation.`;
+		const state = [
+			...(member.lead
+				? [
+						`Collaboration workload (refresh TaskList before assigning; idle does not imply compatible tools): ${JSON.stringify(team.members.map((candidate) => ({ id: candidate.id, state: candidate.state, activeTasks: team.tasks.filter((task) => task.owner === candidate.id && task.status === "in_progress").map((task) => task.id), pendingTasks: team.tasks.filter((task) => task.owner === candidate.id && task.status === "pending").map((task) => task.id) })))}`,
+						`Dependency/scope-ready pending tasks (owner capacity must also be checked): ${JSON.stringify(team.tasks.filter((task) => task.status === "pending" && this.#ready(team, task)).map((task) => ({ id: task.id, owner: task.owner ?? null })))}`,
+						`Effective Agent template candidates (AgentTemplates returns full instructions and tool policies; user overrides project overrides builtin): ${JSON.stringify(this.templates.effective(team.workspaceId ?? this.runner.store.loadSnapshot(team.sessionId)!.session.workspaceId).map((item) => ({ name: item.name, scope: item.scope, description: item.description.slice(0, 240), tools: item.tools })))}`,
+					]
+				: []),
+			`Members: ${JSON.stringify(team.members.map((value) => ({ id: value.id, name: value.name, role: value.role })))}`,
+			`Board: ${JSON.stringify(team.tasks.map((value) => ({ id: value.id, title: value.title, status: value.status, owner: value.owner, dependsOn: value.dependsOn })))}`,
+		];
+		if (section === "state") return state.join("\n");
 		return [
 			`You are ${member.name} (member ID ${member.id}) in persistent Agent Team ${team.id}. Role: ${member.role}. Team status: ${team.status}. This is a dedicated team execution context, independent of the conversation that launched it.`,
 			`User objective: ${team.objective}`,
@@ -854,14 +868,7 @@ export class AgentTeamService {
 						"Continuous delegation policy: lead owns decomposition, coordination, integration and final acceptance, not all implementation. Before substantial local implementation and after each result, failure or phase change, compare the objective with delivered work and refresh TaskList. Delegate meaningful implementation, tests, fixes and verification throughout execution; do not use teammates only for preliminary research and then implement everything yourself. For build/change objectives, assign concrete artifact-producing work as soon as its inputs are available. For research-only objectives, research outputs are valid deliverables; do not invent coding tasks.",
 						"Keep staffing active throughout the project: reuse a suitable retained member for follow-up work with TaskCreate/TaskUpdate, including moving from research to implementation when their role and tools permit it. Proactively call Agent when an independent workstream needs additional capacity or expertise, even after startup; do not wait for the user to ask you to add members. Respect explicit roster/model constraints, frozen tool permissions and the 8-member limit including lead. A busy suitable member is not a reason to absorb all remaining work: queue its next owned task or add a useful non-duplicate member within those limits. Give every added member an executable assignment as soon as dependencies permit.",
 						"Before coding locally, dispatch available independent work with explicit owners, concrete outputs, acceptance checks, dependencies and disjoint writePaths. For coding tasks, require members to edit files directly and return changed paths plus verification evidence, not just advice for the lead. Keep tightly coupled decisions, small integration edits and truly serial urgent blockers local when delegation would delay progress; explain that choice briefly. Do not duplicate active member work, silently take over owned scopes, or do long implementation while suitable members sit idle. When review finds defects, assign repairs back to the owner and verification to a suitable member where useful. End the turn only when waiting on real work, a specific blocker, or after acceptance; do not stop with actionable unassigned work.",
-						`Collaboration workload (refresh TaskList before assigning; idle does not imply compatible tools): ${JSON.stringify(team.members.map((candidate) => ({ id: candidate.id, state: candidate.state, activeTasks: team.tasks.filter((task) => task.owner === candidate.id && task.status === "in_progress").map((task) => task.id), pendingTasks: team.tasks.filter((task) => task.owner === candidate.id && task.status === "pending").map((task) => task.id) })))}`,
-						`Dependency/scope-ready pending tasks (owner capacity must also be checked): ${JSON.stringify(team.tasks.filter((task) => task.status === "pending" && this.#ready(team, task)).map((task) => ({ id: task.id, owner: task.owner ?? null })))}`,
-						...(team.tasks.length > 0 && team.tasks.every((task) => task.status === "completed")
-							? [
-									"All currently recorded tasks are completed. Check the original objective for missing deliverables: a research-only board does not satisfy a build request. Delegate remaining deliverables, or perform final acceptance if the objective is genuinely satisfied.",
-								]
-							: []),
-						`Effective Agent template candidates (AgentTemplates returns full instructions and tool policies; user overrides project overrides builtin): ${JSON.stringify(this.templates.effective(team.workspaceId ?? this.runner.store.loadSnapshot(team.sessionId)!.session.workspaceId).map((item) => ({ name: item.name, scope: item.scope, description: item.description.slice(0, 240), tools: item.tools })))}`,
+						"When all currently recorded tasks are completed, check the original objective for missing deliverables: a research-only board does not satisfy a build request. Delegate remaining deliverables, or perform final acceptance if the objective is genuinely satisfied.",
 					]
 				: []),
 			"Use TaskList/TaskGet for the shared board. Use SendMessage for direct peer communication; ordinary assistant text is NOT delivered to peers. Use recipient IDs. Tools derive your sender identity from your session; never impersonate another member.",
@@ -869,8 +876,7 @@ export class AgentTeamService {
 				? "Create teammates using Agent, create shared tasks with TaskCreate and explicitly assign each teammate their first task. Delegate disjoint work; teammates run concurrently in retained sessions. Do not use the one-shot subagent tool for team work. Once all tasks are complete, inspect and verify the actual changes, then TeamFinish with concrete acceptance evidence. Do not claim acceptance prematurely. End your turn when waiting: incoming messages wake you without model polling."
 				: "Do your assigned task in the shared workspace. Respect writePaths and coordinate cross-owner edits using SendMessage. TaskUpdate completed requires concrete result/verification evidence. Report a blocker with SendMessage or TaskUpdate failed. End the turn when done or waiting; mailbox delivery and newly available tasks wake the SAME session. After your first assignment, the scheduler may claim further unowned tasks for you.",
 			"Task dependency and declared write-scope conflicts are serialized by the scheduler. Scope declarations are coordination, not filesystem isolation. Approval policy and model budgets remain in force for each member session.",
-			`Members: ${JSON.stringify(team.members.map((value) => ({ id: value.id, name: value.name, role: value.role })))}`,
-			`Board: ${JSON.stringify(team.tasks.map((value) => ({ id: value.id, title: value.title, status: value.status, owner: value.owner, dependsOn: value.dependsOn })))}`,
+			...(section === "all" ? state : []),
 		].join("\n");
 	}
 	pause(): void {

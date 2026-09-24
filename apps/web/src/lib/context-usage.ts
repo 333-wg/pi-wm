@@ -1,10 +1,18 @@
-import type { ContextUsageState, PromptCacheDiagnostic, SessionSnapshot, Usage } from "@wuming/protocol";
+import type {
+	ContextUsageState,
+	PromptCacheDiagnostic,
+	SessionSnapshot,
+	Usage,
+	UsageRequestSummary,
+} from "@wuming/protocol";
 import { sessionUsageRequests } from "@wuming/protocol";
 
 export interface CacheUsage {
 	inputTokens: number;
 	readTokens: number;
 	writeTokens: number;
+	readKnown?: boolean;
+	writeKnown?: boolean;
 	/** Share of input tokens served from cache, not the share of requests that hit. */
 	hitRatio: number | null;
 }
@@ -19,6 +27,20 @@ export function cacheUsage(usage: Pick<Usage, "inputTokens" | "cacheReadTokens" 
 	};
 }
 
+function requestCacheUsage(request: UsageRequestSummary): CacheUsage {
+	const value = cacheUsage(request.usage);
+	// Historical positive counts prove observation; historical zeros do not prove a miss.
+	const readKnown =
+		request.cacheUsageEvidence?.read === "reported" ||
+		request.usage.cacheReadTokens > 0 ||
+		request.dataSource === "demo";
+	const writeKnown =
+		request.cacheUsageEvidence?.write === "reported" ||
+		request.usage.cacheWriteTokens > 0 ||
+		request.dataSource === "demo";
+	return { ...value, readKnown, writeKnown, hitRatio: readKnown ? value.hitRatio : null };
+}
+
 export interface ContextUsage {
 	tokens: number | null;
 	contextWindow: number;
@@ -29,6 +51,10 @@ export interface ContextUsage {
 		latest: CacheUsage | undefined;
 		session: CacheUsage;
 		requestCount: number;
+		knownRequestCount: number;
+		knownInputTokens: number;
+		compactionCount: number;
+		demo: boolean;
 		awaitingRequest?: boolean;
 		diagnostic?: PromptCacheDiagnostic;
 	};
@@ -42,8 +68,12 @@ export function estimateContext(
 		return undefined;
 	const sameModel = (model: SessionSnapshot["model"]) =>
 		model.provider === snapshot.model.provider && model.id === snapshot.model.id;
-	const requests = sessionUsageRequests(snapshot).filter((request) => request.status !== "pending");
+	const allRequests = sessionUsageRequests(snapshot).filter((request) => request.status !== "pending");
+	const requests = allRequests.filter((request) => request.purpose !== "compaction");
 	const latest = requests.at(-1);
+	const values = requests.map(requestCacheUsage);
+	const known = values.filter((value) => value.readKnown);
+	const knownInputTokens = known.reduce((sum, value) => sum + value.inputTokens, 0);
 	// Sum model requests only: session billing can also include media/tool usage.
 	const session = cacheUsage(
 		requests.reduce(
@@ -55,15 +85,24 @@ export function estimateContext(
 			{ inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
 		)
 	);
+	// Keep total token accounting intact; calculate the ratio only over observed reads.
+	session.hitRatio =
+		knownInputTokens > 0 ? known.reduce((sum, value) => sum + value.readTokens, 0) / knownInputTokens : null;
+	session.readKnown = values.length > 0 && values.every((value) => value.readKnown);
+	session.writeKnown = values.length > 0 && values.every((value) => value.writeKnown);
 	const occupancy = (tokens: number | null, basis: ContextUsageState["basis"]): ContextUsage => ({
 		tokens,
 		contextWindow,
 		ratio: tokens === null ? null : Math.min(1, tokens / contextWindow),
 		basis,
 		cache: {
-			latest: latest && sameModel(latest.model) ? cacheUsage(latest.usage) : undefined,
+			latest: latest && sameModel(latest.model) ? requestCacheUsage(latest) : undefined,
 			session,
 			requestCount: requests.length,
+			knownRequestCount: known.length,
+			knownInputTokens,
+			compactionCount: allRequests.length - requests.length,
+			demo: requests.some((request) => request.dataSource === "demo" || request.model.provider === "demo"),
 			awaitingRequest: requests.length === 0 && snapshot.session.phase === "turn",
 			...(latest && sameModel(latest.model) && latest.cacheDiagnostic ? { diagnostic: latest.cacheDiagnostic } : {}),
 		},
@@ -75,7 +114,8 @@ export function estimateContext(
 			? occupancy(current.basis === "unknown" ? null : current.tokens, current.basis)
 			: occupancy(null, "unknown");
 	}
-	const request = requests.at(-1);
+	const request = allRequests.at(-1);
+	if (request?.purpose === "compaction") return occupancy(null, "compaction");
 	if (!request && !snapshot.usageByTurn?.length && snapshot.session.phase !== "turn") return undefined;
 	// Compatibility with older snapshots. Whole-turn totals sum many requests and
 	// cannot represent the occupancy of any single context window.
