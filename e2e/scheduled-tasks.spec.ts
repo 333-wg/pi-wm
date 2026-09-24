@@ -7,6 +7,7 @@ test.beforeAll(async () => {
 test.afterAll(stopWebApp);
 
 async function openScheduledTasks(page: Page): Promise<void> {
+	await expect(page.locator(".connection")).toHaveClass(/connected/);
 	await expect(page.getByRole("tab", { name: /定时任务|Scheduled tasks/ })).toHaveCount(0);
 	const menu = page.getByRole("button", { name: "打开导航", exact: true });
 	if (await menu.isVisible()) await menu.click();
