@@ -29,9 +29,12 @@ export async function startDesktopWorkflowFixture() {
 			}
 			const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 			const messages = body.messages ?? [];
-			const lastUser = messages.findLastIndex((message) => message.role === "user");
+			// Reference snapshots are serialized as user messages after the actual task.
+			const lastUser = messages.findLastIndex(
+				(message) => message.role === "user" && /^DESKTOP_CASE:([a-z-]+)/.test(contentText(message.content))
+			);
 			const text = contentText(messages[lastUser]?.content);
-			const scenario = /DESKTOP_CASE:([a-z-]+)/.exec(text)?.[1] ?? "connection";
+			const scenario = /^DESKTOP_CASE:([a-z-]+)/.exec(text)?.[1] ?? "connection";
 			const results = messages.slice(lastUser + 1).filter((message) => message.role === "tool");
 			state.requests.push({ scenario, step: results.length, model: body.model });
 			if (state.requests.length > 100 || state.requests.filter((item) => item.scenario === scenario).length > 20)
