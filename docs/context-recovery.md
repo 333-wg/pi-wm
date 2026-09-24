@@ -39,6 +39,31 @@ even if the process exits repeatedly before producing its first assistant reply.
 - This is not an exactly-once execution guarantee for arbitrary external tools,
   a filesystem rollback, or protection against corruption/deletion of both stores.
 
+## Editing and explicit forks
+
+Editing a user message sends `turn.prompt` with an `edit` anchor and the revision
+captured when the editor was opened. It keeps the current session ID. The
+orchestrator stages a separate Pi history file, then atomically commits its
+`runtimeHistoryId`, the retained transcript prefix, and the replacement operation
+in SQLite. Stale edits, active work, queued work and pending approvals are
+rejected. A staging failure leaves the original conversation untouched.
+
+An explicit `session.fork` also stages the actual Pi branch, including raw tool
+results, attachment contents and the applicable compaction entries. UI previews
+are never substituted for raw messages. The new history pointer survives restart
+and selects a separate directory, so reopening a session cannot select an older
+branch by file modification time. A missing selected history fails closed.
+
+Old operations and history files remain available for auditing. Recovery excludes
+operations whose user messages were removed from the active transcript. Both
+editing and forking add a model-visible notice that external effects were not
+undone and uncertain actions require checking the current state before retrying.
+Legacy display-only forks with missing source history are rejected rather than
+silently treated as valid empty conversations; reopen the original conversation.
+
+Regression coverage includes `edit-history.test.ts`, `session-history.test.ts`,
+`history-branch-wire.test.ts`, and the edit/fork browser test in `wuming.spec.ts`.
+
 ## Verification
 
 Run from the repository root:

@@ -35,6 +35,49 @@ function input(fragments: ContextFragment[], overrides: Partial<ContextAssemblyI
 }
 
 describe("ContextEngine", () => {
+	it("appends fresh reference snapshots without changing policy or skill precedence", () => {
+		const reference = fragment("workspace:readme", "old readme", { delivery: "user" });
+		const policy = fragment("policy:agents", "active policy", { kind: "policy", required: true });
+		const skill = fragment("skill:selected", "active skill", { kind: "skill", required: true });
+		const assemble = (references: ContextFragment[]) =>
+			engine.assemble(input([policy, skill, ...references], { appendReferenceContext: true }));
+		const first = assemble([reference]);
+		const updated = assemble([{ ...reference, version: "2", content: "new readme" }]);
+		const removed = assemble([]);
+		for (const result of [first, updated, removed]) {
+			expect(result.systemPrompt).toBe(first.systemPrompt);
+			expect(result.systemPrompt).toContain("active policy");
+			expect(result.systemPrompt).toContain("active skill");
+			expect(result.systemPrompt).not.toContain("readme");
+			expect(result.referencePrompt).not.toContain("active policy");
+			expect(verifyContextPlan(result.plan)).toBe(true);
+		}
+		expect(updated.referencePrompt).toContain("new readme");
+		expect(updated.referencePrompt).not.toContain("old readme");
+		expect(removed.referencePrompt).toContain("\n[]\n");
+		expect(first.plan.fragments.at(-1)?.delivery).toBe("user");
+		expect(updated.plan.digest).not.toBe(first.plan.digest);
+		expect(engine.assemble(input([reference])).systemPrompt).toContain("old readme");
+	});
+
+	it("budgets appended references together with system instructions, including empty snapshot overhead", () => {
+		const reference = fragment("workspace:large", "x".repeat(5000), {
+			delivery: "user",
+			truncation: "head_tail",
+			required: true,
+		});
+		const result = engine.assemble(input([reference], { appendReferenceContext: true }));
+		expect(result.plan.fragments.at(-1)?.truncated).toBe(true);
+		expect(result.plan.estimatedSystemTokens + result.plan.estimatedReferenceTokens!).toBeLessThanOrEqual(
+			result.plan.budget.availableSystemTokens
+		);
+		expect(result.plan.estimatedReferenceTokens).toBe(engine.estimateTokens(result.referencePrompt));
+		for (const kind of ["policy", "skill"] as const)
+			expect(() => engine.assemble(input([{ ...reference, kind }], { appendReferenceContext: true }))).toThrow(
+				"only workspace or memory"
+			);
+	});
+
 	it("builds deterministic verifiable plans without persisting fragment bodies", () => {
 		const fragments = [
 			fragment("workspace:auth", "Authentication token refresh implementation.", {

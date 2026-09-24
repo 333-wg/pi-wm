@@ -1825,17 +1825,19 @@ export class GatewayServer implements AsyncDisposable {
                     digest: operation.contextPlan.digest,
                     cachePrefixDigest: operation.contextPlan.cachePrefixDigest,
                     estimatedSystemTokens: operation.contextPlan.estimatedSystemTokens,
+                    ...(operation.contextPlan.estimatedReferenceTokens === undefined ? {} : { estimatedReferenceTokens: operation.contextPlan.estimatedReferenceTokens }),
                     availableSystemTokens: operation.contextPlan.budget.availableSystemTokens,
                     fragmentCount: operation.contextPlan.fragments.length,
                     omittedCount: operation.contextPlan.omitted.length,
                     fragments: operation.contextPlan.fragments.map(
-                      ({ id, kind, source, renderedTokens, truncated, cacheScope }: any) => ({
+                      ({ id, kind, source, renderedTokens, truncated, cacheScope, delivery }: any) => ({
                         id,
                         kind,
                         source,
                         renderedTokens,
                         truncated,
                         cacheScope,
+                        ...(delivery === undefined ? {} : { delivery }),
                       })
                     ),
                   },
@@ -2347,6 +2349,7 @@ export class GatewayServer implements AsyncDisposable {
                 ? 'steer'
                 : 'follow_up',
           content: command.content,
+          ...(command.type === 'turn.prompt' && command.edit ? { edit: command.edit } : {}),
           ...(selectedSkillIds === undefined ? {} : { skills: selectedSkillIds }),
         });
       case 'turn.queue.list': {

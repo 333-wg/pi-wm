@@ -1,8 +1,33 @@
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
-import { CommandSchema, ServerMessageSchema, UsageRequestSummarySchema } from "../src/index.js";
+import {
+	CommandSchema,
+	PromptCacheDiagnosticSchema,
+	ServerMessageSchema,
+	UsageRequestSummarySchema,
+} from "../src/index.js";
 
 describe("task observability contracts", () => {
+	it("accepts bounded cache fingerprints but rejects prompt bodies and invalid hashes", () => {
+		const check = Compile(PromptCacheDiagnosticSchema);
+		const hash = `sha256:${"a".repeat(64)}`;
+		const diagnostic = {
+			basis: "provider_payload",
+			change: "append_only",
+			systemDigest: hash,
+			toolsDigest: hash,
+			historyDigest: hash,
+			parametersDigest: hash,
+			messageCount: 3,
+			sharedPrefixMessages: 1,
+			previousMessageCount: 1,
+			intervalMs: 10,
+		};
+		expect(check.Check(diagnostic)).toBe(true);
+		expect(check.Check({ ...diagnostic, prompt: "private" })).toBe(false);
+		expect(check.Check({ ...diagnostic, systemDigest: "private" })).toBe(false);
+		expect(check.Check({ ...diagnostic, intervalMs: -1 })).toBe(false);
+	});
 	it("bounds search requests and rejects extra fields", () => {
 		const check = Compile(CommandSchema);
 		const command = { type: "session.search", workspaceId: "workspace", query: "中文" };

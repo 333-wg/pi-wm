@@ -70,6 +70,9 @@ export function diagnosticReport(snapshot: SessionSnapshot, runs: RunSummary[]) 
 				finishedAt: request.finishedAt,
 				inputTokens: request.usage.inputTokens,
 				outputTokens: request.usage.outputTokens,
+				cacheReadTokens: request.usage.cacheReadTokens,
+				cacheWriteTokens: request.usage.cacheWriteTokens,
+				...(request.cacheDiagnostic ? { cacheDiagnostic: request.cacheDiagnostic } : {}),
 			})),
 	};
 }

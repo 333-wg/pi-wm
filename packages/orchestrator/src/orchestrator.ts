@@ -90,6 +90,7 @@ export interface AcceptTurnInput {
 	runtimeContent?: UserContentPart[];
 	skills?: string[];
 	goalId?: string;
+	edit?: { itemId: string; expectedRevision: number };
 }
 
 export interface AbortTurnInput {
@@ -2169,7 +2170,7 @@ export class SessionOrchestrator {
 	}
 
 	async startGoal(input: GoalCommandInput): Promise<Extract<CommandResult, { type: "goal.started" }>> {
-		return this.#serializeCommand(`goal:start:${input.sessionId}:${input.goalId}`, () => {
+		return this.#serializeCommand(`goal:start:${input.sessionId}:${input.goalId}`, async () => {
 			const now = this.#clock();
 			const hash = commandHash({
 				type: "goal.start",
@@ -2191,7 +2192,7 @@ export class SessionOrchestrator {
 			if (parent.session.archivedAt !== undefined)
 				throw new OrchestratorError("conflict", "Archived sessions cannot start goals");
 			if (goal.executionMode === "session") {
-				const result = this.#acceptTurnLocked({
+				const result = await this.#acceptTurnLocked({
 					principalId: input.principalId,
 					idempotencyKey: input.idempotencyKey,
 					sessionId: goal.parentSessionId,
@@ -3539,7 +3540,7 @@ export class SessionOrchestrator {
 	}
 
 	async forkSession(input: ForkSessionInput): Promise<Extract<CommandResult, { type: "session.forked" }>> {
-		return this.#serializeCommand(`fork:${input.sessionId}:${input.idempotencyKey}`, () => {
+		return this.#serializeCommand(input.sessionId, async () => {
 			const now = this.#clock();
 			const hash = commandHash({
 				type: "session.fork",
@@ -3560,11 +3561,21 @@ export class SessionOrchestrator {
 				throw new OrchestratorError("not_found", `Transcript item ${input.fromItemId} does not exist`);
 			}
 			const sessionId = this.#idFactory();
+			const runtimeHistoryId = this.#idFactory();
+			await this.runtime.branchSession?.({
+				snapshot: current,
+				targetSessionId: sessionId,
+				historyId: runtimeHistoryId,
+				...(input.fromItemId === undefined ? {} : { fromItemId: input.fromItemId }),
+			});
+			if (this.store.loadSnapshot(input.sessionId)?.revision !== current.revision)
+				throw new OrchestratorError("conflict", "The source conversation changed; retry the fork");
 			const sourceName = !isAutomaticSessionTitle(current.session.name)
 				? current.session.name
 				: suggestSessionTitleFromTranscript(current.transcript);
 			const forkName = sourceName ? appendForkTitle(sourceName) : undefined;
 			const event: SessionEvent = {
+				runtimeHistoryId,
 				type: "session.created",
 				eventId: this.#idFactory(),
 				sessionId,
@@ -4120,7 +4131,7 @@ export class SessionOrchestrator {
 		return result;
 	}
 
-	#acceptTurnLocked(input: AcceptTurnInput): CommandResult {
+	async #acceptTurnLocked(input: AcceptTurnInput): Promise<CommandResult> {
 		if (input.content.length === 0) throw new OrchestratorError("conflict", "A turn requires content");
 		const now = this.#clock();
 		const skills = normalizeSkills(input.skills);
@@ -4131,6 +4142,7 @@ export class SessionOrchestrator {
 					sessionId: input.sessionId,
 					content: input.content,
 					skills,
+					...(input.edit ? { edit: input.edit } : {}),
 				});
 		const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
 		if (existing) return existing;
@@ -4164,6 +4176,37 @@ export class SessionOrchestrator {
 		const userItemId = this.#idFactory();
 		const events: SessionEvent[] = [];
 		let snapshot = current;
+		if (input.edit) {
+			const edit = input.edit;
+			if (
+				input.mode !== "prompt" || input.goalId || current.session.phase !== "idle" ||
+				current.pendingApprovals.length > 0 || this.store.countQueuedOperations(input.sessionId) > 0 ||
+				this.store.getRunningOperation(input.sessionId)
+			)
+				throw new OrchestratorError("conflict", "Stop the current task and clear queued messages before editing");
+			if (current.revision !== edit.expectedRevision)
+				throw new OrchestratorError("conflict", "The conversation changed; reopen the message before editing");
+			if (!current.transcript.some((item) => item.id === edit.itemId && item.type === "user"))
+				throw new OrchestratorError("not_found", "The edited user message no longer exists");
+			const runtimeHistoryId = this.#idFactory();
+			await this.runtime.branchSession?.({
+				snapshot: current,
+				targetSessionId: input.sessionId,
+				historyId: runtimeHistoryId,
+				beforeItemId: edit.itemId,
+			});
+			const rewind: SessionEvent = {
+				type: "session.history.rewound",
+				eventId: this.#idFactory(),
+				sessionId: input.sessionId,
+				revision: snapshot.revision + 1,
+				timestamp: now,
+				beforeItemId: edit.itemId,
+				runtimeHistoryId,
+			};
+			events.push(rewind);
+			snapshot = reduceSessionEvent(snapshot, rewind);
+		}
 		const userItem: TranscriptItem = {
 			id: userItemId,
 			type: "user",

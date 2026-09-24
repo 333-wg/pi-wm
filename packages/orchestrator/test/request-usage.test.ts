@@ -15,6 +15,18 @@ const request: UsageRequestSummary = {
 	firstContentAt: 150,
 	finishedAt: 200,
 	status: "complete",
+	cacheDiagnostic: {
+		basis: "provider_payload",
+		change: "append_only",
+		systemDigest: `sha256:${"a".repeat(64)}`,
+		toolsDigest: `sha256:${"b".repeat(64)}`,
+		historyDigest: `sha256:${"c".repeat(64)}`,
+		parametersDigest: `sha256:${"d".repeat(64)}`,
+		messageCount: 3,
+		sharedPrefixMessages: 1,
+		previousMessageCount: 1,
+		intervalMs: 50,
+	},
 };
 
 async function queueTurn(orchestrator: SessionOrchestrator) {

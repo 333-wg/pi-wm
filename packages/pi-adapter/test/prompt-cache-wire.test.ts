@@ -167,7 +167,8 @@ it.each(scenarios)(
 			const workspace = join(root, "workspace");
 			await mkdir(workspace);
 			let reopened = false;
-			let content = "authentication refresh";
+			let content: string | undefined = "authentication refresh REFERENCE_VERSION_ONE";
+			let policy = "button typography";
 			const tool = (name: string): ToolDefinition => ({
 				name,
 				label: name,
@@ -181,22 +182,28 @@ it.each(scenarios)(
 				execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
 			});
 			runtime = new PiAgentRuntime({
+				appendReferenceContext: true,
 				resolveContextFragments: () => [
-					{
-						id: "workspace:auth",
-						source: "workspace:auth",
-						version: content,
-						kind: "workspace",
-						cacheScope: "turn",
-						content,
-					},
+					...(content === undefined
+						? []
+						: [
+								{
+									id: "workspace:auth",
+									source: "workspace:auth",
+									version: content,
+									kind: "workspace" as const,
+									cacheScope: "turn" as const,
+									delivery: "user" as const,
+									content,
+								},
+							]),
 					{
 						id: "workspace:colors",
 						source: "workspace:colors",
 						version: "1",
-						kind: "workspace",
+						kind: "policy",
 						cacheScope: "turn",
-						content: "button typography",
+						content: policy,
 					},
 				],
 				createSession: createDefaultPiSessionFactory({
@@ -249,13 +256,17 @@ it.each(scenarios)(
 				"authentication refresh",
 				"button typography",
 				"resume the task",
-				"check updated policy",
+				"check updated reference",
+				"reference removed",
+				"policy updated",
 			].entries()) {
 				if (index === 2) {
 					await runtime.disposeSession(snapshot.session.id);
 					reopened = true;
 				}
 				if (index === 3) content = "UPDATED_CONTEXT_MUST_APPLY";
+				if (index === 4) content = undefined;
+				if (index === 5) policy = "UPDATED_POLICY_MUST_APPLY";
 				const operation: DurableOperation = {
 					id: `turn-${index}`,
 					sessionId: snapshot.session.id,
@@ -280,6 +291,15 @@ it.each(scenarios)(
 				});
 				expect(result.failure).toBeUndefined();
 				expect(result.requests).toHaveLength(1);
+				expect(result.requests?.[0]?.cacheDiagnostic?.change).toBe(
+					index === 0 || index === 2
+						? "first_observation"
+						: index === 5
+							? "system_changed"
+							: index === 1 && scenario.api === "openai-completions"
+								? "parameters_changed"
+								: "append_only"
+				);
 				expect(result.requests?.[0]?.usage).toMatchObject({
 					inputTokens: scenario.retention === "none" ? 1344 : 64,
 					cacheReadTokens: scenario.retention === "none" ? 0 : 1024,
@@ -289,20 +309,27 @@ it.each(scenarios)(
 				});
 			}
 			expect(errors).toEqual([]);
-			expect(requests).toHaveLength(4);
+			expect(requests).toHaveLength(6);
 			const system = (request: WireRequest) =>
 				request.system ??
 				(request.messages ?? request.input)?.filter((message) =>
 					["system", "developer"].includes(String(message.role))
 				);
-			for (const request of requests.slice(1, 3)) {
+			for (const request of requests.slice(1, 5)) {
 				expect(JSON.stringify(system(request))).toBe(JSON.stringify(system(requests[0]!)));
 				expect(JSON.stringify(request.tools)).toBe(JSON.stringify(requests[0]!.tools));
 				expect(request.prompt_cache_key).toBe(requests[0]!.prompt_cache_key);
+				expect(JSON.stringify(request).match(/REFERENCE_VERSION_ONE/g)).toHaveLength(1);
 			}
-			expect(JSON.stringify(system(requests[3]!))).toContain("UPDATED_CONTEXT_MUST_APPLY");
-			expect(JSON.stringify(system(requests[3]!))).not.toBe(JSON.stringify(system(requests[2]!)));
-			for (let index = 1; index < 3; index++) {
+			expect(JSON.stringify(system(requests[3]!))).not.toContain("UPDATED_CONTEXT_MUST_APPLY");
+			expect(JSON.stringify((requests[3]!.messages ?? requests[3]!.input)!.at(-1))).toContain(
+				"UPDATED_CONTEXT_MUST_APPLY"
+			);
+			expect(JSON.stringify((requests[4]!.messages ?? requests[4]!.input)!.at(-1))).not.toContain(
+				"UPDATED_CONTEXT_MUST_APPLY"
+			);
+			expect(JSON.stringify(system(requests[5]!))).toContain("UPDATED_POLICY_MUST_APPLY");
+			for (let index = 1; index < 5; index++) {
 				const prior = requests[index - 1]!.messages ?? requests[index - 1]!.input ?? [];
 				const current = requests[index]!.messages ?? requests[index]!.input ?? [];
 				expect(current.length).toBeGreaterThan(prior.length);
@@ -328,6 +355,7 @@ it.each(scenarios)(
 				if (scenario.api === "openai-completions") {
 					expect(first.tool_choice).toBe("required");
 					expect(requests[1]?.tool_choice).not.toBe("required");
+					expect(requests[2]?.tool_choice).not.toBe("required");
 				}
 			}
 		} finally {

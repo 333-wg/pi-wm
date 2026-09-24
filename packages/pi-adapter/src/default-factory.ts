@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import {
 	createAgentSessionFromServices,
 	createAgentSessionServices,
@@ -17,7 +16,10 @@ import { buildWumingSystemPrompt } from "./system-prompt.js";
 import { ToolRecoveryMonitor } from "./tool-recovery.js";
 import { stableToolDefinitions } from "./prompt-cache.js";
 import { guardedModelStream } from "./model-stream.js";
+import { PromptCacheObserver } from "./cache-diagnostics.js";
+import { pendingReferenceMessage } from "./reference-context.js";
 import { recoverDurableSession, requestDigest } from "./session-recovery.js";
+import { persistHistoryBranch, sessionHistoryDirectory } from "./session-history.js";
 import type { PiProviderRegistration, PiSessionFactory, PiSessionRecovery, WorkspaceResolver } from "./types.js";
 
 export interface DefaultPiSessionFactoryOptions {
@@ -44,11 +46,6 @@ export interface DefaultPiSessionFactoryOptions {
 		tools: ToolDefinition[];
 		cwd: string;
 	}) => string | undefined;
-}
-
-function sessionDirectory(root: string, sessionId: string): string {
-	const safeName = createHash("sha256").update(sessionId).digest("hex");
-	return join(root, safeName);
 }
 
 function interruptionText(entry: SessionEntry): string | undefined {
@@ -132,7 +129,7 @@ function toolCapability(tool: ToolDefinition): CapabilityManifest {
 export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOptions): PiSessionFactory {
 	return async (snapshot: SessionSnapshot) => {
 		const cwd = await options.resolveWorkspace(snapshot.session.workspaceId);
-		const sessionDir = sessionDirectory(options.sessionDataDir, snapshot.session.id);
+		const sessionDir = sessionHistoryDirectory(options.sessionDataDir, snapshot.session.id, snapshot.runtimeHistoryId);
 		await mkdir(sessionDir, { recursive: true });
 		// The tools come first because the system prompt describes them, and Pi builds
 		// that prompt from the resource loader the services own.
@@ -145,6 +142,8 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 			cwd,
 		});
 		let activeSystemPrompt: string | undefined;
+		let activeReferenceContext: string | undefined;
+		let pendingReference = () => pendingReferenceMessage(activeReferenceContext, []);
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir: options.agentDir,
@@ -154,9 +153,14 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 				// audited per-turn context at that lifecycle boundary as well.
 				extensionFactories: [
 					(pi) => {
-						pi.on("before_agent_start", () =>
-							activeSystemPrompt === undefined ? undefined : { systemPrompt: activeSystemPrompt }
-						);
+						pi.on("before_agent_start", () => {
+							// Pi runs this after its own preflight compaction and persists the message.
+							const message = pendingReference();
+							return {
+								...(activeSystemPrompt === undefined ? {} : { systemPrompt: activeSystemPrompt }),
+								...(message ? { message } : {}),
+							};
+						});
 					},
 				],
 				noExtensions: true,
@@ -184,6 +188,8 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 				`Unknown Pi model ${snapshot.model.provider}/${snapshot.model.id}; configure it in the Pi models catalog or choose one of: ${available.join(", ") || "none"}`
 			);
 		}
+		if (snapshot.runtimeHistoryId && (await SessionManager.list(cwd, sessionDir)).length === 0)
+			throw new Error("The selected model history is missing; refusing to start an empty conversation");
 		const sessionManager = SessionManager.continueRecent(cwd, sessionDir);
 		const { session } = await createAgentSessionFromServices({
 			services,
@@ -194,11 +200,15 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 			customTools,
 		});
 		session.setAutoRetryEnabled(options.autoRetry ?? false);
+		pendingReference = () => pendingReferenceMessage(activeReferenceContext, session.agent.state.messages);
 		session.setAutoCompactionEnabled(options.autoCompaction ?? true);
-		let initialToolChoicePending = options.initialToolChoice === "required";
+		let initialToolChoicePending =
+			options.initialToolChoice === "required" && session.agent.state.messages.length === 0;
+		const cacheObserver = new PromptCacheObserver();
 		{
 			const streamFunction = session.agent.streamFunction.bind(session.agent);
 			session.agent.streamFunction = (streamModel, context, streamOptions) => {
+				cacheObserver.beginRequest();
 				const requireTool = initialToolChoicePending && (context.tools?.length ?? 0) > 0;
 				initialToolChoicePending = false;
 				const selectedModel = requireTool
@@ -214,6 +224,11 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 							...streamOptions,
 							signal,
 							...(options.cacheRetention === undefined ? {} : { cacheRetention: options.cacheRetention }),
+							onPayload: async (payload, model) => {
+								const replacement = await streamOptions?.onPayload?.(payload, model);
+								cacheObserver.observe(replacement === undefined ? payload : replacement, model);
+								return replacement;
+							},
 						}),
 					streamOptions?.signal,
 					options.modelIdleTimeoutMs
@@ -283,7 +298,9 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		};
 		const prompt = session.prompt.bind(session);
 		Object.assign(session, {
-			prompt: (text: string, promptOptions?: Parameters<typeof session.prompt>[1] & { operationId?: string }) => {
+			branchHistory: (input: Parameters<typeof persistHistoryBranch>[3], operations: Parameters<typeof persistHistoryBranch>[4]) =>
+				persistHistoryBranch(options.sessionDataDir, cwd, sessionManager, input, operations),
+			prompt: (text: string, promptOptions?: Parameters<typeof session.prompt>[1] & { operationId?: string; userItemId?: string }) => {
 				if (promptOptions?.images?.length && !session.model?.input.includes("image")) {
 					return Promise.reject(
 						new Error("图片已上传，但当前模型不支持图片理解。请切换到支持视觉的模型后重试，无需重新上传图片。")
@@ -292,9 +309,10 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 				if (promptOptions?.operationId)
 					sessionManager.appendCustomEntry("wuming-turn-input", {
 						operationId: promptOptions.operationId,
+						...(promptOptions.userItemId ? { userItemId: promptOptions.userItemId } : {}),
 						digest: requestDigest([{ type: "text", text }, ...(promptOptions.images ?? [])]),
 					});
-				const { operationId: _operationId, ...options } = promptOptions ?? {};
+				const { operationId: _operationId, userItemId: _userItemId, ...options } = promptOptions ?? {};
 				return prompt(text, options);
 			},
 			prepareForPrompt: async (input?: PiSessionRecovery) => {
@@ -310,6 +328,10 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 			},
 			resumeApprovedTool,
 			getSystemPrompt: () => session.agent.state.systemPrompt,
+			getCacheDiagnostic: () => cacheObserver.diagnostic,
+			setReferenceContext: (content: string | undefined) => {
+				activeReferenceContext = content;
+			},
 			setSystemPrompt: (prompt: string) => {
 				activeSystemPrompt = prompt;
 				session.agent.state.systemPrompt = prompt;

@@ -72,6 +72,7 @@ class FakePiSession implements PiSessionLike {
 	abortCalls = 0;
 	disposed = false;
 	systemPrompt = "base system prompt";
+	referenceContext: string | undefined;
 	capabilityManifests: CapabilityManifest[] = [];
 	contextUsage: ReturnType<NonNullable<PiSessionLike["getContextUsage"]>> = undefined;
 	compactCalls = 0;
@@ -102,7 +103,7 @@ class FakePiSession implements PiSessionLike {
 	}
 
 	async prompt(text: string, options?: Parameters<PiSessionLike["prompt"]>[1]): Promise<void> {
-		this.prompts.push({ text, options });
+		this.prompts.push({ text: (this.referenceContext ?? "") + text, options });
 		if (this.isStreaming) return;
 		this.isStreaming = true;
 		try {
@@ -128,6 +129,10 @@ class FakePiSession implements PiSessionLike {
 
 	setSystemPrompt(prompt: string): void {
 		this.systemPrompt = prompt;
+	}
+
+	setReferenceContext(content: string | undefined): void {
+		this.referenceContext = content;
 	}
 
 	getCapabilityManifests(): CapabilityManifest[] {
@@ -1209,6 +1214,100 @@ describe("PiAgentRuntime", () => {
 		});
 		expect(result.skills).toEqual(["review-code"]);
 		expect(session.systemPrompt).toBe("base system prompt");
+	});
+
+	it("refreshes appended reference data after compaction and deletion without changing policy", async () => {
+		const session = new FakePiSession();
+		let content: string | undefined = "original README";
+		const runtime = new PiAgentRuntime({
+			createSession: async () => session,
+			appendReferenceContext: true,
+			resolveContextBudget: () => ({ contextWindowTokens: 10000, maxSystemTokens: 2000 }),
+			resolveContextFragments: () => [
+				{
+					id: "policy:agents",
+					source: "workspace:AGENTS.md",
+					version: "1",
+					content: "current rules",
+					kind: "policy",
+					required: true,
+				},
+				...(content === undefined
+					? []
+					: [
+							{
+								id: "workspace:readme",
+								source: "workspace:README.md",
+								version: content,
+								content,
+								kind: "workspace" as const,
+								delivery: "user" as const,
+							},
+						]),
+			],
+		});
+		const systems: string[] = [];
+		session.emitScript = async (current) => {
+			systems.push(current.systemPrompt);
+		};
+		const input = {
+			operation: operation([{ type: "text", text: "latest request" }]),
+			snapshot,
+			signal: new AbortController().signal,
+			onProgress: () => {},
+		};
+		const planned = await runtime.resolveContext(input);
+		await runtime.executeTurn({ ...input, contextPlan: planned });
+		content = "updated README";
+		await session.compact();
+		await runtime.executeTurn(input);
+		content = undefined;
+		await runtime.executeTurn(input);
+		expect(session.prompts[0]?.text).toContain("original README");
+		expect(session.prompts[1]?.text).toContain("updated README");
+		expect(session.prompts[1]?.text).not.toContain("original README");
+		expect(session.prompts[2]?.text).toContain("\n[]\n");
+		for (const prompt of session.prompts) expect(prompt.text.endsWith("latest request")).toBe(true);
+		expect(new Set(systems).size).toBe(1);
+		expect(systems[0]).toContain("current rules");
+		expect(systems[0]).not.toContain("README");
+	});
+
+	it("retains fresh reference data on approval resume without injecting a second user request", async () => {
+		const session = new FakePiSession();
+		const runtime = new PiAgentRuntime({
+			createSession: async () => session,
+			appendReferenceContext: true,
+			resolveContextFragments: () => [
+				{
+					id: "workspace:readme",
+					source: "workspace:README.md",
+					version: "1",
+					content: "current reference",
+					kind: "workspace",
+					delivery: "user",
+				},
+			],
+		});
+		const originalResume = session.resumeScript;
+		session.resumeScript = async (...args) => {
+			expect(session.systemPrompt).toContain("current reference");
+			return originalResume(...args);
+		};
+		const input = {
+			operation: {
+				...operation([{ type: "text", text: "continue" }]),
+				approvalId: "approval",
+				approvalToolCallId: "approved",
+			},
+			snapshot,
+			signal: new AbortController().signal,
+			onProgress: () => {},
+		};
+		const contextPlan = await runtime.resolveContext(input);
+		await runtime.executeTurn({ ...input, contextPlan });
+		expect(session.prompts).toHaveLength(0);
+		expect(contextPlan.estimatedReferenceTokens).toBeUndefined();
 	});
 
 	it("resumes the exact approved tool call without prompting the provider again", async () => {

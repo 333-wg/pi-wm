@@ -1,4 +1,4 @@
-import type { ContextUsageState, SessionSnapshot, Usage } from "@wuming/protocol";
+import type { ContextUsageState, PromptCacheDiagnostic, SessionSnapshot, Usage } from "@wuming/protocol";
 import { sessionUsageRequests } from "@wuming/protocol";
 
 export interface CacheUsage {
@@ -25,7 +25,13 @@ export interface ContextUsage {
 	/** Clamped to 1 so an over-budget estimate cannot overflow the bar. */
 	ratio: number | null;
 	basis: ContextUsageState["basis"];
-	cache?: { latest: CacheUsage | undefined; session: CacheUsage; requestCount: number; awaitingRequest?: boolean };
+	cache?: {
+		latest: CacheUsage | undefined;
+		session: CacheUsage;
+		requestCount: number;
+		awaitingRequest?: boolean;
+		diagnostic?: PromptCacheDiagnostic;
+	};
 }
 
 export function estimateContext(
@@ -36,7 +42,7 @@ export function estimateContext(
 		return undefined;
 	const sameModel = (model: SessionSnapshot["model"]) =>
 		model.provider === snapshot.model.provider && model.id === snapshot.model.id;
-	const requests = sessionUsageRequests(snapshot);
+	const requests = sessionUsageRequests(snapshot).filter((request) => request.status !== "pending");
 	const latest = requests.at(-1);
 	// Sum model requests only: session billing can also include media/tool usage.
 	const session = cacheUsage(
@@ -59,6 +65,7 @@ export function estimateContext(
 			session,
 			requestCount: requests.length,
 			awaitingRequest: requests.length === 0 && snapshot.session.phase === "turn",
+			...(latest && sameModel(latest.model) && latest.cacheDiagnostic ? { diagnostic: latest.cacheDiagnostic } : {}),
 		},
 	});
 	// Explicit unknown values invalidate historical usage after compaction/model changes.

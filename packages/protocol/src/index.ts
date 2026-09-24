@@ -380,6 +380,29 @@ export const UsageToolSummarySchema = StrictObject({
 });
 export type UsageToolSummary = Static<typeof UsageToolSummarySchema>;
 
+export const PromptCacheDiagnosticSchema = StrictObject({
+	basis: Type.Literal("provider_payload"),
+	change: Type.Union([
+		Type.Literal("first_observation"),
+		Type.Literal("unchanged"),
+		Type.Literal("append_only"),
+		Type.Literal("model_changed"),
+		Type.Literal("tools_changed"),
+		Type.Literal("system_changed"),
+		Type.Literal("parameters_changed"),
+		Type.Literal("history_changed"),
+	]),
+	systemDigest: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
+	toolsDigest: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
+	historyDigest: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
+	parametersDigest: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
+	messageCount: Type.Integer({ minimum: 0 }),
+	sharedPrefixMessages: Type.Integer({ minimum: 0 }),
+	previousMessageCount: Type.Optional(Type.Integer({ minimum: 0 })),
+	intervalMs: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+export type PromptCacheDiagnostic = Static<typeof PromptCacheDiagnosticSchema>;
+
 export const UsageRequestSummarySchema = StrictObject({
 	requestId: Id,
 	model: ModelRefSchema,
@@ -387,6 +410,7 @@ export const UsageRequestSummarySchema = StrictObject({
 	startedAt: Type.Optional(Timestamp),
 	finishedAt: Type.Optional(Timestamp),
 	firstContentAt: Type.Optional(Timestamp),
+	cacheDiagnostic: Type.Optional(PromptCacheDiagnosticSchema),
 	status: Type.Optional(
 		Type.Union([Type.Literal("pending"), Type.Literal("complete"), Type.Literal("error"), Type.Literal("aborted")])
 	),
@@ -483,11 +507,13 @@ export const ContextPlanFragmentSummarySchema = StrictObject({
 	renderedTokens: Type.Integer({ minimum: 0 }),
 	truncated: Type.Boolean(),
 	cacheScope: Type.Union([Type.Literal("stable"), Type.Literal("session"), Type.Literal("turn")]),
+	delivery: Type.Optional(Type.Literal("user")),
 });
 export const ContextPlanSummarySchema = StrictObject({
 	digest: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
 	cachePrefixDigest: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
 	estimatedSystemTokens: Type.Integer({ minimum: 0 }),
+	estimatedReferenceTokens: Type.Optional(Type.Integer({ minimum: 0 })),
 	availableSystemTokens: Type.Integer({ minimum: 0 }),
 	fragmentCount: Type.Integer({ minimum: 1, maximum: 257 }),
 	omittedCount: Type.Integer({ minimum: 0, maximum: 256 }),
@@ -1513,6 +1539,7 @@ export const SessionSummarySchema = StrictObject({
 });
 export const SessionSnapshotSchema = StrictObject({
 	session: SessionSummarySchema,
+	runtimeHistoryId: Type.Optional(Id),
 	revision: Revision,
 	model: ModelRefSchema,
 	thinkingLevel: ThinkingLevelSchema,
@@ -1871,6 +1898,7 @@ export const CommandSchema = Type.Union([
 		sessionId: Id,
 		content: PromptContent,
 		skills: Type.Optional(Type.Array(Id, { maxItems: 8, uniqueItems: true })),
+		edit: Type.Optional(StrictObject({ itemId: Id, expectedRevision: Revision })),
 	}),
 	StrictObject({
 		type: Type.Literal("turn.steer"),
@@ -1885,9 +1913,25 @@ export const CommandSchema = Type.Union([
 		skills: Type.Optional(Type.Array(Id, { maxItems: 8, uniqueItems: true })),
 	}),
 	StrictObject({ type: Type.Literal("turn.queue.list"), sessionId: Id }),
-	StrictObject({ type: Type.Literal("turn.queue.update"), sessionId: Id, operationId: Id, expectedUpdatedAt: Timestamp, text: Type.String({ maxLength: 100000 }) }),
-	StrictObject({ type: Type.Literal("turn.queue.delete"), sessionId: Id, operationId: Id, expectedUpdatedAt: Timestamp }),
-	StrictObject({ type: Type.Literal("turn.queue.send_now"), sessionId: Id, operationId: Id, expectedUpdatedAt: Timestamp }),
+	StrictObject({
+		type: Type.Literal("turn.queue.update"),
+		sessionId: Id,
+		operationId: Id,
+		expectedUpdatedAt: Timestamp,
+		text: Type.String({ maxLength: 100000 }),
+	}),
+	StrictObject({
+		type: Type.Literal("turn.queue.delete"),
+		sessionId: Id,
+		operationId: Id,
+		expectedUpdatedAt: Timestamp,
+	}),
+	StrictObject({
+		type: Type.Literal("turn.queue.send_now"),
+		sessionId: Id,
+		operationId: Id,
+		expectedUpdatedAt: Timestamp,
+	}),
 	StrictObject({ type: Type.Literal("turn.abort"), sessionId: Id }),
 	StrictObject({
 		type: Type.Literal("approval.respond"),

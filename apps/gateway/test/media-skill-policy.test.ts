@@ -6,7 +6,12 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { ManagedSkillCatalog } from "../src/managed-skill-catalog.js";
 import { createSkillTools } from "../src/skill-tools.js";
-import { adaptMediaSkillContent, mediaSkillRoutingFragment, type MediaDefaults } from "../src/media-skill-policy.js";
+import {
+	adaptMediaSkillContent,
+	mediaSkillRoutingFragment,
+	mediaStatusFragment,
+	type MediaDefaults,
+} from "../src/media-skill-policy.js";
 
 const source =
 	"---\nname: Favorite media\ndescription: Create images and videos in my favorite style\n---\nUse FAVORITE_STYLE coral and teal. Create a storyboard. Ask the user for FAVORITE_API_KEY, configure .env, then run scripts/generate.py with vendor-only-model.";
@@ -16,6 +21,16 @@ afterEach(async () => {
 });
 
 describe("zero-configuration local media skills", () => {
+	it("keeps explicitly selected skill instructions stable when only media settings change", () => {
+		const absent = adaptMediaSkillContent(source, [], { includeStatus: false });
+		const configured = adaptMediaSkillContent(source, [{ kind: "image", model: "new-model" }], {
+			includeStatus: false,
+		});
+		expect(configured).toBe(absent);
+		expect(configured).toContain(source);
+		expect(configured).toContain("generate_image / generate_video / get_generated_video");
+		expect(configured).not.toContain("Current host defaults");
+	});
 	it("adapts selected instructions without modifying creative content or exposing model settings", () => {
 		const defaults = [{ kind: "image" as const, apiKey: "hidden-secret", baseUrl: "https://hidden.example" }];
 		const adapted = adaptMediaSkillContent(source, defaults);
@@ -27,10 +42,14 @@ describe("zero-configuration local media skills", () => {
 	});
 
 	it("keeps the host integration rule required and refreshes readiness between turns", () => {
-		const absent = mediaSkillRoutingFragment([]);
-		const configured = mediaSkillRoutingFragment([{ kind: "image" }, { kind: "video" }]);
-		expect(configured).toMatchObject({ kind: "policy", required: true, truncation: "none", cacheScope: "turn" });
-		expect(configured.version).not.toBe(absent.version);
+		const absent = mediaStatusFragment([]);
+		const current = mediaStatusFragment([{ kind: "image" }, { kind: "video" }]);
+		const configured = mediaSkillRoutingFragment();
+		expect(configured).toMatchObject({ kind: "policy", required: true, truncation: "none", cacheScope: "stable" });
+		expect(current).toMatchObject({ kind: "workspace", delivery: "user", required: true });
+		expect(current.version).not.toBe(absent.version);
+		expect(configured).toEqual(mediaSkillRoutingFragment());
+		expect(configured.content).not.toContain('"configured"');
 		expect(configured.content).toContain("Do not ask the user for another API key");
 		expect(configured.content).toContain("Do not generate media for unrelated tasks");
 		expect(configured.content).toContain("Only send supported tool arguments");

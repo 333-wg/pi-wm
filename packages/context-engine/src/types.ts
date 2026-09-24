@@ -14,6 +14,8 @@ export interface ContextFragment {
 	priority?: number;
 	required?: boolean;
 	cacheScope?: ContextCacheScope;
+	/** Only reference data may be appended to the current user request. */
+	delivery?: "user";
 	truncation?: ContextTruncation;
 	metadata?: Record<string, ContextJson>;
 }
@@ -27,6 +29,7 @@ export interface ContextAssemblyInput {
 	baseSystemPrompt: string;
 	baseSystemVersion?: string;
 	fragments: ContextFragment[];
+	appendReferenceContext?: boolean;
 	budget: {
 		contextWindowTokens: number;
 		observedContextTokens?: number;
@@ -45,6 +48,7 @@ export interface ContextPlanFragment {
 	priority: number;
 	required: boolean;
 	cacheScope: ContextCacheScope;
+	delivery?: "user";
 	contentDigest: string;
 	renderedDigest: string;
 	originalTokens: number;
@@ -83,6 +87,7 @@ export interface ContextPlan {
 		availableSystemTokens: number;
 	};
 	estimatedSystemTokens: number;
+	estimatedReferenceTokens?: number;
 	fragments: ContextPlanFragment[];
 	omitted: OmittedContextFragment[];
 }
@@ -90,6 +95,7 @@ export interface ContextPlan {
 export interface ContextAssembly {
 	plan: ContextPlan;
 	systemPrompt: string;
+	referencePrompt: string;
 	injectedPromptSuffix: string;
 }
 

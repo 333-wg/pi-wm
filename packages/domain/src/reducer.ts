@@ -119,6 +119,7 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 			sandboxMode: event.sandboxMode,
 			approvalPolicy: event.approvalPolicy,
 			transcript: [],
+			...(event.runtimeHistoryId === undefined ? {} : { runtimeHistoryId: event.runtimeHistoryId }),
 			queuedSteerCount: 0,
 			queuedFollowUpCount: 0,
 			pendingApprovals: [],
@@ -152,6 +153,17 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 	};
 
 	switch (event.type) {
+		case "session.history.rewound": {
+			const index = current.transcript.findIndex((item) => item.id === event.beforeItemId);
+			if (index < 0 || current.transcript[index]?.type !== "user")
+				throw new SessionInvariantError("session_mismatch", "The edited user message no longer exists");
+			return {
+				...next,
+				transcript: current.transcript.slice(0, index),
+				runtimeHistoryId: event.runtimeHistoryId,
+				contextUsage: { model: current.model, tokens: null, basis: "unknown" },
+			};
+		}
 		case "session.item.upserted":
 			return { ...next, transcript: upsertItem(current.transcript, event.item) };
 		case "session.phase.changed":

@@ -73,8 +73,8 @@ export function mediaModelStatus(defaults: MediaDefaults) {
 	});
 }
 
-export function mediaSkillRoutingFragment(defaults: MediaDefaults): ContextFragment {
-	const content = `${MEDIA_SKILL_ROUTING_POLICY}\nCurrent host defaults: ${JSON.stringify(mediaModelStatus(defaults))}\nConfigured means credentials are saved, not that the provider's generation permission has been tested.`;
+export function mediaSkillRoutingFragment(): ContextFragment {
+	const content = MEDIA_SKILL_ROUTING_POLICY;
 	return {
 		id: "media:skill-routing",
 		version: createHash("sha256").update(content).digest("hex"),
@@ -84,16 +84,39 @@ export function mediaSkillRoutingFragment(defaults: MediaDefaults): ContextFragm
 		label: "Host-managed image and video generation",
 		priority: 600,
 		required: true,
+		cacheScope: "stable",
+		truncation: "none",
+	};
+}
+
+export function mediaStatusFragment(defaults: MediaDefaults): ContextFragment {
+	const content = JSON.stringify(mediaModelStatus(defaults));
+	return {
+		id: "media:status",
+		version: createHash("sha256").update(content).digest("hex"),
+		kind: "workspace",
+		source: "wuming:media-status",
+		content,
+		label: "Current media defaults (configured, not verified)",
+		priority: 600,
+		required: true,
 		cacheScope: "turn",
+		delivery: "user",
 		truncation: "none",
 	};
 }
 
 /** Adapt the invocation, never rewrite the user's installed package or its source digest. */
-export function adaptMediaSkillContent(content: string, defaults: MediaDefaults): string {
+export function adaptMediaSkillContent(
+	content: string,
+	defaults: MediaDefaults,
+	options: { includeStatus?: boolean } = {}
+): string {
 	return [
 		"Wuming host integration for this skill: for image/video generation steps only, use the configured media tools. Keep the creative workflow below; its media-provider credentials/setup/API scripts are superseded by the host-managed media policy. No per-skill media configuration is required. Unrelated services and tasks are unchanged.",
-		`Current host defaults: ${JSON.stringify(mediaModelStatus(defaults))}`,
+		...(options.includeStatus === false
+			? []
+			: [`Current host defaults: ${JSON.stringify(mediaModelStatus(defaults))}`]),
 		"--- Original skill/reference content ---",
 		content,
 		"--- End original content ---",

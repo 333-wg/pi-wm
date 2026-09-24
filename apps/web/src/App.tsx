@@ -185,7 +185,7 @@ import {
 	writeStoredThinking,
 } from "./lib/thinking-preference.js";
 import { estimateContext, formatTokens, type ContextUsage } from "./lib/context-usage.js";
-import { anchorBefore, formatItemTime, formatItemTimestamp, hasVisibleContent, messageText } from "./lib/transcript.js";
+import { formatItemTime, formatItemTimestamp, hasVisibleContent, messageText } from "./lib/transcript.js";
 import { groupConsecutiveTools } from "./lib/tool-groups.js";
 import { ToolGroup } from "./components/ToolGroup.js";
 import { isNearBottom } from "./lib/scroll.js";
@@ -1893,6 +1893,7 @@ function LiveToolView({
 
 interface ComposerEdit {
 	sessionId: string;
+	expectedRevision: number;
 	itemId: string;
 	text: string;
 	artifacts: ArtifactRef[];
@@ -5471,7 +5472,7 @@ export function App() {
 		};
 	});
 
-	// Message-level actions. Both branching actions need an idle, writable,
+	// Message-level actions. Editing and forking need an idle, writable,
 	// connected session, so they share one gate and one explanation of it.
 	const branchDisabled =
 		client.connection !== "connected" || active || client.snapshot?.session.archivedAt !== undefined;
@@ -5481,7 +5482,7 @@ export function App() {
 			: client.connection !== "connected"
 				? "未连接到网关"
 				: active
-					? "会话正在运行，结束后可分叉"
+					? "请先停止当前任务，再编辑或分叉"
 					: "";
 	const runMessageAction = async (itemId: string, action: () => Promise<void>) => {
 		setMessageBusyId(itemId);
@@ -5528,6 +5529,7 @@ export function App() {
 			setMessageError(undefined);
 			setComposerEdit({
 				sessionId: client.snapshot.session.id,
+				expectedRevision: client.snapshot.revision,
 				itemId: item.id,
 				text: messageText(item.content),
 				artifacts: item.content.flatMap((part) => (part.type === "artifact" ? [part.artifact] : [])),
@@ -6886,13 +6888,12 @@ export function App() {
 									// Queueing a follow-up must not pull readers away from the current answer.
 									if (!active || queueMode === "steer") jumpToLatest();
 									if (composerEdit && composerEdit.sessionId === client.snapshot?.session.id) {
-										const anchor = anchorBefore(transcript ?? [], composerEdit.itemId);
 										setMessageBusyId(composerEdit.itemId);
 										try {
-											// An anchorless fork copies everything; editing the first prompt needs a fresh session.
-											if (anchor === undefined) await client.createSession();
-											else await client.forkSession(anchor);
-											await client.sendPrompt(text, artifacts, queueMode);
+											await client.sendPrompt(text, artifacts, "follow_up", {
+												itemId: composerEdit.itemId,
+												expectedRevision: composerEdit.expectedRevision,
+											});
 											setComposerEdit(undefined);
 										} finally {
 											setMessageBusyId(undefined);

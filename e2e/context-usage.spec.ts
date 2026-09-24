@@ -200,6 +200,16 @@ test("keeps populated cache statistics compact in light, dark and touch layouts"
 					const cacheReadTokens = index === 53 ? 178560 : index === 0 ? 6428800 : 0;
 					return {
 						requestId: "cache-" + index,
+						cacheDiagnostic: {
+							basis: "provider_payload",
+							change: "append_only",
+							systemDigest: `sha256:${"a".repeat(64)}`,
+							toolsDigest: `sha256:${"b".repeat(64)}`,
+							historyDigest: `sha256:${"c".repeat(64)}`,
+							parametersDigest: `sha256:${"d".repeat(64)}`,
+							messageCount: 3,
+							sharedPrefixMessages: 1,
+						},
 						model: value.model,
 						usage: {
 							inputTokens,
@@ -259,6 +269,7 @@ test("keeps populated cache statistics compact in light, dark and touch layouts"
 	await popup.locator("summary").click();
 	await expect(popup.getByRole("table")).toContainText("6,607,360");
 	await expect(popup.getByRole("table")).toContainText("6,806,306");
+	await expect(popup).toContainText("请求前缀: 仅追加历史");
 	await page.keyboard.press("Escape");
 	await page.setViewportSize({ width: 320, height: 740 });
 	await page.getByRole("button", { name: "关闭运行面板", exact: true }).first().click();
@@ -267,6 +278,7 @@ test("keeps populated cache statistics compact in light, dark and touch layouts"
 	await expect(popup).toBeVisible();
 	expect(await popup.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 	await page.screenshot({ path: testInfo.outputPath("cache-dark-mobile-expanded.png") });
+	await expect(popup).toContainText("请求前缀: 仅追加历史");
 	await page.keyboard.press("Escape");
 	await expect(popup).toBeHidden();
 	const touchContext = await browser.newContext({

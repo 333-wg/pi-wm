@@ -220,6 +220,14 @@ export interface RuntimeCompactionRecord extends RuntimeCompactionResult {
 export type DurableMemory = MemorySummary;
 
 export interface AgentRuntime {
+	/** Stage a durable history branch without changing the source session. */
+	branchSession?(input: {
+		snapshot: SessionSnapshot;
+		targetSessionId: string;
+		historyId: string;
+		fromItemId?: string;
+		beforeItemId?: string;
+	}): Promise<void>;
 	resolveCapabilities?(input: {
 		operation: DurableOperation & { payload: TurnOperationPayload };
 		snapshot: SessionSnapshot;

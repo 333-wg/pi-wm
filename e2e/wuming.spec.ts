@@ -413,7 +413,7 @@ for (const viewport of [
 	});
 }
 
-test("branches a session from a message and resends an edited prompt", async ({ page }) => {
+test("edits in the current session and only creates a fork when explicitly requested", async ({ page }) => {
 	await createSession(page);
 	const originalName = await page.locator(".session-entry.selected .session-open span").innerText();
 	await sendMessage(page, "第一问");
@@ -423,6 +423,8 @@ test("branches a session from a message and resends an edited prompt", async ({ 
 	await waitForIdle(page);
 	await sendMessage(page, "第二问");
 	await expect(page.getByText("Demo runtime received: 第二问")).toBeVisible();
+	await waitForIdle(page);
+	const originalCount = await page.locator(".session-entry").count();
 
 	// The action row is faded until its message is hovered *or* focused, so
 	// focusing a button has to reveal it: that is what keeps these reachable
@@ -431,8 +433,7 @@ test("branches a session from a message and resends an edited prompt", async ({ 
 	await reply.getByRole("button", { name: "复制消息" }).focus();
 	await expect(reply.locator(".message-actions")).toHaveCSS("opacity", "1");
 
-	// Editing re-sends into a fork anchored *before* the edited message, so the
-	// branch keeps the first exchange and answers the new text in place of the old.
+	// Editing keeps the same conversation and replaces only the selected suffix.
 	const secondPrompt = page.locator(".message-row.user").nth(1);
 	await secondPrompt.hover();
 	await secondPrompt.getByRole("button", { name: "编辑并重新发送" }).click();
@@ -442,7 +443,13 @@ test("branches a session from a message and resends an edited prompt", async ({ 
 	await page.getByRole("textbox", { name: "消息", exact: true }).fill("改写的第二问");
 	// `exact` matters: every other message still offers 编辑并重新发送.
 	await page.getByRole("button", { name: "发送", exact: true }).click();
-	await expect(page.locator(".session-entry.selected .session-open")).toHaveText(`${originalName} (fork)`);
+	await expect(page.locator(".session-entry.selected .session-open")).toHaveText(originalName);
+	await expect(page.getByText("Demo runtime received: 改写的第二问")).toBeVisible();
+	await expect(page.getByText("Demo runtime received: 第一问")).toBeVisible();
+	await expect(page.getByText("Demo runtime received: 第二问")).toHaveCount(0);
+	await expect(page.locator(".session-entry")).toHaveCount(originalCount);
+	await waitForIdle(page);
+	await page.reload();
 	await expect(page.getByText("Demo runtime received: 改写的第二问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第一问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第二问")).toHaveCount(0);
@@ -452,11 +459,12 @@ test("branches a session from a message and resends an edited prompt", async ({ 
 	const firstReply = page.locator(".message-row.assistant").first();
 	await firstReply.hover();
 	await firstReply.getByRole("button", { name: "从这里分叉出新会话" }).click();
+	await expect(page.locator(".session-entry.selected .session-open")).toHaveText(`${originalName} (fork)`);
+	await expect(page.locator(".session-entry")).toHaveCount(originalCount + 1);
 	await expect(page.getByText("Demo runtime received: 第一问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 改写的第二问")).toHaveCount(0);
 
-	// The first message of a session has no anchor, and an anchorless fork copies
-	// the *whole* transcript, so re-sending it has to open a fresh session instead.
+	// Editing the first message also retains the current conversation identity.
 	const firstPrompt = page.locator(".message-row.user").first();
 	await firstPrompt.hover();
 	await firstPrompt.getByRole("button", { name: "编辑并重新发送" }).click();
@@ -464,7 +472,13 @@ test("branches a session from a message and resends an edited prompt", async ({ 
 	await page.getByRole("button", { name: "发送", exact: true }).click();
 	await expect(page.getByText("Demo runtime received: 重写第一问")).toBeVisible();
 	await expect(page.getByText("Demo runtime received: 第一问")).toHaveCount(0);
-	await expect(page.locator(".session-entry.selected")).toContainText("重写第一问");
+	await expect(page.locator(".session-entry.selected .session-open")).toHaveText(`${originalName} (fork)`);
+	await expect(page.locator(".session-entry")).toHaveCount(originalCount + 1);
+	await page.screenshot({ path: "test-results/edit-current-session-desktop.png" });
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.locator(".rail-mobile-close").click();
+	await expect(page.getByText("Demo runtime received: 重写第一问")).toBeVisible();
+	await page.screenshot({ path: "test-results/edit-current-session-mobile.png" });
 });
 
 test("completes file mentions and runs slash commands from the composer", async ({ page }) => {

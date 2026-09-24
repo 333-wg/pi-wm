@@ -42,6 +42,7 @@ export interface PiAgentRuntimeOptions {
 	) => CapabilityManifest[] | Promise<CapabilityManifest[]>;
 	resolveContextFragments?: ContextFragmentResolver;
 	resolveContextBudget?: PiContextBudgetResolver;
+	appendReferenceContext?: boolean;
 	contextEngine?: ContextEngine;
 	idFactory?: () => string;
 	clock?: () => number;
@@ -428,6 +429,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 	readonly #resolveCapabilityManifests: PiAgentRuntimeOptions["resolveCapabilityManifests"];
 	readonly #resolveContextFragments: ContextFragmentResolver | undefined;
 	readonly #resolveContextBudget: PiContextBudgetResolver | undefined;
+	readonly #appendReferenceContext: boolean;
 	readonly #pendingCompactions = new Map<string, RuntimeCompactionRecord>();
 	readonly #contextEngine: ContextEngine;
 	readonly #idFactory: () => string;
@@ -444,6 +446,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		this.#resolveCapabilityManifests = options.resolveCapabilityManifests;
 		this.#resolveContextFragments = options.resolveContextFragments;
 		this.#resolveContextBudget = options.resolveContextBudget;
+		this.#appendReferenceContext = options.appendReferenceContext ?? false;
 		this.#contextEngine = options.contextEngine ?? new ContextEngine();
 		this.#idFactory = options.idFactory ?? randomUUID;
 		this.#clock = options.clock ?? Date.now;
@@ -477,6 +480,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			if (session.isStreaming) return session;
 		}
 		const configurationKey = [
+			snapshot.runtimeHistoryId ?? "",
 			snapshot.model.provider,
 			snapshot.model.id,
 			snapshot.thinkingLevel,
@@ -536,6 +540,14 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		if (entry) (await entry.pending).dispose();
 	}
 
+	async branchSession(input: Parameters<NonNullable<AgentRuntime["branchSession"]>>[0]): Promise<void> {
+		const session = await this.#session(input.snapshot);
+		if (session.isStreaming) throw new Error("Stop the current turn before changing conversation history");
+		if (!session.branchHistory) throw new Error("This runtime cannot preserve model history when editing or forking");
+		const operations = (await this.#resolveRecoveryOperations?.(input.snapshot)) ?? [];
+		await session.branchHistory(input, operations);
+	}
+
 	#buildCapabilityPlan(input: {
 		snapshot: SessionSnapshot;
 		operationId: string;
@@ -579,6 +591,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		skills: ResolvedSkill[];
 		query: string;
 		imageCount: number;
+		resumingTool?: boolean;
 		onProgress?: Parameters<AgentRuntime["executeTurn"]>[0]["onProgress"] | undefined;
 		signal: AbortSignal;
 	}): Promise<ContextAssembly> {
@@ -652,6 +665,11 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			query: input.query,
 			baseSystemPrompt: input.session.getSystemPrompt?.() ?? "You are Pi-Wm, a coding agent.",
 			fragments: [...additional, ...skillFragments],
+			// Approval resumes have no new user message to carry the current snapshot.
+			appendReferenceContext:
+				this.#appendReferenceContext &&
+				!input.resumingTool &&
+				Boolean(input.session.setSystemPrompt && input.session.setReferenceContext),
 			budget: {
 				contextWindowTokens,
 				...(usage?.tokens === null || usage?.tokens === undefined ? {} : { observedContextTokens: usage.tokens }),
@@ -692,6 +710,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			skills: resolvedSkills,
 			query: prepared.text,
 			imageCount: prepared.images.length,
+			resumingTool: Boolean(input.operation.approvalToolCallId),
 			onProgress: input.onProgress,
 			signal: input.signal,
 		});
@@ -714,6 +733,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		const activeSkillIds = resolvedSkills.map((skill) => skill.id);
 		const previousSystemPrompt = session.getSystemPrompt?.();
 		if (session.setSystemPrompt) session.setSystemPrompt(context.systemPrompt);
+		session.setReferenceContext?.(context.referencePrompt || undefined);
 		const items: TranscriptItem[] = [];
 		const toolInputs = new Map<string, JsonValue>();
 		const toolUsage = new Map<string, UsageToolSummary>();
@@ -920,8 +940,10 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 						basis: "request",
 					});
 				}
+				const cacheDiagnostic = session.getCacheDiagnostic?.();
 				recordRequest({
 					requestId: item.id,
+					...(cacheDiagnostic ? { cacheDiagnostic } : {}),
 					model: { provider: assistant.provider, id: assistant.model },
 					usage: mapUsage(assistant.usage),
 					...(requestStartedAt === undefined ? {} : { startedAt: requestStartedAt }),
@@ -1086,6 +1108,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			} else {
 				await session.prompt(prepared.text, {
 					operationId: input.operation.id,
+					userItemId: input.operation.payload.userItemId,
 					images: prepared.images,
 					...(session.isStreaming && input.operation.payload.mode !== "prompt"
 						? {
@@ -1171,6 +1194,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 				},
 			};
 		} finally {
+			session.setReferenceContext?.(undefined);
 			if (previousSystemPrompt !== undefined && session.setSystemPrompt) session.setSystemPrompt(previousSystemPrompt);
 			input.signal.removeEventListener("abort", abort);
 			unsubscribe();
@@ -1212,6 +1236,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			skills: resolvedSkills,
 			query: prepared.text,
 			imageCount: prepared.images.length,
+			resumingTool: Boolean(input.operation.approvalToolCallId),
 			onProgress: input.onProgress,
 			signal: input.signal,
 		});
@@ -1280,6 +1305,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			: prepared.text;
 		await session.prompt(promptText, {
 			operationId: input.operation.id,
+			userItemId: input.operation.payload.userItemId,
 			images: prepared.images,
 			streamingBehavior: input.operation.payload.mode === "steer" ? "steer" : "followUp",
 			expandPromptTemplates: false,

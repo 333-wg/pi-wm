@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderLocalized as renderToStaticMarkup } from "./render-localized.js";
-import type { SessionSnapshot, Usage } from "@wuming/protocol";
+import type { PromptCacheDiagnostic, SessionSnapshot, Usage } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
 import { cacheUsage, estimateContext } from "../src/lib/context-usage.js";
 import { ContextDetails, ContextMeter, ContextPill } from "../src/components/ContextMeter.js";
@@ -32,6 +32,35 @@ const snapshot: SessionSnapshot = {
 };
 
 describe("context occupancy", () => {
+	it("retains completed cache observations while a new request is pending", () => {
+		const hash = `sha256:${"a".repeat(64)}`;
+		const cacheDiagnostic: PromptCacheDiagnostic = {
+			basis: "provider_payload",
+			change: "append_only",
+			systemDigest: hash,
+			toolsDigest: hash,
+			historyDigest: hash,
+			parametersDigest: hash,
+			messageCount: 3,
+			sharedPrefixMessages: 1,
+		};
+		const requests = [
+			{ requestId: "done", model, usage, status: "complete" as const, cacheDiagnostic },
+			{
+				requestId: "waiting",
+				model,
+				usage: { ...usage, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+				status: "pending" as const,
+			},
+		];
+		const value = estimateContext({ ...snapshot, usageByTurn: [], usageRequests: requests }, 128000)!;
+		expect(value.cache).toMatchObject({ requestCount: 1, diagnostic: cacheDiagnostic, latest: { inputTokens: 90000 } });
+		expect(renderToStaticMarkup(createElement(ContextDetails, { usage: value }))).toContain("仅追加历史");
+		expect(
+			estimateContext({ ...snapshot, model: { ...model, id: "another" }, usageRequests: requests }, 128000)?.cache
+				?.diagnostic
+		).toBeUndefined();
+	});
 	it("prefers compacted occupancy over expensive summary request usage", () => {
 		const value = estimateContext({ ...snapshot, contextUsage: { model, tokens: 12000, basis: "compaction" } }, 128000);
 		expect(value).toMatchObject({ tokens: 12000, contextWindow: 128000, ratio: 0.09375, basis: "compaction" });

@@ -23,6 +23,17 @@ function hitRate(cache: CacheUsage | undefined, t: Translate): string {
 	return cache?.hitRatio == null ? t("noData") : (cache.hitRatio * 100).toFixed(1) + "%";
 }
 
+const cacheChangeLabels = {
+	first_observation: "cacheFirstObservation",
+	unchanged: "cacheUnchanged",
+	append_only: "cacheAppendOnly",
+	model_changed: "cacheModelChanged",
+	tools_changed: "cacheToolsChanged",
+	system_changed: "cacheSystemChanged",
+	parameters_changed: "cacheParametersChanged",
+	history_changed: "cacheHistoryChanged",
+} as const;
+
 export function ContextDetails({ usage }: { usage: ContextUsage }) {
 	const t = useT();
 	const percent = usage.ratio === null ? null : Math.round(usage.ratio * 100);
@@ -96,6 +107,11 @@ export function ContextDetails({ usage }: { usage: ContextUsage }) {
 						))}
 					</tbody>
 				</table>
+				{usage.cache?.diagnostic && (
+					<p title={t("cachePrefixHint")}>
+						{t("cachePrefixChange")}: {t(cacheChangeLabels[usage.cache.diagnostic.change])}
+					</p>
+				)}
 				<p>{t("cacheRateHint")}</p>
 				<p>{t("cacheReportedHint")}</p>
 			</details>

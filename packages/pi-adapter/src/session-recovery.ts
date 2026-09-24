@@ -30,6 +30,11 @@ export async function recoverDurableSession(manager: SessionManager, input: PiSe
 	for (const operation of input.operations) {
 		if (input.signal.aborted) throw input.signal.reason;
 		if (operation.sessionId !== input.snapshot.session.id) throw new Error("Cross-session recovery is not allowed");
+		// Superseded operations stay in the audit log, not in the active context.
+		if (
+			input.snapshot.runtimeHistoryId &&
+			!input.snapshot.transcript.some((item) => item.id === operation.payload.userItemId)
+		) continue;
 		if (!["interrupted", "failed", "completed"].includes(operation.status) || receipts.has(operation.id)) continue;
 		// Deleted follow-ups were never submitted to the runtime. This also covers
 		// legacy deletions persisted as interrupted operations without a marker.

@@ -2023,7 +2023,12 @@ export function useWumingClient() {
 	);
 
 	const sendPrompt = useCallback(
-		async (text: string, artifacts: ArtifactRef[] = [], queueMode: "steer" | "follow_up" = "follow_up") => {
+		async (
+			text: string,
+			artifacts: ArtifactRef[] = [],
+			queueMode: "steer" | "follow_up" = "follow_up",
+			edit?: { itemId: string; expectedRevision: number }
+		) => {
 			const snapshot = snapshotRef.current;
 			if (!snapshot) throw new Error("未选择会话");
 			if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
@@ -2036,6 +2041,7 @@ export function useWumingClient() {
 			];
 			if (content.length === 0) throw new Error("请输入消息或添加附件");
 			const launchTeam = state.selectedSkill?.id === "team" || /^\/team(?:\s|$)/.test(text.trim());
+			if (edit && snapshot.session.phase !== "idle") throw new Error("请先停止当前任务，再编辑重发");
 			if (launchTeam && snapshot.session.phase !== "idle") throw new Error("请先停止当前任务，或在新对话中启动团队");
 			const type =
 				snapshot.session.phase === "idle" ? "turn.prompt" : queueMode === "steer" ? "turn.steer" : "turn.follow_up";
@@ -2043,6 +2049,7 @@ export function useWumingClient() {
 				type,
 				sessionId: snapshot.session.id,
 				content,
+				...(edit ? { edit } : {}),
 				...(state.selectedSkill ? { skills: [state.selectedSkill.id] } : {}),
 			});
 			if (launchTeam)

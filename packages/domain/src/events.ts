@@ -46,6 +46,7 @@ export const SessionEventSchema = Type.Union([
 		sandboxMode: SandboxModeSchema,
 		approvalPolicy: ApprovalPolicySchema,
 		usage: UsageSchema,
+		runtimeHistoryId: Type.Optional(Id),
 		costBudgetUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
 		tokenBudget: Type.Optional(Type.Integer({ exclusiveMinimum: 0 })),
 		budgetWarningThreshold: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 1 })),
@@ -54,6 +55,12 @@ export const SessionEventSchema = Type.Union([
 		...EventBase,
 		type: Type.Literal("session.item.upserted"),
 		item: TranscriptItemSchema,
+	}),
+	StrictObject({
+		...EventBase,
+		type: Type.Literal("session.history.rewound"),
+		beforeItemId: Id,
+		runtimeHistoryId: Id,
 	}),
 	StrictObject({
 		...EventBase,

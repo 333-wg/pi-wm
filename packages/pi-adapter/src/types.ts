@@ -2,8 +2,8 @@ import type { AgentSessionEvent, ProviderConfig } from "@earendil-works/pi-codin
 import type { ToolResultMessage, Usage as PiUsage } from "@earendil-works/pi-ai";
 import type { CapabilityManifest } from "@wuming/capability-kernel";
 import type { ContextFragment } from "@wuming/context-engine";
-import type { ArtifactRef, SessionSnapshot } from "@wuming/protocol";
-import type { DurableOperation } from "@wuming/orchestrator";
+import type { ArtifactRef, PromptCacheDiagnostic, SessionSnapshot } from "@wuming/protocol";
+import type { AgentRuntime, DurableOperation } from "@wuming/orchestrator";
 
 export interface PiPreparedPrompt {
 	text: string;
@@ -19,8 +19,11 @@ export interface PiSessionRecovery {
 
 export interface PiSessionLike {
 	readonly isStreaming: boolean;
+	branchHistory?(input: Parameters<NonNullable<AgentRuntime["branchSession"]>>[0], operations: DurableOperation[]): Promise<void>;
 	prepareForPrompt?(recovery?: PiSessionRecovery): void | Promise<void>;
 	getSystemPrompt?(): string;
+	getCacheDiagnostic?(): PromptCacheDiagnostic | undefined;
+	setReferenceContext?(content: string | undefined): void;
 	setSystemPrompt?(prompt: string): void;
 	getCapabilityManifests?(): CapabilityManifest[];
 	getContextUsage?(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
@@ -29,6 +32,7 @@ export interface PiSessionLike {
 		text: string,
 		options?: {
 			operationId?: string;
+			userItemId?: string;
 			images?: Array<{ type: "image"; data: string; mimeType: string }>;
 			streamingBehavior?: "steer" | "followUp";
 			expandPromptTemplates?: boolean;
