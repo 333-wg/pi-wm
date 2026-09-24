@@ -182,6 +182,7 @@ export interface CommitMutationOptions {
 	idempotency?: MutationIdempotency;
 	operation?: DurableOperation;
 	interruptRunningOperation?: string;
+	queuedFollowUpMutation?: { id: string; expectedUpdatedAt: number; payload?: DurableOperation["payload"] };
 	attachGoalRun?: {
 		goalId: string;
 		parentSessionId: string;
@@ -2640,6 +2641,15 @@ export class SqliteOrchestratorStore implements Disposable {
 				throw new OrchestratorError("conflict", "Mutation contains an invalid snapshot");
 			}
 
+			if (options.queuedFollowUpMutation) {
+				const change = options.queuedFollowUpMutation;
+				const where = "operation_id = ? AND session_id = ? AND status = 'queued' AND attempt = 0 AND updated_at = ? AND json_extract(payload_json, '$.mode') = 'follow_up'";
+				const result = change.payload
+					? this.#db.prepare(`UPDATE operations SET payload_json = ?, updated_at = ? WHERE ${where}`).run(JSON.stringify(change.payload), options.snapshot.session.updatedAt, change.id, options.sessionId, change.expectedUpdatedAt)
+					: this.#db.prepare(`UPDATE operations SET status = 'interrupted', abort_requested = 1, finished_at = ?, updated_at = ? WHERE ${where}`).run(options.snapshot.session.updatedAt, options.snapshot.session.updatedAt, change.id, options.sessionId, change.expectedUpdatedAt);
+				if (Number(result.changes) !== 1) throw new OrchestratorError("conflict", "该任务已开始、已删除或已被修改，请刷新队列");
+			}
+
 			if (current) {
 				this.#db
 					.prepare(
@@ -3258,9 +3268,14 @@ export class SqliteOrchestratorStore implements Disposable {
 	listRecoveryOperations(sessionId: string): DurableOperation[] {
 		const rows = this.#db
 			.prepare(
-				"SELECT operation_id, session_id, type, status, payload_json, attempt, created_at, updated_at, started_at, finished_at, abort_requested, trace_id, error, retry_after, usage_json, tools_json, failure_kind, retry_history_json, approval_id, approval_tool_call_id, capability_plan_json, context_plan_json FROM operations WHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted') ORDER BY rowid"
+				"SELECT operation_id, session_id, type, status, payload_json, attempt, created_at, updated_at, started_at, finished_at, abort_requested, trace_id, error, retry_after, usage_json, tools_json, failure_kind, retry_history_json, approval_id, approval_tool_call_id, capability_plan_json, context_plan_json FROM operations WHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted') AND NOT (status = 'interrupted' AND attempt = 0 AND json_extract(payload_json, '$.mode') = 'follow_up') ORDER BY rowid"
 			)
 			.all(sessionId) as unknown as OperationRow[];
+		return rows.map(mapOperation);
+	}
+
+	listQueuedFollowUps(sessionId: string): DurableOperation[] {
+		const rows = this.#db.prepare("SELECT * FROM operations WHERE session_id = ? AND status = 'queued' AND attempt = 0 AND json_extract(payload_json, '$.mode') = 'follow_up' ORDER BY created_at, rowid").all(sessionId) as unknown as OperationRow[];
 		return rows.map(mapOperation);
 	}
 

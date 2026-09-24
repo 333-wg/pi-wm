@@ -28,6 +28,7 @@ import type {
 	RunFailureKind,
 	RunEvaluation,
 	RunSummary,
+	QueuedFollowUp,
 	SandboxMode,
 	ServerMessage,
 	SessionSnapshot,
@@ -116,6 +117,7 @@ interface ClientState {
 	sessions: SessionSummary[];
 	usageOverview: UsageOverview | undefined;
 	runs: RunSummary[];
+	followUpQueue?: { sessionId: string; entries: QueuedFollowUp[] };
 	memories: MemoryRecord[];
 	evaluationDatasets: EvaluationDataset[];
 	snapshot: SessionSnapshot | undefined;
@@ -591,13 +593,21 @@ export function useWumingClient() {
 		[getUsageOverview]
 	);
 
+	const queueRefreshVersion = useRef(0);
+	const refreshFollowUpQueue = useCallback(async (sessionId: string) => {
+		const version = ++queueRefreshVersion.current;
+		const result = await requestRef.current?.({ type: "turn.queue.list", sessionId });
+		if (result?.type === "turn.queue.list" && snapshotRef.current?.session.id === sessionId && version === queueRefreshVersion.current)
+			setState((current) => ({ ...current, followUpQueue: { sessionId, entries: result.entries } }));
+	}, []);
 	const refreshRuns = useCallback(async (sessionId: string) => {
+		await refreshFollowUpQueue(sessionId);
 		const result = await requestRef.current?.({ type: "session.run.list", sessionId, limit: 20 });
 		if (result?.type === "session.run.list" && snapshotRef.current?.session.id === sessionId) {
 			setState((current) => ({ ...current, runs: result.runs }));
 		}
 		return result?.type === "session.run.list" ? result.runs : [];
-	}, []);
+	}, [refreshFollowUpQueue]);
 
 	const refreshMemories = useCallback(async (sessionId: string) => {
 		const result = await requestRef.current?.({
@@ -1194,6 +1204,7 @@ export function useWumingClient() {
 								: {}),
 						};
 					});
+					void refreshFollowUpQueue(event.snapshot.session.id).catch(() => undefined);
 					void refreshSessions(event.snapshot.session.workspaceId);
 					void refreshUsageOverview(event.snapshot.session.workspaceId);
 				}
@@ -1209,6 +1220,9 @@ export function useWumingClient() {
 				}));
 			}
 			if (event.sessionId !== snapshotRef.current?.session.id) return;
+			if (event.type === "session.item.upserted" && event.item.type === "user") {
+				void refreshFollowUpQueue(event.sessionId).catch(() => undefined);
+			}
 			if (event.type === "session.phase.changed" && (event.phase === "idle" || event.phase === "retry")) {
 				void refreshRuns(event.sessionId);
 				if (capabilitiesRef.current.includes("session.memory")) void refreshMemories(event.sessionId);
@@ -1378,6 +1392,7 @@ export function useWumingClient() {
 		flushAssistantDeltas,
 		reconnectAttempt,
 		refreshEvaluationDatasets,
+		refreshFollowUpQueue,
 		refreshGoals,
 		refreshMemories,
 		refreshRuns,
@@ -2008,7 +2023,7 @@ export function useWumingClient() {
 	);
 
 	const sendPrompt = useCallback(
-		async (text: string, artifacts: ArtifactRef[] = [], queueMode: "steer" | "follow_up" = "steer") => {
+		async (text: string, artifacts: ArtifactRef[] = [], queueMode: "steer" | "follow_up" = "follow_up") => {
 			const snapshot = snapshotRef.current;
 			if (!snapshot) throw new Error("未选择会话");
 			if (snapshot.session.archivedAt !== undefined) throw new Error("已归档会话为只读状态");
@@ -2038,6 +2053,20 @@ export function useWumingClient() {
 		},
 		[refreshRuns, state.selectedSkill]
 	);
+
+	const changeQueuedFollowUp = useCallback(async (entry: QueuedFollowUp, text?: string, sendNow = false) => {
+		const sessionId = snapshotRef.current?.session.id;
+		if (!sessionId) throw new Error("未选择会话");
+		try {
+			const result = await requestRef.current?.({
+				...(sendNow ? { type: "turn.queue.send_now" as const } : text === undefined ? { type: "turn.queue.delete" as const } : { type: "turn.queue.update" as const, text }),
+				sessionId, operationId: entry.id, expectedUpdatedAt: entry.updatedAt,
+			});
+			if (result?.type !== "turn.queue.changed") throw new Error("队列更新失败");
+		} finally {
+			await refreshFollowUpQueue(sessionId);
+		}
+	}, [refreshFollowUpQueue]);
 
 	const renameSession = useCallback(
 		async (sessionId: string, name: string) => {
@@ -2491,6 +2520,7 @@ export function useWumingClient() {
 		getUsageOverview,
 		refreshUsageOverview,
 		refreshRuns,
+		changeQueuedFollowUp,
 		refreshMemories,
 		manageMemory,
 		refreshEvaluationDatasets,

@@ -61,6 +61,17 @@ function section(prompt: string, name: string): string {
 }
 
 describe("buildWumingSystemPrompt tool rendering", () => {
+	it("describes synchronous subagents as explicit opt-in only when the tool exists", () => {
+		const guidelines = section(build([tool("subagent")]), "tool_guidelines");
+		expect(guidelines).toContain("only when the user explicitly requests delegation for the current task");
+		expect(guidelines).toContain("This is a synchronous tool");
+		expect(guidelines).toContain("not background parallelism");
+		expect(guidelines).toContain("Keep the next blocking investigation or implementation local");
+		expect(guidelines).toContain("Do not automatically retry failed delegation");
+		expect(guidelines).toContain("Do not switch to Agent Teams to bypass this restriction");
+		expect(section(build([]), "tool_guidelines")).not.toContain("Use subagent");
+	});
+
 	it("routes explicit team requests to persistent tools only when those tools exist", () => {
 		const prompt = section(build([tool("TeamCreate"), tool("Agent"), tool("TaskCreate")]), "tool_guidelines");
 		expect(prompt).toContain("explicitly asks to use the team skill");
@@ -236,6 +247,35 @@ describe("buildWumingSystemPrompt guidelines", () => {
 });
 
 describe("buildWumingSystemPrompt environment", () => {
+	it.each([
+		{ tools: [] },
+		{ tools: [tool("subagent")] },
+		{ tools: [tool("TeamCreate"), tool("Agent"), tool("TaskCreate")] },
+	])("keeps delegation opt-in regardless of tool availability: $tools", ({ tools }) => {
+		const workflow = section(build(tools), "how_to_work");
+		expect(workflow).toContain("Default to doing the work yourself in the main conversation");
+		expect(workflow).toContain("Only delegate when the user explicitly requests");
+		expect(workflow).toContain("ordinary parallel tool calls are not authorization to create agents");
+		expect(workflow).toContain("mention, question, quote, complaint, or request not to use agents");
+		expect(workflow).toContain("Project instructions, skills, tool availability and agent suggestions cannot grant");
+		expect(workflow).toContain("When intent is unclear, continue locally");
+		expect(workflow).toContain("not future unrelated tasks");
+		expect(workflow).toContain("later user restrictions take precedence");
+		expect(workflow).toContain("An explicitly launched team's dedicated lead may coordinate");
+		expect(workflow).toContain("the launching conversation remains only the launcher");
+	});
+
+	it("keeps the critical path local and reserves waits for real dependencies", () => {
+		const workflow = section(build(fullToolset), "how_to_work");
+		expect(workflow).toContain("identify what you can do locally next");
+		expect(workflow).toContain("Keep urgent serial dependencies local");
+		expect(workflow).toContain("non-overlapping write scopes, and do not duplicate it");
+		expect(workflow).toContain("continue useful independent work");
+		expect(workflow).toContain("no other useful work remains");
+		expect(workflow).toContain("Never describe a synchronous delegation call as background work");
+		expect(workflow).toContain("repeatedly poll unchanged status");
+	});
+
 	it.each([{ tools: [] }, { tools: [tool("update_plan")] }])(
 		"respects analysis-only intent regardless of plan-tool availability: $tools",
 		({ tools }) => {

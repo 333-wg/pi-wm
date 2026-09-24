@@ -172,6 +172,21 @@ it("does not commit recovery if original attachment loading fails", async () => 
 	expect(manager.getEntries()).toEqual([]);
 });
 
+it("never recovers deleted unstarted follow-ups, but retains interrupted executed work", async () => {
+	const manager = SessionManager.inMemory();
+	const deleted = recoveryOperation("deleted", { status: "interrupted", attempt: 0 });
+	deleted.payload = { ...deleted.payload, mode: "follow_up", content: [{ type: "text", text: "DELETED_UNSENT_MESSAGE" }] };
+	const recovery = input([deleted]);
+	expect(await recoverDurableSession(manager, recovery)).toBe(false);
+	expect(recovery.loadPrompt).not.toHaveBeenCalled();
+	expect(manager.getEntries()).toEqual([]);
+	const executed = { ...deleted, id: "executed", attempt: 1, payload: { ...deleted.payload, content: [{ type: "text" as const, text: "EXECUTED_REQUEST" }] } };
+	await recoverDurableSession(manager, input([deleted, executed]));
+	const context = JSON.stringify(manager.buildSessionContext().messages);
+	expect(context).not.toContain("DELETED_UNSENT_MESSAGE");
+	expect(context).toContain("EXECUTED_REQUEST");
+});
+
 it("does not modify a session with an active approval", async () => {
 	const manager = SessionManager.inMemory();
 	manager.appendMessage(recoveryAssistant([{ type: "toolCall", id: "pending", name: "write", arguments: {} }]));

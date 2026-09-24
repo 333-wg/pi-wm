@@ -1,0 +1,30 @@
+.follow-up-queue { margin: 0 0 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); font-size: 12px; overflow: hidden; }
+.follow-up-queue header { display: flex; align-items: center; gap: 6px; padding: 6px 10px 2px; color: var(--muted); font-size: 11px; }
+.follow-up-queue header strong { font-weight: 500; }
+.follow-up-count { font-variant-numeric: tabular-nums; }
+.follow-up-hint { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.follow-up-queue ol { list-style: none; margin: 0; padding: 0 8px; max-height: min(180px, 22dvh); overflow-y: auto; overscroll-behavior: contain; }
+.follow-up-queue li { display: flex; align-items: flex-start; gap: 6px; padding: 4px 0; }
+.follow-up-queue li + li { border-top: 1px solid var(--line); }
+.follow-up-position { color: var(--muted); line-height: 28px; font-size: 11px; min-width: 14px; text-align: center; }
+.follow-up-content { flex: 1; min-width: 0; }
+.follow-up-content p { margin: 0; line-height: 28px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.follow-up-actions { display: flex; flex-shrink: 0; gap: 2px; }
+.follow-up-actions .icon-button { width: 28px; height: 28px; border-radius: 6px; color: var(--muted); }
+.follow-up-actions .follow-up-send-now { color: var(--text); background: var(--surface); border: 1px solid var(--line-strong); }
+.follow-up-actions .icon-button:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+.follow-up-attachment { display: flex; align-items: center; gap: 4px; color: var(--muted); overflow-wrap: anywhere; font-size: 11px; }
+.follow-up-queue textarea { width: 100%; min-height: 52px; max-height: 110px; resize: vertical; box-sizing: border-box; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 8px; font: inherit; }
+.follow-up-edit-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.follow-up-edit-actions button, .follow-up-stale button { padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text); background: var(--surface); font: inherit; cursor: pointer; }
+.follow-up-stale { padding: 8px; }
+.follow-up-conflict { margin-top: 6px; color: var(--muted); }
+.follow-up-queue .follow-up-conflict p { white-space: normal; line-height: 1.5; }
+.follow-up-edit-actions button:disabled, .follow-up-conflict button:disabled { opacity: 0.45; cursor: not-allowed; }
+.follow-up-conflict pre { margin: 4px 0; max-height: 80px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.follow-up-conflict button { padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text); background: var(--surface); font: inherit; cursor: pointer; }
+@media (max-width: 600px) {
+ .follow-up-queue header { gap: 5px; font-size: 10px; }
+ .follow-up-actions .icon-button { width: 32px; height: 32px; }
+ .follow-up-position, .follow-up-content p { line-height: 32px; }
+}

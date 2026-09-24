@@ -14,3 +14,4 @@ test-results/
 %SystemDrive%/
 release/
 .desktop-stage/
+.wuming/queue-preview/

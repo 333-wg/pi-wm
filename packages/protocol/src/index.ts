@@ -835,6 +835,14 @@ export const EvaluationAttestationSchema = StrictObject({
 });
 export type EvaluationAttestation = Static<typeof EvaluationAttestationSchema>;
 
+export const QueuedFollowUpSchema = StrictObject({
+	id: Id,
+	content: Type.Array(UserContentPartSchema, { minItems: 1, maxItems: 32 }),
+	createdAt: Timestamp,
+	updatedAt: Timestamp,
+});
+export type QueuedFollowUp = Static<typeof QueuedFollowUpSchema>;
+
 export const RunSummarySchema = StrictObject({
 	id: Id,
 	sessionId: Id,
@@ -1876,6 +1884,10 @@ export const CommandSchema = Type.Union([
 		content: PromptContent,
 		skills: Type.Optional(Type.Array(Id, { maxItems: 8, uniqueItems: true })),
 	}),
+	StrictObject({ type: Type.Literal("turn.queue.list"), sessionId: Id }),
+	StrictObject({ type: Type.Literal("turn.queue.update"), sessionId: Id, operationId: Id, expectedUpdatedAt: Timestamp, text: Type.String({ maxLength: 100000 }) }),
+	StrictObject({ type: Type.Literal("turn.queue.delete"), sessionId: Id, operationId: Id, expectedUpdatedAt: Timestamp }),
+	StrictObject({ type: Type.Literal("turn.queue.send_now"), sessionId: Id, operationId: Id, expectedUpdatedAt: Timestamp }),
 	StrictObject({ type: Type.Literal("turn.abort"), sessionId: Id }),
 	StrictObject({
 		type: Type.Literal("approval.respond"),
@@ -1999,6 +2011,8 @@ export const CommandResultSchema = Type.Union([
 	StrictObject({ type: Type.Literal("session.attached"), snapshot: SessionSnapshotSchema }),
 	StrictObject({ type: Type.Literal("session.detached"), sessionId: Id }),
 	StrictObject({ type: Type.Literal("session.snapshot"), snapshot: SessionSnapshotSchema }),
+	StrictObject({ type: Type.Literal("turn.queue.list"), sessionId: Id, entries: Type.Array(QueuedFollowUpSchema) }),
+	StrictObject({ type: Type.Literal("turn.queue.changed"), sessionId: Id }),
 	StrictObject({ type: Type.Literal("session.renamed"), snapshot: SessionSnapshotSchema }),
 	StrictObject({ type: Type.Literal("session.archived"), snapshot: SessionSnapshotSchema }),
 	StrictObject({

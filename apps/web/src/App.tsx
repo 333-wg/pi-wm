@@ -22,6 +22,7 @@ import { ComputerUseSettings, useComputerUse } from "./components/ComputerUseSet
 import { OfficialAccountSettings } from "./components/OfficialAccountSettings.js";
 import { AgentTemplateSettings } from "./components/AgentTemplateSettings.js";
 import { TeamLaunchNotice } from "./components/TeamLaunchNotice.js";
+import { FollowUpQueue } from "./components/FollowUpQueue.js";
 import { DesktopUpdateNotice, DesktopUpdateSettings, useDesktopUpdates } from "./components/DesktopUpdates.js";
 import { WelcomeScreen } from "./components/WelcomeScreen.js";
 import { ApprovalPanel } from "./components/ApprovalPanel.js";
@@ -31,6 +32,7 @@ import { DESKTOP_WELCOME_KEY, isDesktopWelcomePassword, readDesktopWelcome } fro
 import {
 	Activity,
 	ArrowDown,
+	ArrowUp,
 	ArrowLeft,
 	BarChart3,
 	BookOpen,
@@ -190,7 +192,14 @@ import { isNearBottom } from "./lib/scroll.js";
 import { themeLabel } from "./lib/theme.js";
 import { ThemeSettings } from "./components/ThemeSettings.js";
 import { createTranslator, localeLabel, useLocale, useT, type LocaleKey, type Translate } from "./lib/locale.js";
-import { isImplicitWorkspace, resolveNewChatWorkspace } from "./lib/workspaces.js";
+import {
+	isImplicitWorkspace,
+	resolveNewChatWorkspace,
+	orderProjects,
+	moveProject,
+	readProjectOrder,
+	writeProjectOrder,
+} from "./lib/workspaces.js";
 import { useTheme } from "./use-theme.js";
 import { applyCompletion, cycleIndex, detectTrigger, quoteMention, type Trigger } from "./lib/suggest.js";
 const TerminalWorkbench = lazy(() =>
@@ -1963,7 +1972,6 @@ function Composer({
 	const fileInput = useRef<HTMLInputElement>(null);
 	const dragDepth = useRef(0);
 	const input = useRef<HTMLTextAreaElement>(null);
-	const [queueMode, setQueueMode] = useState<"steer" | "follow_up">("steer");
 	const [sending, setSending] = useState(false);
 	const [selectingSkill, setSelectingSkill] = useState(false);
 	const [stopping, setStopping] = useState(false);
@@ -2140,9 +2148,10 @@ function Composer({
 		setSending(true);
 		setSendError(undefined);
 		try {
-			await onSend(value, attachments, queueMode);
-			setText("");
-			setAttachments([]);
+			await onSend(value, attachments, "follow_up");
+			// A user may already be composing the next follow-up while this request settles.
+			setText((current) => current === text ? "" : current);
+			setAttachments((current) => current === attachments ? [] : current);
 		} catch (error) {
 			setSendError(error instanceof Error ? error.message : String(error));
 		} finally {
@@ -2413,26 +2422,6 @@ function Composer({
 						</span>
 					)}
 					{!uploading && contextUsage && <ContextPill usage={contextUsage} />}
-					{active && (
-						<div className="segmented" aria-label={t("queueMode")}>
-							<button
-								type="button"
-								className={queueMode === "steer" ? "active" : ""}
-								aria-pressed={queueMode === "steer"}
-								onClick={() => setQueueMode("steer")}
-							>
-								{t("steerNow")}
-							</button>
-							<button
-								type="button"
-								className={queueMode === "follow_up" ? "active" : ""}
-								aria-pressed={queueMode === "follow_up"}
-								onClick={() => setQueueMode("follow_up")}
-							>
-								{t("followUp")}
-							</button>
-						</div>
-					)}
 				</div>
 				<div className="composer-submit">
 					<ThinkingPicker
@@ -4695,6 +4684,11 @@ function ProjectNavigationItem({
 	onRename,
 	onRemove,
 	onOpenFolder,
+	onMoveUp,
+	onMoveDown,
+	draggingProjectId,
+	onDragProject,
+	onDropProject,
 	children,
 }: {
 	workspace: WorkspaceSummary;
@@ -4708,11 +4702,18 @@ function ProjectNavigationItem({
 	onRename: (name: string) => Promise<unknown>;
 	onRemove: () => Promise<void>;
 	onOpenFolder: () => Promise<void>;
+	onMoveUp: (() => void) | undefined;
+	onMoveDown: (() => void) | undefined;
+	draggingProjectId: string | undefined;
+	onDragProject: (id: string | undefined) => void;
+	onDropProject: (sourceId: string) => void;
 	children?: ReactNode;
 }) {
 	const rootRef = useRef<HTMLDivElement>(null);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [renaming, setRenaming] = useState(false);
+	const { t } = useLocale();
+	const [dragOver, setDragOver] = useState(false);
 	const [nameDraft, setNameDraft] = useState(workspace.name);
 	const [removeOpen, setRemoveOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
@@ -4788,7 +4789,7 @@ function ProjectNavigationItem({
 	};
 
 	return (
-		<div ref={rootRef} className={`project-node ${expanded ? "expanded" : ""}`}>
+		<div ref={rootRef} data-workspace-id={workspace.id} className={`project-node ${expanded ? "expanded" : ""}`}>
 			<div
 				className="project-row-wrap"
 				onContextMenu={(event) => {
@@ -4825,9 +4826,36 @@ function ProjectNavigationItem({
 				) : (
 					<>
 						<button
-							className={`project-row ${selected ? "selected" : ""}`}
+							className={`project-row ${selected ? "selected" : ""} ${dragOver && draggingProjectId ? "drop-target" : ""} ${draggingProjectId === workspace.id ? "dragging" : ""}`}
 							type="button"
 							aria-expanded={expanded}
+							title={t("dragProjectToReorder")}
+							draggable={!disabled && !busy}
+							onDragStart={(event) => {
+								event.dataTransfer.effectAllowed = "move";
+								event.dataTransfer.setData("application/x-wuming-project", workspace.id);
+								setMenuOpen(false);
+								onDragProject(workspace.id);
+							}}
+							onDragEnd={() => {
+								onDragProject(undefined);
+								setDragOver(false);
+							}}
+							onDragOver={(event) => {
+								if (disabled || busy || !draggingProjectId || draggingProjectId === workspace.id) return;
+								event.preventDefault();
+								event.dataTransfer.dropEffect = "move";
+								setDragOver(true);
+							}}
+							onDragLeave={() => setDragOver(false)}
+							onDrop={(event) => {
+								setDragOver(false);
+								if (disabled || busy || !draggingProjectId) return;
+								event.preventDefault();
+								if (event.dataTransfer.getData("application/x-wuming-project") === draggingProjectId)
+									onDropProject(draggingProjectId);
+								onDragProject(undefined);
+							}}
 							onClick={onToggle}
 						>
 							{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -4877,6 +4905,31 @@ function ProjectNavigationItem({
 						>
 							<Pencil size={14} />
 							<span>重命名项目</span>
+						</button>
+						<div className="project-menu-separator" />
+						<button
+							type="button"
+							role="menuitem"
+							disabled={!onMoveUp}
+							onClick={() => {
+								setMenuOpen(false);
+								onMoveUp?.();
+							}}
+						>
+							<ArrowUp size={14} />
+							<span>{t("moveProjectUp")}</span>
+						</button>
+						<button
+							type="button"
+							role="menuitem"
+							disabled={!onMoveDown}
+							onClick={() => {
+								setMenuOpen(false);
+								onMoveDown?.();
+							}}
+						>
+							<ArrowDown size={14} />
+							<span>{t("moveProjectDown")}</span>
 						</button>
 						<div className="project-menu-separator" />
 						<button
@@ -4997,6 +5050,9 @@ export function App() {
 	const theme = useTheme();
 	const { locale, setLocale, t } = useLocale();
 	const [collapsedProjectIds, setCollapsedProjectIds] = useState(() => new Set<string>());
+	const [projectOrder, setProjectOrder] = useState(() => readProjectOrder(localStorage));
+	const [draggingProjectId, setDraggingProjectId] = useState<string>();
+	const [projectOrderSaveFailed, setProjectOrderSaveFailed] = useState(false);
 	const [tokenDraft, setTokenDraft] = useState(client.token);
 	const [connectSubmitted, setConnectSubmitted] = useState(false);
 	const welcomeAttemptStarted = useRef(false);
@@ -5191,9 +5247,18 @@ export function App() {
 		[client.workspaces]
 	);
 	const projectWorkspaces = useMemo(
-		() => client.workspaces.filter((workspace) => !isImplicitWorkspace(workspace)),
-		[client.workspaces]
+		() => orderProjects(client.workspaces, projectOrder),
+		[client.workspaces, projectOrder]
 	);
+	const reorderProject = (sourceId: string, targetId: string) => {
+		const next = moveProject(
+			projectWorkspaces.map((workspace) => workspace.id),
+			sourceId,
+			targetId
+		);
+		setProjectOrder(next);
+		setProjectOrderSaveFailed(!writeProjectOrder(localStorage, next));
+	};
 	const canCreateChat = client.connection === "connected" && !!selectedWorkspace;
 	const startNewChat = useCallback(
 		async (workspaceId?: string) => {
@@ -6154,13 +6219,29 @@ export function App() {
 						</div>
 					</div>
 					<nav className="project-tree" aria-label={t("projects")}>
-						{projectWorkspaces.map((workspace) => {
+						{projectOrderSaveFailed && (
+							<div className="project-action-error" role="alert">
+								{t("projectOrderSaveFailed")}
+							</div>
+						)}
+						{projectWorkspaces.map((workspace, index) => {
 							const selected = workspace.id === selectedWorkspace?.id;
 							const expanded = selected && !collapsedProjectIds.has(workspace.id);
 							return (
 								<ProjectNavigationItem
 									key={workspace.id}
 									workspace={workspace}
+									onMoveUp={
+										index > 0 ? () => reorderProject(workspace.id, projectWorkspaces[index - 1]!.id) : undefined
+									}
+									onMoveDown={
+										index < projectWorkspaces.length - 1
+											? () => reorderProject(workspace.id, projectWorkspaces[index + 1]!.id)
+											: undefined
+									}
+									draggingProjectId={draggingProjectId}
+									onDragProject={setDraggingProjectId}
+									onDropProject={(sourceId) => reorderProject(sourceId, workspace.id)}
 									selected={selected}
 									expanded={expanded}
 									disabled={client.connection !== "connected"}
@@ -6340,22 +6421,6 @@ export function App() {
 							<MessageSquareCode size={15} />
 							<span>{t("chat")}</span>
 						</button>
-						{client.capabilities.includes("automations") && (
-							<button
-								role="tab"
-								aria-selected={workbenchView === "scheduled"}
-								className={workbenchView === "scheduled" ? "active" : ""}
-								title={locale === "en" ? "Scheduled tasks" : "定时任务"}
-								aria-label={locale === "en" ? "Scheduled tasks" : "定时任务"}
-								onClick={() => {
-									setWorkbenchView("scheduled");
-									setShowRight(false);
-								}}
-							>
-								<CalendarClock size={15} />
-								<span>{locale === "en" ? "Scheduled tasks" : "定时任务"}</span>
-							</button>
-						)}
 						<button
 							role="tab"
 							aria-selected={workbenchView === "files"}
@@ -6748,6 +6813,12 @@ export function App() {
 									{pendingTail ? t("newContent") : t("scrollToBottom")}
 								</button>
 							)}
+							<FollowUpQueue
+								key={`queue:${client.snapshot?.session.id ?? "draft"}`}
+								entries={client.followUpQueue?.sessionId === client.snapshot?.session.id ? client.followUpQueue?.entries ?? [] : []}
+								disabled={client.connection !== "connected" || client.snapshot?.session.archivedAt !== undefined}
+								onChange={client.changeQueuedFollowUp}
+							/>
 							<Composer
 								key={client.snapshot?.session.id ?? "draft:new-chat"}
 								editRequest={composerEdit?.sessionId === client.snapshot?.session.id ? composerEdit : undefined}
@@ -6812,8 +6883,8 @@ export function App() {
 										throw new Error("请提供团队任务目标，例如 /team 帮我做一个图书管理系统");
 									if (client.selectedSkill?.truncated)
 										throw new Error("所选技能内容已截断，无法执行。请先精简技能文件或取消技能。");
-									// Sending is an explicit request to watch the answer arrive.
-									jumpToLatest();
+									// Queueing a follow-up must not pull readers away from the current answer.
+									if (!active || queueMode === "steer") jumpToLatest();
 									if (composerEdit && composerEdit.sessionId === client.snapshot?.session.id) {
 										const anchor = anchorBefore(transcript ?? [], composerEdit.itemId);
 										setMessageBusyId(composerEdit.itemId);

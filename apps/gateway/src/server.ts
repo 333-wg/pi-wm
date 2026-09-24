@@ -857,6 +857,7 @@ export class GatewayServer implements AsyncDisposable {
   #isReadOnlyCommand(type: Command['type']): boolean {
     return [
       'workspace.list',
+      'turn.queue.list',
       'usage.overview',
       'session.list',
       'session.search',
@@ -1283,7 +1284,8 @@ export class GatewayServer implements AsyncDisposable {
       if (
         command.type === 'turn.prompt' ||
         command.type === 'turn.steer' ||
-        command.type === 'turn.follow_up'
+        command.type === 'turn.follow_up' ||
+        command.type === 'turn.queue.send_now'
       ) {
         void this.#orchestrator
           .drainSession(command.sessionId, undefined, traceId)
@@ -2346,6 +2348,24 @@ export class GatewayServer implements AsyncDisposable {
                 : 'follow_up',
           content: command.content,
           ...(selectedSkillIds === undefined ? {} : { skills: selectedSkillIds }),
+        });
+      case 'turn.queue.list': {
+        this.#requireSession(connection, command.sessionId);
+        return { type: 'turn.queue.list', sessionId: command.sessionId,
+          entries: this.#store.listQueuedFollowUps(command.sessionId).map((operation) => ({
+            id: operation.id, content: operation.payload.content, createdAt: operation.createdAt, updatedAt: operation.updatedAt,
+          })),
+        };
+      }
+      case 'turn.queue.update':
+      case 'turn.queue.delete':
+      case 'turn.queue.send_now':
+        this.#requireSession(connection, command.sessionId);
+        return this.#orchestrator.mutateQueuedFollowUp({
+          principalId: connection.principal.id, idempotencyKey, sessionId: command.sessionId,
+          operationId: command.operationId, expectedUpdatedAt: command.expectedUpdatedAt,
+          ...(command.type === 'turn.queue.update' ? { text: command.text } : {}),
+          ...(command.type === 'turn.queue.send_now' ? { sendNow: true } : {}),
         });
       case 'turn.abort':
         this.#requireSession(connection, command.sessionId);

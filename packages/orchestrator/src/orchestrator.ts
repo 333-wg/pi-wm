@@ -4052,6 +4052,67 @@ export class SessionOrchestrator {
 		});
 	}
 
+	async mutateQueuedFollowUp(input: {
+		principalId: string; idempotencyKey: string; sessionId: string; operationId: string;
+		expectedUpdatedAt: number; text?: string; sendNow?: boolean;
+	}): Promise<Extract<CommandResult, { type: "turn.queue.changed" }>> {
+		return this.#serializeCommand(input.sessionId, () => {
+			const hash = commandHash({ type: "turn.queue.mutate", ...input });
+			const now = this.#clock();
+			const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
+			if (existing) return existing as Extract<CommandResult, { type: "turn.queue.changed" }>;
+			const current = this.store.loadSnapshot(input.sessionId);
+			if (!current) throw new OrchestratorError("not_found", "Session does not exist");
+			if (current.session.archivedAt !== undefined) throw new OrchestratorError("conflict", "Archived sessions are read-only");
+			const operation = this.store.getOperation(input.operationId);
+			if (!operation || operation.sessionId !== input.sessionId || operation.payload.mode !== "follow_up" || operation.status !== "queued" || operation.attempt !== 0 || operation.updatedAt !== input.expectedUpdatedAt)
+				throw new OrchestratorError("conflict", "该任务已开始、已删除或已被修改，请刷新队列");
+			const promoting = input.sendNow === true;
+			const deleting = input.text === undefined && !promoting;
+			const content = [
+				...(input.text?.trim() ? [{ type: "text" as const, text: input.text.trim() }] : []),
+				...operation.payload.content.filter((part) => part.type === "artifact"),
+			];
+			if (!deleting && !promoting && content.length === 0) throw new OrchestratorError("conflict", "请输入消息或保留附件");
+			const event: SessionEvent = {
+				type: "session.queue.changed", eventId: this.#idFactory(), sessionId: input.sessionId,
+				revision: current.revision + 1, timestamp: Math.max(now, operation.updatedAt + 1),
+				queuedSteerCount: current.queuedSteerCount + (promoting ? 1 : 0),
+				queuedFollowUpCount: Math.max(0, current.queuedFollowUpCount - (deleting || promoting ? 1 : 0)),
+			};
+			let snapshot = reduceSessionEvent(current, event);
+			const events: SessionEvent[] = [event];
+			if (promoting) {
+				const item: SessionEvent = {
+					type: "session.item.upserted", eventId: this.#idFactory(), sessionId: input.sessionId,
+					revision: snapshot.revision + 1, timestamp: event.timestamp,
+					item: { id: operation.payload.userItemId, type: "user", createdAt: event.timestamp, content: operation.payload.content },
+				};
+				events.push(item);
+				snapshot = reduceSessionEvent(snapshot, item);
+			}
+			if (deleting && !this.store.getRunningOperation(input.sessionId) && this.store.countQueuedOperations(input.sessionId) === 1) {
+				const phase: SessionEvent = { type: "session.phase.changed", eventId: this.#idFactory(), sessionId: input.sessionId, revision: snapshot.revision + 1, timestamp: event.timestamp, phase: "idle" };
+				events.push(phase);
+				snapshot = reduceSessionEvent(snapshot, phase);
+			}
+			const result = { type: "turn.queue.changed", sessionId: input.sessionId } as const;
+			const committed = this.store.commitMutation({
+				sessionId: input.sessionId, expectedRevision: current.revision, events, snapshot,
+				queuedFollowUpMutation: { id: operation.id, expectedUpdatedAt: input.expectedUpdatedAt,
+					...(promoting ? { payload: { ...operation.payload, mode: "steer" as const } } : !deleting ? { payload: { ...operation.payload, content, runtimeContent: content } } : {}) },
+				...(promoting ? { interruptRunningOperation: STEER_INTERRUPTION_REASON } : {}),
+				idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs },
+			});
+			if (promoting && !committed.deduplicated) {
+				const active = this.#activeTurns.get(input.sessionId);
+				if (active && this.store.getOperation(active.operationId)?.abortRequested)
+					active.controller.abort(new Error(STEER_INTERRUPTION_REASON));
+			}
+			return committed.result as typeof result;
+		});
+	}
+
 	async acceptTurn(input: AcceptTurnInput): Promise<Extract<CommandResult, { type: "turn.accepted" }>> {
 		const result = await this.#serializeCommand(input.sessionId, () => this.#acceptTurnLocked(input));
 		if (result.type !== "turn.accepted")
@@ -4117,8 +4178,11 @@ export class SessionOrchestrator {
 			timestamp: now,
 			item: userItem,
 		};
-		events.push(itemEvent);
-		snapshot = reduceSessionEvent(snapshot, itemEvent);
+		// Follow-ups remain outside the transcript until they are claimed for execution.
+		if (input.mode !== "follow_up") {
+			events.push(itemEvent);
+			snapshot = reduceSessionEvent(snapshot, itemEvent);
+		}
 
 		if (input.mode === "prompt" || current.session.phase === "idle") {
 			const phaseEvent: SessionEvent = {
@@ -4552,6 +4616,16 @@ export class SessionOrchestrator {
 				}
 				let planSnapshot = this.store.loadSnapshot(operation.sessionId);
 				if (!planSnapshot) throw new OrchestratorError("not_found", `Session ${operation.sessionId} does not exist`);
+				if (operation.payload.mode === "follow_up" && !planSnapshot.transcript.some((item) => item.id === operation.payload.userItemId)) {
+					const event: SessionEvent = {
+						type: "session.item.upserted", eventId: this.#idFactory(), sessionId: operation.sessionId,
+						revision: planSnapshot.revision + 1, timestamp: this.#clock(),
+						item: { id: operation.payload.userItemId, type: "user", createdAt: this.#clock(), content: operation.payload.content },
+					};
+					const next = reduceSessionEvent(planSnapshot, event);
+					this.store.commitMutation({ sessionId: operation.sessionId, expectedRevision: planSnapshot.revision, events: [event], snapshot: next, lease });
+					planSnapshot = next;
+				}
 				if (planSnapshot.session.phase === "retry") {
 					const event: SessionEvent = {
 						type: "session.phase.changed",

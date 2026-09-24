@@ -606,13 +606,10 @@ test("immediate input interrupts active work and overtakes queued follow-ups", a
 	await createSession(page);
 	await sendMessage(page, "/inject");
 	await expect(page.getByRole("status", { name: "正在处理请求" })).toBeVisible();
-	const composer = page.locator(".composer");
-	await composer.getByRole("button", { name: "后续任务", exact: true }).click();
-	await expect(composer.getByRole("button", { name: "后续任务", exact: true })).toHaveAttribute("aria-pressed", "true");
 	await sendMessage(page, "queued follow-up");
 	await expect(page.getByText(/Demo runtime received: queued follow-up/)).toHaveCount(0);
-	await composer.getByRole("button", { name: "立即补充", exact: true }).click();
 	await sendMessage(page, "immediate correction");
+	await page.getByRole("region", { name: "后续任务队列" }).getByRole("button", { name: "立即发送（打断）" }).last().click();
 	await expect(page.getByText(/Demo runtime received: immediate correction/)).toBeVisible();
 	await expect(page.getByText(/Demo runtime received: queued follow-up/)).toBeVisible();
 	await waitForIdle(page);
@@ -633,7 +630,6 @@ test("follow-up input waits for active work to finish before starting", async ({
 	await expect(
 		page.locator(".transcript").getByText("我先运行项目测试，确认当前状态。", { exact: true })
 	).toBeVisible();
-	await page.locator(".composer").getByRole("button", { name: "后续任务", exact: true }).click();
 	await sendMessage(page, "after the tests finish");
 	await expect(page.getByText(/Demo runtime received: after the tests finish/)).toBeVisible();
 	await waitForIdle(page);

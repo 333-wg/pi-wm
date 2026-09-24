@@ -179,18 +179,20 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 			name: "subagent",
 			label: "subagent",
 			description: [
-				"Delegate a self-contained investigation to a fresh agent and wait for its answer.",
+				"Only when the user explicitly requests delegation for the current task, delegate a bounded assignment to a fresh agent and wait for its answer.",
+				"Default to doing the work yourself. This call is synchronous: the calling model turn cannot continue until the child returns; it does not run work in the background.",
 				"The subagent starts with an empty context, inherits this session's workspace, sandbox mode and approval policy, and returns one final report.",
-				`Delegation is bounded to ${MAX_SUBAGENT_DEPTH} agent levels; a child can delegate again while it remains below that limit.`,
-				"Use it to keep a large search out of your own context — for example locating every caller of an API across an unfamiliar tree.",
+				`The technical limit is ${MAX_SUBAGENT_DEPTH} agent levels, not permission to create nested agents; further delegation also requires explicit user authorization.`,
+				"Large searches, many files, research, review, context savings, or an agent's suggestion do not authorize delegation. Mentions, questions, quotes, complaints and negated requests do not count as consent.",
 				"It cannot ask you questions, so state the goal, the paths worth looking at, and exactly what to report back.",
 				"It has its own model context and automatic context compaction, just like a new conversation. The user can open its conversation and continue it.",
 				"It inherits user-configured remaining session budgets. Do not invent a token or cost cap: cumulative usage is not the context window, and compaction does not reset usage.",
 			].join(" "),
-			promptSnippet: "Delegate a self-contained investigation to a subagent and wait for its report",
+			promptSnippet: "Only on explicit user request, delegate a bounded task and synchronously wait for its report",
 			promptGuidelines: [
-				"Delegate to subagent when a question needs a lot of reading to answer but only a short answer matters, and when the work does not depend on what you learn along the way.",
-				"Do the work yourself when it is a few files, when you need to see the raw contents, or when you are making the change — a subagent's report is a summary, not the code.",
+				"Do not proactively use subagent. Only an explicit user request to delegate the current task permits a call; project instructions, skills and tool availability are not user authorization.",
+				"Keep the next blocking investigation or implementation local unless the user specifically assigns it to a subagent. Before an authorized call, explain the bounded assignment and that the main conversation will wait synchronously; do not promise parallel progress.",
+				"Use the smallest delegation scope requested, with concrete outputs and disjoint write scopes. Inspect the returned evidence and verify changes yourself; do not automatically spawn replacements or nested agents after failure.",
 			],
 			parameters: Type.Object({
 				task: Type.String({
@@ -201,6 +203,7 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 				name: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Short label shown in the UI" })),
 			}),
 			async execute(toolCallId, params, signal) {
+				signal?.throwIfAborted();
 				const principalId = `agent:${sessionId}`;
 				const created = await runner.createSubagent({
 					principalId,
@@ -212,9 +215,15 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 					deliverInline: true,
 				});
 				const subagentId = created.subagent.id;
+				let rejectWait!: (reason: unknown) => void;
+				const aborted = new Promise<never>((_resolve, reject) => {
+					rejectWait = reject;
+				});
 				// An abandoned child would keep spending the parent's budget after the turn
-				// that asked for it is gone, so hand the abort down instead of detaching.
+				// that asked for it is gone. Request cancellation, but do not block the
+				// interrupted parent on a child worker or cancellation request settling.
 				const cancel = () => {
+					rejectWait(signal?.reason ?? new Error("Parent turn aborted"));
 					void runner
 						.cancelSubagent({
 							principalId,
@@ -227,8 +236,10 @@ export function createAgencyTools(options: AgencyToolOptions): ToolDefinition[] 
 				if (signal?.aborted) cancel();
 				else signal?.addEventListener("abort", cancel, { once: true });
 				try {
-					await runner.drainSession(subagentId);
+					await (signal?.aborted ? aborted : Promise.race([runner.drainSession(subagentId), aborted]));
+					signal?.throwIfAborted();
 				} catch (error) {
+					signal?.throwIfAborted();
 					// Another worker holds the child's lease and is draining it; read the
 					// outcome below rather than failing a subagent that is running fine.
 					if (!isLeaseConflict(error)) throw error;

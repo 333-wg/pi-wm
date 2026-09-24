@@ -800,6 +800,13 @@ button {
 	background: var(--translucent);
 	color: var(--text);
 }
+.project-row.dragging {
+	opacity: 0.45;
+}
+.project-row.drop-target {
+	box-shadow: inset 0 0 0 2px var(--green);
+	background: var(--surface-hover);
+}
 .project-row.selected {
 	background: var(--surface);
 	color: var(--text);
@@ -830,6 +837,12 @@ button {
 	cursor: pointer;
 	opacity: 0;
 	pointer-events: none;
+}
+@media (hover: none) {
+	.project-more {
+		opacity: 1;
+		pointer-events: auto;
+	}
 }
 .project-row-wrap:hover .project-more,
 .project-row-wrap:focus-within .project-more,

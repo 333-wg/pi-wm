@@ -71,6 +71,10 @@ async function launch() {
 	await expect(page.locator(".connection")).toHaveClass(/connected/);
 	await page.getByRole("button", { name: "浏览器预览", exact: true }).click();
 	await expect(page.locator(".browser-panel")).toBeVisible();
+	// The panel mounts before its asynchronous initial blank tab arrives. Wait
+	// before filling the address, otherwise that tab's state clears the draft.
+	await expect(page.locator(".browser-tab")).toHaveCount(1);
+	await expect(page.getByRole("textbox", { name: "浏览器地址" })).toHaveValue("");
 }
 async function nativeEval(expression, duringLoad = false) {
 	let id;
@@ -379,6 +383,11 @@ try {
 	);
 } catch (error) {
 	if (page && !page.isClosed()) {
+		await writeFile(join(output, "failure-state.json"), JSON.stringify(await page.evaluate(() => ({
+			hidden: document.hidden,
+			address: document.querySelector('.browser-panel input')?.value,
+			tabs: [...document.querySelectorAll('.browser-tab')].map((tab) => tab.textContent),
+		})), null, 2)).catch(() => {});
 		await writeFile(join(output, "failure-dom.txt"), await page.locator("body").innerText()).catch(() => {});
 		await page.screenshot({ path: join(output, "failure.png") }).catch(() => {});
 	}

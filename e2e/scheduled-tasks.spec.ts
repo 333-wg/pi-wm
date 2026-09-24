@@ -1,10 +1,20 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { openApp, restartGateway, startWebApp, stopWebApp } from "./harness.js";
 let url: string;
 test.beforeAll(async () => {
 	url = await startWebApp({ WUMING_AUTOMATION_POLL_MS: "1000" });
 });
 test.afterAll(stopWebApp);
+
+async function openScheduledTasks(page: Page): Promise<void> {
+	await expect(page.getByRole("tab", { name: /定时任务|Scheduled tasks/ })).toHaveCount(0);
+	const menu = page.getByRole("button", { name: "打开导航", exact: true });
+	if (await menu.isVisible()) await menu.click();
+	await page.locator(".sidebar").getByRole("button", { name: "定时任务", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "定时任务", exact: true })).toBeVisible();
+	await expect(page.locator(".sidebar-scheduled")).toHaveClass(/selected/);
+	await expect(page.locator(".sidebar")).not.toHaveClass(/mobile-open/);
+}
 
 test("explains missing model configuration and never submits a task", async ({ page }) => {
 	let submitted = 0;
@@ -22,7 +32,7 @@ test("explains missing model configuration and never submits a task", async ({ p
 		});
 	});
 	await openApp(page, url);
-	await page.getByRole("tab", { name: "定时任务", exact: true }).click();
+	await openScheduledTasks(page);
 	await page.getByRole("button", { name: "新建任务", exact: true }).click();
 	const form = page.getByRole("dialog", { name: "新建定时任务", exact: true });
 	await expect(form.getByRole("alert")).toHaveText("请先添加并验证模型");
@@ -53,7 +63,7 @@ test("keeps an existing chat unchanged while creating a task and prevents duplic
 	const selected = await page.evaluate(() =>
 		localStorage.getItem("wuming.sessionId." + localStorage.getItem("wuming.workspaceId"))
 	);
-	await page.getByRole("tab", { name: "定时任务", exact: true }).click();
+	await openScheduledTasks(page);
 	await page.getByRole("button", { name: "新建任务", exact: true }).click();
 	const form = page.getByRole("dialog", { name: "新建定时任务", exact: true });
 	await form.getByRole("textbox", { name: "名称", exact: true }).fill("Independent chat task");
@@ -72,7 +82,7 @@ test("keeps an existing chat unchanged while creating a task and prevents duplic
 	).toBe(selected);
 	await page.getByRole("tab", { name: "对话", exact: true }).click();
 	await expect(page.locator(".transcript")).toContainText("Keep this ordinary chat");
-	await page.getByRole("tab", { name: "定时任务", exact: true }).click();
+	await openScheduledTasks(page);
 	await page
 		.locator(".scheduled-task")
 		.filter({ hasText: "Independent chat task" })
@@ -92,8 +102,7 @@ for (const width of [1440, 390, 320])
 			})
 		);
 		await openApp(page, url);
-		if (width > 720) await page.getByRole("button", { name: "定时任务", exact: true }).click();
-		else await page.getByRole("tab", { name: "定时任务", exact: true }).click();
+		await openScheduledTasks(page);
 		await page.getByRole("button", { name: "新建任务", exact: true }).click();
 		const form = page.getByRole("dialog", { name: "新建定时任务", exact: true });
 		await form.getByRole("textbox", { name: "名称", exact: true }).fill("每日检查-" + width);
@@ -120,7 +129,7 @@ for (const width of [1440, 390, 320])
 		await edit.getByRole("button", { name: "保存修改", exact: true }).click();
 		await expect(edit).toHaveCount(0);
 		await page.reload();
-		await page.getByRole("tab", { name: "定时任务", exact: true }).click();
+		await openScheduledTasks(page);
 		await expect(card.getByText("已禁用", { exact: true }).first()).toBeVisible();
 		await expect(card).toContainText("每月 31 日");
 		await card.getByRole("button", { name: "立即执行", exact: true }).click();
@@ -167,7 +176,7 @@ test("automatically fires at the real calendar boundary after restart", async ({
 		server.onMessage((message) => socket.send(message));
 	});
 	await openApp(page, url);
-	await page.getByRole("tab", { name: "定时任务", exact: true }).click();
+	await openScheduledTasks(page);
 	await page.getByRole("button", { name: "新建任务", exact: true }).click();
 	const form = page.getByRole("dialog", { name: "新建定时任务" });
 	await form.getByRole("textbox", { name: "名称", exact: true }).fill("真实到点执行");
@@ -177,7 +186,7 @@ test("automatically fires at the real calendar boundary after restart", async ({
 	await expect(form).toHaveCount(0);
 	await restartGateway();
 	await page.reload();
-	await page.getByRole("tab", { name: "定时任务", exact: true }).click();
+	await openScheduledTasks(page);
 	const card = page.locator(".scheduled-task").filter({ hasText: "真实到点执行" });
 	await card.getByRole("button", { name: "日志", exact: true }).click();
 	const logs = page.getByRole("dialog", { name: "真实到点执行 · 执行日志", exact: true });
@@ -187,7 +196,7 @@ test("automatically fires at the real calendar boundary after restart", async ({
 	await logs.getByRole("button", { name: "关闭", exact: true }).click();
 	await restartGateway();
 	await page.reload();
-	await page.getByRole("tab", { name: "定时任务", exact: true }).click();
+	await openScheduledTasks(page);
 	await card.getByRole("button", { name: "日志", exact: true }).click();
 	await expect(logs.getByText("已完成", { exact: true })).toHaveCount(1);
 });

@@ -6,6 +6,30 @@ persistent team runtime. The previous subagent/goal projection is retained
 in a separate **Subtasks** tab; it is not embedded in Agent Teams and is not the
 team scheduler or a peer mailbox.
 
+## Default Delegation Policy
+
+Ordinary tasks stay in the main conversation. The system prompt and `subagent`
+tool guidance permit delegation only when the user explicitly requests it for
+the current task. Complexity, large searches, research, reviews, speed and context
+savings are not authorization. Neither are mentions, questions, quotes, complaints,
+negated requests, skills or project instructions. Unclear intent defaults to local
+work rather than repeated requests to enable agents. Authorization does not carry
+over to unrelated tasks or permit automatic replacement or nested agents.
+
+The one-shot `subagent` tool is synchronous, not background parallelism. Its
+calling model turn waits for the report. Keep the immediate critical path local
+unless the user specifically assigns it to a worker, and explain the wait before
+an authorized call. Aborting the parent requests child cancellation and releases
+the tool wait without waiting for the child worker to finish; an already-aborted
+call does not create a child. This policy is model guidance, not a keyword-based
+intent classifier or a new authorization boundary on the tool or protocol API.
+
+Explicit team requests still use the independent runtime described below. Its
+dedicated lead may coordinate within the authorized objective; the launching chat
+does not wait for the team. For authorized asynchronous work, perform useful local
+work and wait only at a real dependency with no independent work left. Do not poll
+unchanged status or duplicate work already assigned to another agent.
+
 ## Running a Team
 
 Selecting the `team` skill and submitting a concrete objective, or submitting

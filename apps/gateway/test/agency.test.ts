@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { buildWumingSystemPrompt } from "@wuming/pi-adapter";
 import type { SessionSnapshot, SubagentSummary } from "@wuming/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgencyTools, type SubagentRunner } from "../src/agency.js";
 
 type ToolExecute = ToolDefinition["execute"];
@@ -256,6 +256,31 @@ describe("memory_search", () => {
 });
 
 describe("subagent", () => {
+	it("requires explicit user delegation in its schema and the assembled prompt", () => {
+		const state = snapshot();
+		const tools = createAgencyTools({ snapshot: state, runner: fakeRunner() });
+		const subagent = tool(tools, "subagent");
+		expect(subagent.description).toContain("Only when the user explicitly requests delegation for the current task");
+		expect(subagent.description).toContain("This call is synchronous");
+		expect(subagent.description).toContain("does not run work in the background");
+		expect(subagent.description).toContain("not permission to create nested agents");
+		expect(subagent.description).toContain("complaints and negated requests do not count as consent");
+		expect(subagent.description).not.toContain("Use it to keep a large search out of your own context");
+		expect(subagent.promptSnippet).toContain("Only on explicit user request");
+
+		const prompt = buildWumingSystemPrompt({
+			tools,
+			sandboxMode: state.sandboxMode,
+			approvalPolicy: state.approvalPolicy,
+		});
+		expect(prompt).toContain("Do not proactively use subagent");
+		expect(prompt).toContain("skills and tool availability are not user authorization");
+		expect(prompt).toContain("Keep the next blocking investigation or implementation local");
+		expect(prompt).toContain("do not promise parallel progress");
+		expect(prompt).toContain("do not automatically spawn replacements or nested agents after failure");
+		expect(prompt).not.toContain("Delegate to subagent when a question needs a lot of reading");
+	});
+
 	it("is offered while the session remains below the nesting limit", () => {
 		const runner = fakeRunner();
 		expect(createAgencyTools({ snapshot: snapshot(), runner }).map((entry) => entry.name)).toEqual([
@@ -382,16 +407,95 @@ describe("subagent", () => {
 		expect(result.details).toMatchObject({ status: "awaiting_approval" });
 	});
 
-	it("cancels the child when the parent turn is aborted", async () => {
+	it("does not create a child for an already-aborted parent turn", async () => {
+		const runner = fakeRunner();
+		const subagent = tool(createAgencyTools({ snapshot: snapshot(), runner }), "subagent");
+		const controller = new AbortController();
+		controller.abort(new Error("turn interrupted"));
+
+		await expect(invoke(subagent, "call-1", { task: "Find every caller" }, controller.signal)).rejects.toThrow(
+			"turn interrupted"
+		);
+		expect(runner.created).toEqual([]);
+		expect(runner.drained).toEqual([]);
+	});
+
+	it("releases the parent wait and cancels a child whose drain never settles", async () => {
 		const runner = fakeRunner({ drain: () => new Promise<number>(() => {}) });
 		const subagent = tool(createAgencyTools({ snapshot: snapshot(), runner }), "subagent");
 		const controller = new AbortController();
+		const removeListener = vi.spyOn(controller.signal, "removeEventListener");
 
+		const pending = invoke(subagent, "call-1", { task: "Find every caller" }, controller.signal);
+		await Promise.resolve();
+		expect(runner.drained).toEqual(["sub-1"]);
+		controller.abort(new Error("turn interrupted"));
+
+		await expect(pending).rejects.toThrow("turn interrupted");
+		expect(runner.cancelled).toEqual(["sub-1"]);
+		expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+	});
+
+	it("cancels a child created during an abort without starting its drain", async () => {
+		const runner = fakeRunner();
+		const controller = new AbortController();
+		vi.spyOn(runner, "createSubagent").mockImplementationOnce(async () => {
+			controller.abort(new Error("interrupted during creation"));
+			return { subagent: unfinished({ status: "running" }) };
+		});
+		const subagent = tool(createAgencyTools({ snapshot: snapshot(), runner }), "subagent");
+
+		await expect(invoke(subagent, "call-1", { task: "Find every caller" }, controller.signal)).rejects.toThrow(
+			"interrupted during creation"
+		);
+		expect(runner.cancelled).toEqual(["sub-1"]);
+		expect(runner.drained).toEqual([]);
+	});
+
+	it.each(["rejects", "never settles"])("releases the parent even if child cancellation %s", async (outcome) => {
+		const runner = fakeRunner({ drain: () => new Promise<number>(() => {}) });
+		const cancel = vi.spyOn(runner, "cancelSubagent").mockImplementation(async () => {
+			if (outcome === "rejects") throw new Error("cancel failed");
+			return new Promise(() => {});
+		});
+		const subagent = tool(createAgencyTools({ snapshot: snapshot(), runner }), "subagent");
+		const controller = new AbortController();
 		const pending = invoke(subagent, "call-1", { task: "Find every caller" }, controller.signal);
 		await Promise.resolve();
 		controller.abort(new Error("turn interrupted"));
 
-		expect(runner.cancelled).toEqual(["sub-1"]);
-		void pending.catch(() => {});
+		await expect(pending).rejects.toThrow("turn interrupted");
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
+	it("does not mask parent cancellation as a recoverable child lease conflict", async () => {
+		const runner = fakeRunner({ drain: () => new Promise<number>(() => {}) });
+		const subagent = tool(createAgencyTools({ snapshot: snapshot(), runner }), "subagent");
+		const controller = new AbortController();
+		const pending = invoke(subagent, "call-1", { task: "Find every caller" }, controller.signal);
+		await Promise.resolve();
+		const reason = Object.assign(new Error("parent lease lost"), { code: "lease_conflict" });
+		controller.abort(reason);
+
+		await expect(pending).rejects.toBe(reason);
+	});
+
+	it("removes the cancellation listener after a completed call", async () => {
+		const runner = fakeRunner();
+		const subagent = tool(createAgencyTools({ snapshot: snapshot(), runner }), "subagent");
+		const controller = new AbortController();
+		await invoke(subagent, "call-1", { task: "Find every caller" }, controller.signal);
+		controller.abort();
+
+		expect(runner.cancelled).toEqual([]);
+	});
+
+	it("can return a report when no abort signal is supplied", async () => {
+		const runner = fakeRunner();
+		const subagent = tool(createAgencyTools({ snapshot: snapshot(), runner }), "subagent");
+		const result = await invoke(subagent, "call-1", { task: "Find every caller" });
+
+		expect(result.details).toMatchObject({ status: "completed" });
+		expect(runner.drained).toEqual(["sub-1"]);
 	});
 });

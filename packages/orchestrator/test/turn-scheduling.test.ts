@@ -122,6 +122,37 @@ it.each([false, true])(
 	}
 );
 
+it.each([false, true])("promotes a queued follow-up atomically and interrupts only once (remote=%s)", async (remote) => {
+	const { store, runtime, worker, controller, sessionId, send, waitCalls } = await setup();
+	await send("prompt", "original");
+	const draining = worker.drainSession(sessionId);
+	await waitCalls(1);
+	await send("follow_up", "later");
+	await send("follow_up", "urgent");
+	const entry = store.listQueuedFollowUps(sessionId)[1]!;
+	const target = remote ? controller : worker;
+	const input = { principalId: "user", idempotencyKey: "promote", sessionId, operationId: entry.id, expectedUpdatedAt: entry.updatedAt, sendNow: true };
+	await expect(target.mutateQueuedFollowUp({ ...input, idempotencyKey: "stale", expectedUpdatedAt: entry.updatedAt - 1 })).rejects.toThrow(/已被修改/);
+	expect(runtime.calls[0]!.signal.aborted).toBe(false);
+	await target.mutateQueuedFollowUp(input);
+	expect(store.getOperation(runtime.calls[0]!.operation.id)?.abortRequested).toBe(true);
+	await waitCalls(2);
+	expect(runtime.calls[1]!.operation.id).toBe(entry.id);
+	expect(runtime.calls[1]!.operation.payload).toEqual({ ...entry.payload, mode: "steer" });
+	expect(store.listQueuedFollowUps(sessionId).map((op) => op.payload.content)).toEqual([[{ type: "text", text: "later" }]]);
+	await target.mutateQueuedFollowUp(input);
+	expect(runtime.calls[1]!.signal.aborted).toBe(false);
+	await expect(target.mutateQueuedFollowUp({ ...input, idempotencyKey: "duplicate" })).rejects.toThrow(/已开始/);
+	expect(runtime.calls[1]!.signal.aborted).toBe(false);
+	runtime.finish[1]!();
+	await waitCalls(3);
+	runtime.finish[2]!();
+	await expect(draining).resolves.toBe(3);
+	expect(store.loadSnapshot(sessionId)).toMatchObject({ queuedSteerCount: 0, queuedFollowUpCount: 0, session: { phase: "idle" } });
+	expect(store.loadSnapshot(sessionId)?.transcript.filter((item) => item.id === entry.payload.userItemId)).toHaveLength(1);
+	expect(store.loadSnapshot(sessionId)).toEqual(replaySessionEvents(store.loadEvents(sessionId)));
+});
+
 it("runs follow-ups only after completion, in acceptance order even at identical timestamps", async () => {
 	const { store, runtime, worker, sessionId, send, waitCalls } = await setup();
 	await send("prompt", "original");
