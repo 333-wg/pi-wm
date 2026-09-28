@@ -229,6 +229,7 @@ Pi-Wm 是桌面产品名称。内部 `@wuming/*` 包名、协议名称和已有 
 
 ## 致谢与第三方说明
 
+- **[LINUX DO 社区](https://linux.do/)**：感谢社区佬友分享的开源项目、技术经验与界面设计思路，也欢迎大家在社区交流 Pi-Wm 的使用体验与改进建议。
 - **Pi**：提供项目使用的 Agent 运行时与模型接入基础。
 - **[cc-haha](https://github.com/NanmiCoder/cc-haha)**：为 README 信息组织、多 Agent 协作和部分桌面能力提供参考。团队头像与部分 Computer Use 代码的复用说明见 [Agent Teams](docs/agent-teams.md) 和 [Computer Use](docs/computer-use.md)。
 - **React、Electron、Playwright 等开源项目**：提供界面、桌面宿主与自动化测试基础。
