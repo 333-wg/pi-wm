@@ -10,6 +10,7 @@ import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDefaultPiSessionFactory } from "../src/default-factory.js";
 import { PiAgentRuntime } from "../src/pi-agent-runtime.js";
+import { createSandboxTools, LocalProcessSandbox, DockerProcessSandbox, type ApprovalBroker } from "@wuming/sandbox";
 
 type Api = "openai-completions" | "openai-responses" | "anthropic-messages";
 interface Scenario {
@@ -189,6 +190,11 @@ it.each(scenarios)(
 			let reopened = false;
 			let content: string | undefined = "authentication refresh REFERENCE_VERSION_ONE";
 			let policy = "button typography";
+			const resolvedToolInventories: string[][] = [];
+			const processBackend =
+				scenario.api === "anthropic-messages"
+					? new DockerProcessSandbox({ workspaceRoot: workspace, image: "node@sha256:fixture" })
+					: new LocalProcessSandbox({ workspaceRoot: workspace });
 			const tool = (name: string): ToolDefinition => ({
 				name,
 				label: name,
@@ -201,29 +207,32 @@ it.each(scenarios)(
 			});
 			runtime = new PiAgentRuntime({
 				appendReferenceContext: true,
-				resolveContextFragments: () => [
-					...(content === undefined
-						? []
-						: [
-								{
-									id: "workspace:auth",
-									source: "workspace:auth",
-									version: content,
-									kind: "workspace" as const,
-									cacheScope: "turn" as const,
-									delivery: "user" as const,
-									content,
-								},
-							]),
-					{
-						id: "workspace:colors",
-						source: "workspace:colors",
-						version: "1",
-						kind: "policy",
-						cacheScope: "turn",
-						content: policy,
-					},
-				],
+				resolveContextFragments: (_snapshot, _operationId, _query, availableTools) => {
+					resolvedToolInventories.push([...availableTools].sort());
+					return [
+						...(content === undefined
+							? []
+							: [
+									{
+										id: "workspace:auth",
+										source: "workspace:auth",
+										version: content,
+										kind: "workspace" as const,
+										cacheScope: "turn" as const,
+										delivery: "user" as const,
+										content,
+									},
+								]),
+						{
+							id: "workspace:colors",
+							source: "workspace:colors",
+							version: "1",
+							kind: "policy",
+							cacheScope: "turn",
+							content: policy,
+						},
+					];
+				},
 				createSession: createDefaultPiSessionFactory({
 					agentDir: join(root, "agent"),
 					sessionDataDir: join(root, "sessions"),
@@ -232,7 +241,32 @@ it.each(scenarios)(
 					autoCompaction: false,
 					...(scenario.retention === undefined ? {} : { cacheRetention: scenario.retention }),
 					...(scenario.api === "openai-completions" ? { initialToolChoice: "required" as const } : {}),
-					createCustomTools: () => (reopened ? [tool("alpha"), tool("zeta")] : [tool("zeta"), tool("alpha")]),
+					createCustomTools: (snapshot) => [
+						...(reopened ? [tool("alpha"), tool("zeta")] : [tool("zeta"), tool("alpha")]),
+						...createSandboxTools({
+							snapshot,
+							approvals: {
+								authorize: async () => {
+									throw new Error("Fixture must not execute tools");
+								},
+							} as unknown as ApprovalBroker,
+							executor: {
+								files: {
+									root: workspace,
+									async readText() {
+										throw new Error("Fixture must not read files");
+									},
+									async writeText() {
+										throw new Error("Fixture must not write files");
+									},
+									async editText() {
+										throw new Error("Fixture must not edit files");
+									},
+								},
+								process: processBackend,
+							},
+						}),
+					],
 					registerProviders: () => [
 						{
 							provider: "cache-wire",
@@ -262,7 +296,7 @@ it.each(scenarios)(
 				revision: 1,
 				model: { provider: "cache-wire", id: "cache-model" },
 				thinkingLevel: "off",
-				sandboxMode: "read_only",
+				sandboxMode: "workspace_write",
 				approvalPolicy: "never",
 				transcript: [],
 				pendingApprovals: [],
@@ -337,11 +371,34 @@ it.each(scenarios)(
 			}
 			expect(errors).toEqual([]);
 			expect(requests).toHaveLength(6);
+			const wireTools = (requests[0]!.tools ?? [])
+				.map((value) => {
+					const tool = value as { name?: string; function?: { name: string } };
+					return tool.function?.name ?? tool.name;
+				})
+				.sort();
+			expect(wireTools).toEqual(expect.arrayContaining(["alpha", "zeta", "exec", "run_python"]));
+			expect(resolvedToolInventories).toHaveLength(6);
+			for (const inventory of resolvedToolInventories) expect(inventory).toEqual(wireTools);
 			const system = (request: WireRequest) =>
 				request.system ??
 				(request.messages ?? request.input)?.filter((message) =>
 					["system", "developer"].includes(String(message.role))
 				);
+			// Actual SDK payloads, not just the builder's returned string, carry the
+			// live backend contract and revised policy across all three protocols.
+			const renderedSystem = JSON.stringify(system(requests[0]!));
+			for (const fragment of [
+				`Workspace file-tool root (host-supplied data): ${JSON.stringify(workspace)}`,
+				JSON.stringify(processBackend.executionEnvironment),
+				"Reuse valid authorization within the same task",
+				"a recovery notice or retained task alone is not permission to resume",
+				"A timeout or missing receipt does not prove that nothing happened",
+				"Make the final answer self-contained",
+			])
+				expect(renderedSystem).toContain(JSON.stringify(fragment).slice(1, -1));
+			expect(renderedSystem).not.toContain("Commands run in a container with no interactive terminal");
+			expect(renderedSystem.match(/Command execution environment \(host-supplied data\)/g)).toHaveLength(1);
 			for (const request of requests.slice(1, 5)) {
 				expect(JSON.stringify(system(request))).toBe(JSON.stringify(system(requests[0]!)));
 				expect(JSON.stringify(request.tools)).toBe(JSON.stringify(requests[0]!.tools));

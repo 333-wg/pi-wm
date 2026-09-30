@@ -61,7 +61,20 @@ describe("explicit team launch routing", () => {
 		const dispose = vi.fn(async function (this: AgentRuntime) {
 			expect(this).toBe(base);
 		});
-		const base: AgentRuntime & AsyncDisposable = { executeTurn, forceTerminate, [Symbol.asyncDispose]: dispose };
+		const branchSession = vi.fn(async function (this: AgentRuntime) {
+			expect(this).toBe(base);
+		});
+		const prepareHistoryRewind = vi.fn(async function (this: AgentRuntime) {
+			expect(this).toBe(base);
+			return { leafId: "prefix" };
+		});
+		const base: AgentRuntime & AsyncDisposable = {
+			executeTurn,
+			forceTerminate,
+			branchSession,
+			prepareHistoryRewind,
+			[Symbol.asyncDispose]: dispose,
+		};
 		const wrapped = withTeamLaunch(
 			base,
 			() => undefined,
@@ -71,10 +84,26 @@ describe("explicit team launch routing", () => {
 			AgentRuntime["executeTurn"]
 		>[0]);
 		await wrapped.forceTerminate!("source");
+		const snapshot = { transcript: [] } as unknown as SessionSnapshot;
+		const edit = { snapshot, beforeItemId: "edit" };
+		expect(await wrapped.prepareHistoryRewind!(edit)).toEqual({ leafId: "prefix" });
+		const fork = { snapshot, targetSessionId: "fork", historyId: "history" };
+		await wrapped.branchSession!(fork);
 		await wrapped[Symbol.asyncDispose]!();
 		expect(executeTurn).toHaveBeenCalledOnce();
 		expect(forceTerminate).toHaveBeenCalledOnce();
 		expect(dispose).toHaveBeenCalledOnce();
+		expect(prepareHistoryRewind).toHaveBeenCalledExactlyOnceWith(edit);
+		expect(branchSession).toHaveBeenCalledExactlyOnceWith(fork);
 		expect(wrapped.injectTurn).toBeUndefined();
+	});
+	it("does not invent history capabilities for a runtime without them", () => {
+		const wrapped = withTeamLaunch(
+			{ executeTurn: async () => ({ items: [] }) },
+			() => undefined,
+			async () => {}
+		);
+		expect(wrapped.prepareHistoryRewind).toBeUndefined();
+		expect(wrapped.branchSession).toBeUndefined();
 	});
 });

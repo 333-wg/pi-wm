@@ -4064,8 +4064,13 @@ export class SessionOrchestrator {
 	}
 
 	async mutateQueuedFollowUp(input: {
-		principalId: string; idempotencyKey: string; sessionId: string; operationId: string;
-		expectedUpdatedAt: number; text?: string; sendNow?: boolean;
+		principalId: string;
+		idempotencyKey: string;
+		sessionId: string;
+		operationId: string;
+		expectedUpdatedAt: number;
+		text?: string;
+		sendNow?: boolean;
 	}): Promise<Extract<CommandResult, { type: "turn.queue.changed" }>> {
 		return this.#serializeCommand(input.sessionId, () => {
 			const hash = commandHash({ type: "turn.queue.mutate", ...input });
@@ -4074,9 +4079,17 @@ export class SessionOrchestrator {
 			if (existing) return existing as Extract<CommandResult, { type: "turn.queue.changed" }>;
 			const current = this.store.loadSnapshot(input.sessionId);
 			if (!current) throw new OrchestratorError("not_found", "Session does not exist");
-			if (current.session.archivedAt !== undefined) throw new OrchestratorError("conflict", "Archived sessions are read-only");
+			if (current.session.archivedAt !== undefined)
+				throw new OrchestratorError("conflict", "Archived sessions are read-only");
 			const operation = this.store.getOperation(input.operationId);
-			if (!operation || operation.sessionId !== input.sessionId || operation.payload.mode !== "follow_up" || operation.status !== "queued" || operation.attempt !== 0 || operation.updatedAt !== input.expectedUpdatedAt)
+			if (
+				!operation ||
+				operation.sessionId !== input.sessionId ||
+				operation.payload.mode !== "follow_up" ||
+				operation.status !== "queued" ||
+				operation.attempt !== 0 ||
+				operation.updatedAt !== input.expectedUpdatedAt
+			)
 				throw new OrchestratorError("conflict", "该任务已开始、已删除或已被修改，请刷新队列");
 			const promoting = input.sendNow === true;
 			const deleting = input.text === undefined && !promoting;
@@ -4084,10 +4097,14 @@ export class SessionOrchestrator {
 				...(input.text?.trim() ? [{ type: "text" as const, text: input.text.trim() }] : []),
 				...operation.payload.content.filter((part) => part.type === "artifact"),
 			];
-			if (!deleting && !promoting && content.length === 0) throw new OrchestratorError("conflict", "请输入消息或保留附件");
+			if (!deleting && !promoting && content.length === 0)
+				throw new OrchestratorError("conflict", "请输入消息或保留附件");
 			const event: SessionEvent = {
-				type: "session.queue.changed", eventId: this.#idFactory(), sessionId: input.sessionId,
-				revision: current.revision + 1, timestamp: Math.max(now, operation.updatedAt + 1),
+				type: "session.queue.changed",
+				eventId: this.#idFactory(),
+				sessionId: input.sessionId,
+				revision: current.revision + 1,
+				timestamp: Math.max(now, operation.updatedAt + 1),
 				queuedSteerCount: current.queuedSteerCount + (promoting ? 1 : 0),
 				queuedFollowUpCount: Math.max(0, current.queuedFollowUpCount - (deleting || promoting ? 1 : 0)),
 			};
@@ -4095,25 +4112,60 @@ export class SessionOrchestrator {
 			const events: SessionEvent[] = [event];
 			if (promoting) {
 				const item: SessionEvent = {
-					type: "session.item.upserted", eventId: this.#idFactory(), sessionId: input.sessionId,
-					revision: snapshot.revision + 1, timestamp: event.timestamp,
-					item: { id: operation.payload.userItemId, type: "user", createdAt: event.timestamp, content: operation.payload.content },
+					type: "session.item.upserted",
+					eventId: this.#idFactory(),
+					sessionId: input.sessionId,
+					revision: snapshot.revision + 1,
+					timestamp: event.timestamp,
+					item: {
+						id: operation.payload.userItemId,
+						type: "user",
+						createdAt: event.timestamp,
+						content: operation.payload.content,
+					},
 				};
 				events.push(item);
 				snapshot = reduceSessionEvent(snapshot, item);
 			}
-			if (deleting && !this.store.getRunningOperation(input.sessionId) && this.store.countQueuedOperations(input.sessionId) === 1) {
-				const phase: SessionEvent = { type: "session.phase.changed", eventId: this.#idFactory(), sessionId: input.sessionId, revision: snapshot.revision + 1, timestamp: event.timestamp, phase: "idle" };
+			if (
+				deleting &&
+				!this.store.getRunningOperation(input.sessionId) &&
+				this.store.countQueuedOperations(input.sessionId) === 1
+			) {
+				const phase: SessionEvent = {
+					type: "session.phase.changed",
+					eventId: this.#idFactory(),
+					sessionId: input.sessionId,
+					revision: snapshot.revision + 1,
+					timestamp: event.timestamp,
+					phase: "idle",
+				};
 				events.push(phase);
 				snapshot = reduceSessionEvent(snapshot, phase);
 			}
 			const result = { type: "turn.queue.changed", sessionId: input.sessionId } as const;
 			const committed = this.store.commitMutation({
-				sessionId: input.sessionId, expectedRevision: current.revision, events, snapshot,
-				queuedFollowUpMutation: { id: operation.id, expectedUpdatedAt: input.expectedUpdatedAt,
-					...(promoting ? { payload: { ...operation.payload, mode: "steer" as const } } : !deleting ? { payload: { ...operation.payload, content, runtimeContent: content } } : {}) },
+				sessionId: input.sessionId,
+				expectedRevision: current.revision,
+				events,
+				snapshot,
+				queuedFollowUpMutation: {
+					id: operation.id,
+					expectedUpdatedAt: input.expectedUpdatedAt,
+					...(promoting
+						? { payload: { ...operation.payload, mode: "steer" as const } }
+						: !deleting
+							? { payload: { ...operation.payload, content, runtimeContent: content } }
+							: {}),
+				},
 				...(promoting ? { interruptRunningOperation: STEER_INTERRUPTION_REASON } : {}),
-				idempotency: { principalId: input.principalId, key: input.idempotencyKey, commandHash: hash, result, expiresAt: now + this.#idempotencyTtlMs },
+				idempotency: {
+					principalId: input.principalId,
+					key: input.idempotencyKey,
+					commandHash: hash,
+					result,
+					expiresAt: now + this.#idempotencyTtlMs,
+				},
 			});
 			if (promoting && !committed.deduplicated) {
 				const active = this.#activeTurns.get(input.sessionId);
@@ -4179,8 +4231,11 @@ export class SessionOrchestrator {
 		if (input.edit) {
 			const edit = input.edit;
 			if (
-				input.mode !== "prompt" || input.goalId || current.session.phase !== "idle" ||
-				current.pendingApprovals.length > 0 || this.store.countQueuedOperations(input.sessionId) > 0 ||
+				input.mode !== "prompt" ||
+				input.goalId ||
+				current.session.phase !== "idle" ||
+				current.pendingApprovals.length > 0 ||
+				this.store.countQueuedOperations(input.sessionId) > 0 ||
 				this.store.getRunningOperation(input.sessionId)
 			)
 				throw new OrchestratorError("conflict", "Stop the current task and clear queued messages before editing");
@@ -4188,13 +4243,9 @@ export class SessionOrchestrator {
 				throw new OrchestratorError("conflict", "The conversation changed; reopen the message before editing");
 			if (!current.transcript.some((item) => item.id === edit.itemId && item.type === "user"))
 				throw new OrchestratorError("not_found", "The edited user message no longer exists");
-			const runtimeHistoryId = this.#idFactory();
-			await this.runtime.branchSession?.({
-				snapshot: current,
-				targetSessionId: input.sessionId,
-				historyId: runtimeHistoryId,
-				beforeItemId: edit.itemId,
-			});
+			if (!this.runtime.prepareHistoryRewind)
+				throw new OrchestratorError("conflict", "This runtime cannot safely edit conversation history");
+			const position = await this.runtime.prepareHistoryRewind({ snapshot: current, beforeItemId: edit.itemId });
 			const rewind: SessionEvent = {
 				type: "session.history.rewound",
 				eventId: this.#idFactory(),
@@ -4202,7 +4253,7 @@ export class SessionOrchestrator {
 				revision: snapshot.revision + 1,
 				timestamp: now,
 				beforeItemId: edit.itemId,
-				runtimeHistoryId,
+				runtimeHistoryRewind: { id: this.#idFactory(), leafId: position.leafId },
 			};
 			events.push(rewind);
 			snapshot = reduceSessionEvent(snapshot, rewind);
@@ -4659,14 +4710,31 @@ export class SessionOrchestrator {
 				}
 				let planSnapshot = this.store.loadSnapshot(operation.sessionId);
 				if (!planSnapshot) throw new OrchestratorError("not_found", `Session ${operation.sessionId} does not exist`);
-				if (operation.payload.mode === "follow_up" && !planSnapshot.transcript.some((item) => item.id === operation.payload.userItemId)) {
+				if (
+					operation.payload.mode === "follow_up" &&
+					!planSnapshot.transcript.some((item) => item.id === operation.payload.userItemId)
+				) {
 					const event: SessionEvent = {
-						type: "session.item.upserted", eventId: this.#idFactory(), sessionId: operation.sessionId,
-						revision: planSnapshot.revision + 1, timestamp: this.#clock(),
-						item: { id: operation.payload.userItemId, type: "user", createdAt: this.#clock(), content: operation.payload.content },
+						type: "session.item.upserted",
+						eventId: this.#idFactory(),
+						sessionId: operation.sessionId,
+						revision: planSnapshot.revision + 1,
+						timestamp: this.#clock(),
+						item: {
+							id: operation.payload.userItemId,
+							type: "user",
+							createdAt: this.#clock(),
+							content: operation.payload.content,
+						},
 					};
 					const next = reduceSessionEvent(planSnapshot, event);
-					this.store.commitMutation({ sessionId: operation.sessionId, expectedRevision: planSnapshot.revision, events: [event], snapshot: next, lease });
+					this.store.commitMutation({
+						sessionId: operation.sessionId,
+						expectedRevision: planSnapshot.revision,
+						events: [event],
+						snapshot: next,
+						lease,
+					});
 					planSnapshot = next;
 				}
 				if (planSnapshot.session.phase === "retry") {

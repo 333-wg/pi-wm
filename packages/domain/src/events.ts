@@ -21,6 +21,7 @@ import {
 	UsageRequestSummarySchema,
 	BudgetWarningSchema,
 	ContextUsageStateSchema,
+	RuntimeHistoryRewindSchema,
 } from "@wuming/protocol";
 import Type, { type Static } from "typebox";
 
@@ -60,7 +61,8 @@ export const SessionEventSchema = Type.Union([
 		...EventBase,
 		type: Type.Literal("session.history.rewound"),
 		beforeItemId: Id,
-		runtimeHistoryId: Id,
+		runtimeHistoryId: Type.Optional(Id),
+		runtimeHistoryRewind: Type.Optional(RuntimeHistoryRewindSchema),
 	}),
 	StrictObject({
 		...EventBase,

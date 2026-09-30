@@ -19,6 +19,10 @@ export interface PiSessionRecovery {
 
 export interface PiSessionLike {
 	readonly isStreaming: boolean;
+	prepareHistoryRewind?(
+		input: Parameters<NonNullable<AgentRuntime["prepareHistoryRewind"]>>[0],
+		operations: DurableOperation[]
+	): { leafId: string | null } | Promise<{ leafId: string | null }>;
 	branchHistory?(
 		input: Parameters<NonNullable<AgentRuntime["branchSession"]>>[0],
 		operations: DurableOperation[]
@@ -91,12 +95,17 @@ export interface ResolvedSkill {
 	truncated?: boolean;
 }
 
-export type SkillResolver = (snapshot: SessionSnapshot, skillIds: string[]) => Promise<ResolvedSkill[]>;
+export type SkillResolver = (
+	snapshot: SessionSnapshot,
+	skillIds: string[],
+	availableTools: ReadonlySet<string>
+) => Promise<ResolvedSkill[]>;
 
 export type ContextFragmentResolver = (
 	snapshot: SessionSnapshot,
 	operationId: string,
-	query: string
+	query: string,
+	availableTools: ReadonlySet<string>
 ) => ContextFragment[] | Promise<ContextFragment[]>;
 
 export interface PiContextBudget {

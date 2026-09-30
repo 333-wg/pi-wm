@@ -2,13 +2,14 @@ import { Check, CircleAlert, Clock3, GitBranch, LoaderCircle } from "lucide-reac
 import { useId, useMemo } from "react";
 import { layoutTeamTasks, TEAM_LAYOUT, teamTaskState, type TeamMember, type TeamTask } from "../lib/agent-teams";
 import type { TeamText } from "./agent-teams-messages";
+import "../components/agent-teams-enhanced.css";
 
 export function TeamStatus({ task, t }: { task: TeamTask; t: TeamText }) {
 	const state = teamTaskState(task.status);
 	const Icon =
 		state === "completed" ? Check : state === "attention" ? CircleAlert : state === "running" ? LoaderCircle : Clock3;
 	return (
-		<span className={`teams-status state-${state}`}>
+		<span className={`teams-status-enhanced state-${state}`}>
 			<Icon size={12} />
 			<span>{t(task.status)}</span>
 		</span>
@@ -90,19 +91,19 @@ export function AgentTeamsCanvas({
 						<button
 							type="button"
 							key={task.id}
-							className={`teams-task state-${teamTaskState(task.status)} ${selected === task.id ? "selected" : ""}`}
+							className={`teams-task-enhanced state-${teamTaskState(task.status)} ${selected === task.id ? "selected" : ""}`}
 							style={{ left: x, top: y, width: TEAM_LAYOUT.width, height: TEAM_LAYOUT.height }}
 							aria-pressed={selected === task.id}
 							title={task.title + "\n" + task.objective}
 							onClick={() => onSelect(task.id)}
 						>
 							<strong>{task.title}</strong>
-							<span className="teams-task-objective">{task.objective}</span>
-							<span className="teams-task-footer">
+							<span className="teams-task-objective-enhanced">{task.objective}</span>
+							<span className="teams-task-footer-enhanced">
 								<TeamStatus task={task} t={t} />
 								{task.dependsOn.length > 0 && (
-									<span>
-										<GitBranch size={12} />
+									<span className="teams-dependency-badge">
+										<GitBranch size={10} />
 										{task.dependsOn.length}
 									</span>
 								)}

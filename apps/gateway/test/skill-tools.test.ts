@@ -9,6 +9,7 @@ import type { ApprovalAuthorization, ApprovalPermit } from "@wuming/sandbox";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ManagedSkillCatalog } from "../src/managed-skill-catalog.js";
+import { filterAgentTools } from "../src/agent-templates.js";
 import {
 	createSkillManagementTools,
 	createSkillTools,
@@ -73,6 +74,59 @@ function snapshot(): SessionSnapshot {
 }
 
 describe("model-driven skill discovery", () => {
+	it.each([[], ["skill_list"], ["skill_load"], ["skill_list", "skill_load"]].map((names) => ({ names })))(
+		"keeps filtered skill tool descriptions consistent with discovery: $names",
+		async ({ names }) => {
+			const { manager } = await fixture();
+			const template = {
+				name: "restricted-review",
+				description: "Restricted review",
+				systemPrompt: "Review the assigned task",
+				tools: { mode: "custom" as const, names },
+				color: "blue" as const,
+				scope: "project" as const,
+				revision: 1,
+				updatedAt: 0,
+			};
+			const availableTools = new Set(
+				filterAgentTools([{ name: "skill_list" }, { name: "skill_load" }], template).map((tool) => tool.name)
+			);
+			const summaries = await manager.listEnabled("workspace");
+			expect(summaries.length).toBeGreaterThan(0);
+			const tools = filterAgentTools(createSkillTools(manager, "workspace", summaries, { availableTools }), template);
+			const fragment = skillDiscoveryFragment(summaries, 8000, availableTools);
+			expect(tools.map((tool) => tool.name)).toEqual(names);
+			for (const name of ["skill_list", "skill_load"].filter((name) => !availableTools.has(name))) {
+				expect(fragment.content).not.toContain(name);
+				for (const tool of tools) expect(tool.description).not.toContain(name);
+			}
+			const load = tools.find((tool) => tool.name === "skill_load");
+			if (load) {
+				expect(load.description).toContain(fragment.content);
+				expect(load.description).toContain('"id":"debug"');
+				expect(load.description).toContain("Load an applicable skill with skill_load BEFORE work");
+				if (availableTools.has("skill_list")) {
+					expect(load.description).toContain("Browse omitted descriptions with skill_list");
+					expect(load.description).toContain("recheck current availability with skill_list");
+				} else expect(load.description).toContain("Further skill discovery is unavailable");
+			}
+		}
+	);
+
+	it.each([[], ["skill_list"], ["skill_load"], ["skill_list", "skill_load"]].map((names) => ({ names })))(
+		"keeps skill discovery guidance within available tools: $names",
+		({ names }) => {
+			const tools = new Set(names);
+			const fragment = skillDiscoveryFragment([], 512, tools);
+			for (const name of ["skill_list", "skill_load"]) {
+				if (tools.has(name)) expect(fragment.content).toContain(name);
+				else expect(fragment.content).not.toContain(name);
+			}
+			expect(fragment.content.length).toBeLessThanOrEqual(512);
+			if (!tools.has("skill_load")) expect(fragment.content).toContain("Skill activation is unavailable");
+		}
+	);
+
 	it("installs and manages skills without prompts in full access and rechecks changed permissions", async () => {
 		const { root, manager } = await fixture();
 		await mkdir(join(root, "package"));

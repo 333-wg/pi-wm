@@ -67,6 +67,8 @@ export function withTeamLaunch(
 			: {}),
 		...(runtime.resolveCapabilities ? { resolveCapabilities: runtime.resolveCapabilities.bind(runtime) } : {}),
 		...(runtime.resolveContext ? { resolveContext: runtime.resolveContext.bind(runtime) } : {}),
+		...(runtime.branchSession ? { branchSession: runtime.branchSession.bind(runtime) } : {}),
+		...(runtime.prepareHistoryRewind ? { prepareHistoryRewind: runtime.prepareHistoryRewind.bind(runtime) } : {}),
 		...(runtime.compact ? { compact: runtime.compact.bind(runtime) } : {}),
 		...(runtime.injectTurn ? { injectTurn: runtime.injectTurn.bind(runtime) } : {}),
 		...(runtime.forceTerminate ? { forceTerminate: runtime.forceTerminate.bind(runtime) } : {}),

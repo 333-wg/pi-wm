@@ -708,6 +708,55 @@ describe("PiAgentRuntime", () => {
 		expect(verifyCapabilityPlan(plan)).toBe(true);
 	});
 
+	it("passes actual visible tools to context and selected-skill resolvers after a permission change", async () => {
+		const observed: Array<{ resolver: string; tools: string[] }> = [];
+		const runtime = new PiAgentRuntime({
+			createSession: async (state) => {
+				const session = new FakePiSession();
+				session.capabilityManifests = [
+					"read_file",
+					...(state.sandboxMode === "read_only" ? [] : ["generate_image"]),
+					"hidden",
+					"deferred",
+				].map((name) => ({
+					id: `tool:${name}`,
+					version: "1",
+					kind: "tool",
+					provider: "fixture",
+					scope: "session",
+					modelVisible: name !== "hidden",
+					tool: { name, executionMode: "parallel", exposure: name === "deferred" ? "deferred" : "direct" },
+				}));
+				return session;
+			},
+			resolveSkills: async (_state, ids, tools) => {
+				observed.push({ resolver: "skill", tools: [...tools] });
+				return ids.map((id) => ({ id, name: "Review", content: "Review only." }));
+			},
+			resolveContextFragments: (_state, _operationId, _query, tools) => {
+				observed.push({ resolver: "context", tools: [...tools] });
+				return [];
+			},
+		});
+		try {
+			for (const state of [snapshot, { ...snapshot, sandboxMode: "read_only" as const }]) {
+				await runtime.resolveContext({
+					operation: operation([{ type: "text", text: "review" }], ["review-code"]),
+					snapshot: state,
+					signal: new AbortController().signal,
+				});
+			}
+			expect(observed).toEqual([
+				{ resolver: "skill", tools: ["read_file", "generate_image"] },
+				{ resolver: "context", tools: ["read_file", "generate_image"] },
+				{ resolver: "skill", tools: ["read_file"] },
+				{ resolver: "context", tools: ["read_file"] },
+			]);
+		} finally {
+			await runtime[Symbol.asyncDispose]();
+		}
+	});
+
 	it("includes deployment-provided hook manifests in resolution and drift checks", async () => {
 		const session = new FakePiSession();
 		let version = "1";

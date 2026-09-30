@@ -155,7 +155,7 @@ describe("buildWumingSystemPrompt guidelines", () => {
 		const withExec = section(build(fullToolset), "tool_guidelines");
 		expect(withExec).toContain("Use exec for build, test and lint commands");
 		expect(withExec).toContain("never invent or call a tool named shell");
-		expect(withExec).toContain("Locate code with grep and glob before reading anything");
+		expect(withExec).toContain("Locate code with grep and glob");
 		expect(withExec).toContain("Use ls to orient yourself");
 		expect(withExec).toContain("Use run_python for calculation");
 		expect(withExec).toContain("Search the web when a fact could have changed");
@@ -172,7 +172,7 @@ describe("buildWumingSystemPrompt guidelines", () => {
 		expect(withExec).toContain("Use preview_start, not exec");
 		expect(withExec).toContain("Keep the preview server running after browser verification");
 		expect(withExec).toContain("do not assume browser automation shares its cookies");
-		expect(withExec).toContain("inspect browser_tabs, select the intended tab");
+		expect(withExec).toContain("Inspect browser_tabs, select the intended tab");
 
 		const readOnly = section(build([tool("read_file", "Read file contents")]), "tool_guidelines");
 		expect(readOnly).not.toContain("Use exec");
@@ -182,10 +182,11 @@ describe("buildWumingSystemPrompt guidelines", () => {
 		expect(readOnly).not.toContain("Search the web");
 	});
 
-	it("emits the search guideline when either grep or glob is present", () => {
-		expect(section(build([tool("glob", "Find workspace files by path glob")]), "tool_guidelines")).toContain(
-			"Locate code with grep and glob"
-		);
+	it.each(["grep", "glob"])("names only the registered search tool: %s", (name) => {
+		const guidelines = section(build([tool(name)]), "tool_guidelines");
+		expect(guidelines).toContain("Locate code with " + name);
+		expect(guidelines).not.toContain(name === "grep" ? "glob" : "grep");
+		expect(guidelines).toContain("Honor an explicit request to read a specific file first");
 	});
 
 	it("carries each tool's own guidelines and never repeats one", () => {
@@ -336,7 +337,7 @@ describe("buildWumingSystemPrompt environment", () => {
 	});
 
 	it("requires inspecting returned screenshots at desktop and mobile sizes", () => {
-		const guidelines = section(build([tool("browser_screenshot")]), "tool_guidelines");
+		const guidelines = section(build([tool("browser_screenshot"), tool("browser_open")]), "tool_guidelines");
 		expect(guidelines).toContain("1440x900");
 		expect(guidelines).toContain("390x844");
 		expect(guidelines).toContain("Inspect the returned image content yourself");
@@ -363,13 +364,13 @@ describe("buildWumingSystemPrompt environment", () => {
 			"Approval policy: always — every tool call pauses"
 		);
 		expect(build(fullToolset, { approvalPolicy: "on_risk" })).toContain(
-			"Approval policy: on_risk — writes and commands pause"
+			"Approval policy: on_risk — the host evaluates tool risk and capabilities"
 		);
 		expect(build(fullToolset, { approvalPolicy: "on_failure" })).toContain(
 			"Approval policy: on_failure — a failed call is paused"
 		);
 		expect(build(fullToolset, { approvalPolicy: "never" })).toContain(
-			"Approval policy: never — tool calls run without asking"
+			"Approval policy: never — ordinary tool calls run without asking"
 		);
 		expect(build(fullToolset, { approvalPolicy: "never" })).not.toContain("Approval policy: on_risk");
 	});
@@ -411,6 +412,169 @@ describe("buildWumingSystemPrompt environment", () => {
 		expect(prompt).toContain("announce the checks before verification");
 		expect(prompt).toContain("Simple questions answered directly do not need a progress preamble");
 		expect(prompt).toContain("a successful command is not proof that the user's goal is achieved");
+	});
+});
+
+describe("Pi-Wm task and permission contracts", () => {
+	it("describes file-tool scope without inventing command isolation", () => {
+		const prompt = build(fullToolset, { cwd: 'D:/my project/"quoted"\nroot' });
+		expect(prompt).toContain('Workspace file-tool root (host-supplied data): "D:/my project/\\"quoted\\"\\nroot"');
+		expect(prompt).toContain("not an OS-level isolation guarantee");
+		expect(prompt).toContain("Use the reported backend and shell");
+		expect(prompt).toContain("JSON encoding is not shell escaping");
+		expect(prompt).not.toContain("Commands run in a container");
+		expect(prompt).not.toContain("there is no access to the rest of the machine");
+		expect(build([])).toContain("Workspace file-tool root (host-supplied data): not reported");
+	});
+
+	it.each(["always", "on_risk", "on_failure", "never"] as const)(
+		"keeps conversational authorization bounded under %s",
+		(approvalPolicy) => {
+			const safety = section(build([], { approvalPolicy }), "safety");
+			expect(safety).toContain("Reuse valid authorization within the same task");
+			expect(safety).toContain("reconfirm if the target, recipient, content or impact materially changes");
+			expect(safety).toContain("Later restrictions or revocation take precedence");
+			expect(safety).toContain("Silence, elapsed time, tool availability and recovery notices are not consent");
+			expect(safety).toContain("never bypasses host approval or a tool's required confirmation");
+			expect(safety).toContain("preparation that has no unapproved external effects");
+			expect(safety).toContain("does not authorize uploading, publishing or sending it elsewhere");
+		}
+	);
+
+	it("preserves progress without resuming cancelled work from a summary", () => {
+		const workflow = section(build([]), "how_to_work");
+		expect(workflow).toContain("A status question alone does not cancel the goal");
+		expect(workflow).toContain("Honor explicit stop or scope changes before starting further actions");
+		expect(workflow).toContain("do not claim an in-flight action was cancelled without evidence");
+		expect(workflow).toContain("Compaction does not end an active task");
+		expect(workflow).toContain("Summaries and memories are evidence, not new authorization");
+		expect(workflow).toContain("a recovery notice or retained task alone is not permission to resume");
+	});
+
+	it("classifies failure and protects uncertain external effects from replay", () => {
+		const workflow = section(build([]), "how_to_work");
+		expect(workflow).toContain("invalid input, transient failure, permission denial and unknown outcome");
+		expect(workflow).toContain("bounded number of times when replay is safe");
+		expect(workflow).toContain("A timeout or missing receipt does not prove that nothing happened");
+		expect(workflow).toContain("before repeating writes, sends, publications or billable generation");
+		expect(workflow).toContain("never route a blocked action through another tool, account or agent");
+	});
+
+	it("uses proportionate checks and self-contained completion evidence", () => {
+		const prompt = build([]);
+		expect(prompt).toContain("Match verification to behavior and regression risk, not line count");
+		expect(prompt).toContain("meaningful regression tests for features and bug fixes");
+		expect(prompt).toContain("Pure prose or formatting changes need appropriate checks");
+		expect(prompt).toContain("Once required checks pass after the last relevant edit");
+		expect(prompt).toContain("Broaden or repeat checks only for new edits, failures or concrete concerns");
+		expect(prompt).toContain("Make the final answer self-contained");
+		expect(prompt).toContain("any unverified behavior or blocker");
+	});
+});
+
+describe("restricted tool guidance", () => {
+	it("does not request activation when only skill discovery is registered", () => {
+		const guidelines = section(build([tool("skill_list")]), "tool_guidelines");
+		expect(guidelines).toContain("browse skill_list");
+		expect(guidelines).toContain("Listing skills is discovery, not activation");
+		expect(guidelines).not.toContain("skill_load");
+		const loadOnly = section(build([tool("skill_load")]), "tool_guidelines");
+		expect(loadOnly).toContain("call skill_load before performing that work");
+		expect(loadOnly).not.toContain("skill_list");
+	});
+
+	it("does not suggest launching a team from coordination tools alone", () => {
+		const guidelines = section(build([tool("Agent"), tool("TaskCreate")]), "tool_guidelines");
+		expect(guidelines).not.toContain("TeamCreate");
+		expect(section(build([tool("TeamCreate")]), "tool_guidelines")).not.toContain("skill_load");
+		expect(section(build([tool("TeamCreate"), tool("skill_load")]), "tool_guidelines")).toContain(
+			"load the available team skill with skill_load"
+		);
+	});
+
+	it("keeps read-only browser inspection without download or interaction instructions", () => {
+		const names = [
+			"browser_search",
+			"browser_open",
+			"browser_snapshot",
+			"browser_screenshot",
+			"browser_diagnostics",
+			"browser_tabs",
+		];
+		const guidelines = section(
+			build(
+				names.map((name) => tool(name)),
+				{ sandboxMode: "read_only" }
+			),
+			"tool_guidelines"
+		);
+		expect(guidelines).toContain("Capture browser_screenshot");
+		expect(guidelines).toContain("1440x900");
+		expect(guidelines).not.toContain("browser_download");
+		expect(guidelines).not.toContain("browser_action");
+		expect(guidelines).toContain("Do not claim interaction coverage");
+	});
+
+	it("reports limited screenshot coverage without inventing controls", () => {
+		const guidelines = section(build([tool("browser_screenshot")]), "tool_guidelines");
+		expect(guidelines).toContain("responsive coverage as incomplete");
+		expect(guidelines).toContain("Inspect the returned image content yourself");
+		for (const unavailable of ["browser_open", "browser_action", "browser_diagnostics"])
+			expect(guidelines).not.toContain(unavailable);
+	});
+
+	it("preserves interaction and error checks without screenshot capture", () => {
+		const guidelines = section(
+			build(["browser_open", "browser_snapshot", "browser_action", "browser_diagnostics"].map((name) => tool(name))),
+			"tool_guidelines"
+		);
+		expect(guidelines).toContain("Exercise the affected interaction with browser_action");
+		expect(guidelines).toContain("Check browser_diagnostics");
+		expect(guidelines).toContain("repeat the affected workflow after the last edit");
+		expect(guidelines).toContain("recheck after the last edit");
+		expect(guidelines).not.toContain("browser_screenshot");
+	});
+
+	it("preserves available steps without advertising absent tools across browser and preview combinations", () => {
+		for (const family of [
+			[
+				"browser_search",
+				"browser_open",
+				"browser_snapshot",
+				"browser_screenshot",
+				"browser_diagnostics",
+				"browser_tabs",
+				"browser_download",
+				"browser_action",
+				"web_search",
+				"web_fetch",
+			],
+			["preview_start", "preview_status", "preview_stop"],
+		]) {
+			for (let mask = 0; mask < 2 ** family.length; mask++) {
+				const available = family.filter((_, index) => (mask & (1 << index)) !== 0);
+				const guidelines = section(build(available.map((name) => tool(name))), "tool_guidelines");
+				for (const name of family.filter((name) => !available.includes(name)))
+					expect(guidelines, "registered tools: " + available.join(", ")).not.toMatch(new RegExp("\\b" + name + "\\b"));
+				if (available.includes("browser_action"))
+					expect(guidelines).toContain("Exercise the affected interaction with browser_action");
+				if (available.includes("browser_diagnostics")) expect(guidelines).toContain("Check browser_diagnostics");
+			}
+		}
+	});
+
+	it("preserves complete workflows and a missing-capability fallback", () => {
+		const guidelines = section(build(fullToolset), "tool_guidelines");
+		for (const instruction of [
+			"Use browser_download",
+			"Exercise the affected interaction with browser_action",
+			"Check browser_diagnostics",
+			"Inspect preview_status",
+			"Use preview_stop",
+		])
+			expect(guidelines).toContain(instruction);
+		expect(section(build([]), "tool_guidelines")).toContain("Call only tools registered for this session");
+		expect(section(build([tool("web_fetch")]), "tool_guidelines")).not.toContain("Search the web when");
 	});
 });
 

@@ -20,7 +20,12 @@ import { PromptCacheObserver } from "./cache-diagnostics.js";
 import { CacheUsageObserver } from "./cache-usage-evidence.js";
 import { pendingReferenceMessage } from "./reference-context.js";
 import { recoverDurableSession, requestDigest } from "./session-recovery.js";
-import { persistHistoryBranch, sessionHistoryDirectory } from "./session-history.js";
+import {
+	applyHistoryRewind,
+	prepareHistoryRewind,
+	persistHistoryBranch,
+	sessionHistoryDirectory,
+} from "./session-history.js";
 import type { PiProviderRegistration, PiSessionFactory, PiSessionRecovery, WorkspaceResolver } from "./types.js";
 
 export interface DefaultPiSessionFactoryOptions {
@@ -97,11 +102,12 @@ export function recoverInterruptedSession(manager: SessionManager): boolean {
 	return true;
 }
 
-function defaultSystemPrompt(input: { snapshot: SessionSnapshot; tools: ToolDefinition[] }): string {
+function defaultSystemPrompt(input: { snapshot: SessionSnapshot; tools: ToolDefinition[]; cwd: string }): string {
 	return buildWumingSystemPrompt({
 		tools: input.tools,
 		sandboxMode: input.snapshot.sandboxMode,
 		approvalPolicy: input.snapshot.approvalPolicy,
+		cwd: input.cwd,
 	});
 }
 
@@ -204,6 +210,7 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		if (snapshot.runtimeHistoryId && (await SessionManager.list(cwd, sessionDir)).length === 0)
 			throw new Error("The selected model history is missing; refusing to start an empty conversation");
 		const sessionManager = SessionManager.continueRecent(cwd, sessionDir);
+		applyHistoryRewind(sessionManager, snapshot.runtimeHistoryRewind);
 		const { session } = await createAgentSessionFromServices({
 			services,
 			sessionManager,
@@ -328,6 +335,10 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		};
 		const prompt = session.prompt.bind(session);
 		Object.assign(session, {
+			prepareHistoryRewind: (
+				input: Parameters<typeof prepareHistoryRewind>[1],
+				operations: Parameters<typeof prepareHistoryRewind>[2]
+			) => prepareHistoryRewind(sessionManager, input, operations),
 			branchHistory: (
 				input: Parameters<typeof persistHistoryBranch>[3],
 				operations: Parameters<typeof persistHistoryBranch>[4]

@@ -12,8 +12,12 @@ async function setup() {
 	stores.push(store);
 	let calls = 0;
 	const branchSession = vi.fn<NonNullable<AgentRuntime["branchSession"]>>(async () => {});
+	const prepareHistoryRewind = vi.fn<NonNullable<AgentRuntime["prepareHistoryRewind"]>>(async () => ({
+		leafId: "prefix",
+	}));
 	const runtime: AgentRuntime = {
 		branchSession,
+		prepareHistoryRewind,
 		executeTurn: async (input) => ({
 			items: [
 				{
@@ -59,26 +63,28 @@ async function setup() {
 		content: [{ type: "text" as const, text: "revised" }],
 		edit: { itemId: source.transcript[2]!.id, expectedRevision: source.revision },
 	};
-	return { store, orchestrator, sessionId, source, input, branchSession };
+	return { store, orchestrator, sessionId, source, input, branchSession, prepareHistoryRewind, runtime };
 }
 
 it("edits and enqueues atomically in the same session, preserving the prefix and audit operations", async () => {
-	const { store, orchestrator, sessionId, source, input, branchSession } = await setup();
+	const { store, orchestrator, sessionId, source, input, branchSession, prepareHistoryRewind } = await setup();
 	const accepted = await orchestrator.acceptTurn(input);
 	const edited = store.loadSnapshot(sessionId)!;
 	expect(accepted.sessionId).toBe(sessionId);
 	expect(edited.transcript.slice(0, 2)).toEqual(source.transcript.slice(0, 2));
 	expect(edited.transcript).toHaveLength(3);
 	expect(edited.transcript[2]!.content).toEqual(input.content);
-	expect(edited.runtimeHistoryId).toBeTruthy();
+	expect(edited.runtimeHistoryId).toBe(source.runtimeHistoryId);
+	expect(edited.runtimeHistoryRewind).toEqual({ id: expect.any(String), leafId: "prefix" });
 	expect(replaySessionEvents(store.loadEvents(sessionId))).toEqual(edited);
 	expect(edited.contextUsage?.tokens).toBeNull();
 	expect(store.listOperations(sessionId)).toHaveLength(3);
-	expect(branchSession).toHaveBeenCalledWith(
-		expect.objectContaining({ targetSessionId: sessionId, beforeItemId: input.edit.itemId })
+	expect(prepareHistoryRewind).toHaveBeenCalledWith(
+		expect.objectContaining({ snapshot: source, beforeItemId: input.edit.itemId })
 	);
 	await expect(orchestrator.acceptTurn(input)).resolves.toEqual(accepted);
-	expect(branchSession).toHaveBeenCalledTimes(1);
+	expect(prepareHistoryRewind).toHaveBeenCalledTimes(1);
+	expect(branchSession).not.toHaveBeenCalled();
 	await orchestrator.drainSession(sessionId);
 	expect(store.loadSnapshot(sessionId)!.transcript).toHaveLength(4);
 });
@@ -93,16 +99,36 @@ it("editing the first message keeps the session identity and removes all old con
 	expect(edited.transcript[0]!.content).toEqual(input.content);
 });
 
-it("does not change the conversation or accept a turn when history staging fails", async () => {
-	const { store, orchestrator, sessionId, source, input, branchSession } = await setup();
-	branchSession.mockRejectedValueOnce(new Error("disk unavailable"));
+it("does not change the conversation or accept a turn when locating history fails", async () => {
+	const { store, orchestrator, sessionId, source, input, prepareHistoryRewind } = await setup();
+	prepareHistoryRewind.mockRejectedValueOnce(new Error("disk unavailable"));
 	await expect(orchestrator.acceptTurn(input)).rejects.toThrow("disk unavailable");
 	expect(store.loadSnapshot(sessionId)).toEqual(source);
 	expect(store.listOperations(sessionId)).toHaveLength(2);
 });
 
+it("rejects an edit without changing history when the runtime wrapper loses edit support", async () => {
+	const { store, orchestrator, sessionId, source, input, runtime } = await setup();
+	delete runtime.prepareHistoryRewind;
+	await expect(orchestrator.acceptTurn(input)).rejects.toThrow("cannot safely edit");
+	expect(store.loadSnapshot(sessionId)).toEqual(source);
+	expect(store.listOperations(sessionId)).toHaveLength(2);
+});
+
+it("does not apply an edit position when committing the edit fails", async () => {
+	const { store, orchestrator, sessionId, source, input, branchSession } = await setup();
+	const commit = vi.spyOn(store, "commitMutation").mockImplementationOnce(() => {
+		throw new Error("commit failed");
+	});
+	await expect(orchestrator.acceptTurn(input)).rejects.toThrow("commit failed");
+	commit.mockRestore();
+	expect(store.loadSnapshot(sessionId)).toEqual(source);
+	expect(branchSession).not.toHaveBeenCalled();
+	expect(store.listOperations(sessionId)).toHaveLength(2);
+});
+
 it("rejects stale, non-user, queued and active edits without staging history", async () => {
-	const { store, orchestrator, sessionId, input, branchSession } = await setup();
+	const { store, orchestrator, sessionId, input, branchSession, prepareHistoryRewind } = await setup();
 	await expect(orchestrator.acceptTurn({ ...input, edit: { ...input.edit, expectedRevision: 1 } })).rejects.toThrow(
 		"conversation changed"
 	);
@@ -118,6 +144,7 @@ it("rejects stale, non-user, queued and active edits without staging history", a
 		})
 	).rejects.toThrow();
 	expect(branchSession).not.toHaveBeenCalled();
+	expect(prepareHistoryRewind).not.toHaveBeenCalled();
 });
 
 it("stages an explicit fork before publishing it and retains a stable history pointer", async () => {

@@ -13,7 +13,7 @@ import {
 	mediaConnectionHash as connectionHash,
 	type MediaConnection,
 } from "./media-models.js";
-import { MEDIA_SKILL_ROUTING_POLICY, mediaModelStatus } from "./media-skill-policy.js";
+import { mediaModelStatus } from "./media-skill-policy.js";
 import {
 	validateVideoRequest,
 	videoRequest,
@@ -126,7 +126,8 @@ export class MediaGenerationService {
 		snapshot: SessionSnapshot,
 		job: ImageJob,
 		signal: AbortSignal,
-		recovery = false
+		recovery = false,
+		canRetrieve = true
 	): Promise<ImageToolResult> {
 		if (job.artifact)
 			return {
@@ -162,10 +163,12 @@ export class MediaGenerationService {
 						generationStatus: "result_received",
 						reason,
 						next:
-							"The provider returned an image result, but downloading or saving it did not complete. The result is saved for recovery. Do not say generation failed or submit generate_image again, even with a different prompt or model: it may charge again. " +
+							"The provider returned an image result, but downloading or saving it did not complete. The result is saved for recovery. Do not say generation failed or submit image generation again, even with a different prompt or model: it may charge again. " +
 							(recovery
 								? "Recovery did not complete. Explain the retrieval problem and wait for user direction. Do not retry automatically. "
-								: "Use get_generated_image with this jobId to retry retrieval once. ") +
+								: canRetrieve
+									? "Use get_generated_image with this jobId to retry retrieval once. "
+									: "Image retrieval is unavailable in this session; report the saved jobId and limitation. ") +
 							"Never loop or bypass network safety checks.",
 					})
 				),
@@ -321,7 +324,11 @@ export class MediaGenerationService {
 		).ref;
 	}
 
-	createTools(snapshot: SessionSnapshot, approvals: ApprovalBroker): ToolDefinition[] {
+	createTools(
+		snapshot: SessionSnapshot,
+		approvals: ApprovalBroker,
+		availableTools?: () => ReadonlySet<string>
+	): ToolDefinition[] {
 		const authorize = async (id: string, config: MediaConnection, signal?: AbortSignal) => {
 			if (snapshot.sandboxMode === "read_only") throw new Error("Media generation is unavailable in read-only mode");
 			return approvals.authorize({
@@ -343,14 +350,16 @@ export class MediaGenerationService {
 				description:
 					"Read whether the host already has default image/video models. No network calls, fees or secrets. Use when a third-party skill asks for provider credentials or when settings changed. Saved defaults require no skill-specific setup; configured does not claim generation access was tested.",
 				promptSnippet: "Check existing image/video defaults without asking for per-skill configuration",
-				promptGuidelines: [MEDIA_SKILL_ROUTING_POLICY],
+				promptGuidelines: [
+					"Media configuration is host-managed. Saved defaults do not grant generation access. Use only registered media controls under normal permissions; missing tools do not authorize provider scripts, duplicate credentials or another billable submission.",
+				],
 				parameters: Type.Object({}, { additionalProperties: false }),
 				execute: async (_id, _params, signal) => {
 					signal?.throwIfAborted();
 					return {
 						content: outputText(
 							JSON.stringify({
-								defaults: mediaModelStatus(this.#models.list()),
+								defaults: mediaModelStatus(this.#models.list(), availableTools?.()),
 								configuration: "host_managed",
 								perSkillSetupRequired: false,
 							})
@@ -363,12 +372,12 @@ export class MediaGenerationService {
 				name: "generate_image",
 				label: "Generate image",
 				description:
-					"Generate one image with the configured default image model. Optional model and provider select any added image model across saved services when requested by the user; no endpoint or credential overrides. Returns a persisted chat attachment or a recovery jobId if retrieving the result failed. Use get_generated_image for recovery, never resubmit a billable generation. Optional referenceArtifactId edits an existing workspace image through images/edits.",
+					"Generate one image with the configured default image model. Optional model and provider select any added image model across saved services when requested by the user; no endpoint or credential overrides. Returns a persisted chat attachment or a recovery jobId if retrieving the result failed. Recover only through a registered image-retrieval tool; if unavailable, report the limitation. Never resubmit a billable generation. Optional referenceArtifactId edits an existing workspace image through images/edits.",
 				promptSnippet: "Generate or edit an image using the default image model from Settings",
 				promptGuidelines: [
 					"When the user provides a product or reference image, use its attached_image artifactId as referenceArtifactId. Never invent an artifact ID or substitute an unrelated sample product for an unavailable reference image.",
 					"For ALL image-generation skills, use generate_image with the user-configured default. Adapt a third-party skill's provider invocation to this tool while preserving its creative instructions. Do not request or configure per-skill credentials, or run a provider script to bypass this route.",
-					"When creating or learning image/video skills, reference generate_image, generate_video and get_generated_video; do not embed model IDs, endpoints or credentials. Generated artifacts already display in chat; do not invent local paths or remote media links.",
+					"When creating or learning image/video skills, reference only registered host media tools; do not embed model IDs, endpoints or credentials. Generated artifacts already display in chat; do not invent local paths or remote media links.",
 				],
 				parameters: Type.Object(
 					{
@@ -472,7 +481,13 @@ export class MediaGenerationService {
 									"INSERT INTO media_image_jobs (id, session_id, workspace_id, request_hash, model, url) VALUES (?, ?, ?, ?, ?, ?)"
 								)
 								.run(job.id, job.session_id, job.workspace_id, requestHash, job.model, job.url);
-							return await this.#retrieveImage(snapshot, job, signal);
+							return await this.#retrieveImage(
+								snapshot,
+								job,
+								signal,
+								false,
+								availableTools?.().has("get_generated_image") !== false
+							);
 						} else throw new Error("Unsupported image response: expected data[0].b64_json or data[0].url");
 						signal.throwIfAborted();
 						const artifact = await this.#save(snapshot, content, "image");
@@ -489,7 +504,7 @@ export class MediaGenerationService {
 				name: "get_generated_image",
 				label: "Retrieve generated image",
 				description:
-					"Retrieve a saved image result by jobId, without submitting or billing another generation. Omit jobId to recover the latest image in this session after an interruption. If retrieval is still pending, report the download problem and wait for user direction; never loop or call generate_image as a retry.",
+					"Retrieve a saved image result by jobId, without submitting or billing another generation. Omit jobId to recover the latest image in this session after an interruption. If retrieval is still pending, report the download problem and wait for user direction; never loop or submit image generation as a retry.",
 				parameters: Type.Object(
 					{ jobId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })) },
 					{ additionalProperties: false }
@@ -537,11 +552,11 @@ export class MediaGenerationService {
 				name: "generate_video",
 				label: "Generate video",
 				description:
-					"Submit one video using the configured model's adapter and capabilities. Supports text or reference-image generation when the adapter permits it. The host handles multipart upload or Base64 encoding of referenceArtifactId. Returns a durable jobId and normalized parameters; use get_generated_video to retrieve the result. Never resubmit because a job is pending or failed; each submission may be billable.",
+					"Submit one video using the configured model's adapter and capabilities. Supports text or reference-image generation when the adapter permits it. The host handles multipart upload or Base64 encoding of referenceArtifactId. Returns a durable jobId and normalized parameters; retrieve the result only with a registered video-retrieval tool, or report retrieval as unavailable. Never resubmit because a job is pending or failed; each submission may be billable.",
 				promptSnippet: "Start a video generation using the default video model from Settings",
 				promptGuidelines: [
-					"For video skills use generate_video with the user-configured default, not hard-coded skill providers or scripts. Then call get_generated_video until completed or failed. Cancellation stops local waiting, not a provider-side job or its charges.",
-					"Read the current video capabilities in the host policy or media_model_status. Use aspectRatio only when supported for this mode; native image-to-video often inherits the input image shape. Omit size unless a specific supported resolution is required. Check generationModes. Never change an explicitly requested duration or resolution without user direction.",
+					"For video skills use generate_video with the user-configured default, not hard-coded skill providers or scripts. If a video-retrieval tool is registered, use it until completed or failed; otherwise report that retrieval is unavailable. Cancellation stops local waiting, not a provider-side job or its charges.",
+					"Read the current video capabilities in the host context or a registered media-status tool; if unavailable, report that capabilities cannot be verified. Use aspectRatio only when supported for this mode; native image-to-video often inherits the input image shape. Omit size unless a specific supported resolution is required. Check generationModes. Never change an explicitly requested duration or resolution without user direction.",
 					"When the user asks to animate an attached/generated image, pass its real referenceArtifactId. The host uploads or Base64-encodes it when supported. If capabilities only accept public-url, use a user-provided public referenceImageUrl or explain the limitation. Never invent a URL, publish the image to a third party, or silently generate text-only video. For Agnes reference mode refer to the image as <Picture 1> in the prompt.",
 				],
 				parameters: Type.Object(
@@ -642,7 +657,10 @@ export class MediaGenerationService {
 									status: "submitted",
 									protocol: request.protocol,
 									parameters: request.parameters,
-									next: "Call get_generated_video with this jobId; do not resubmit.",
+									next:
+										availableTools?.().has("get_generated_video") !== false
+											? "Call get_generated_video with this jobId; do not resubmit."
+											: "Video retrieval is unavailable in this session; report this jobId and the limitation. Do not resubmit.",
 								})
 							),
 							details: { jobId, protocol: request.protocol, parameters: request.parameters },

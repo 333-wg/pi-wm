@@ -138,6 +138,12 @@ function checkedMountPath(value: string, label: string): string {
 export class DockerProcessSandbox implements ProcessSandbox {
 	readonly networkAccess: boolean;
 	readonly pythonExecutable = "python3";
+	readonly executionEnvironment = {
+		backend: "docker" as const,
+		platform: "linux",
+		shell: "/bin/sh",
+		cwd: "/workspace",
+	};
 	readonly #workspaceRoot: string;
 	readonly #image: string;
 	readonly #dockerExecutable: string;
@@ -239,7 +245,7 @@ export class DockerProcessSandbox implements ProcessSandbox {
 			"--label",
 			"wuming.sandbox=1",
 			"--workdir",
-			"/workspace",
+			this.executionEnvironment.cwd,
 			"--network",
 			this.#network,
 			"--cpus",
@@ -264,7 +270,7 @@ export class DockerProcessSandbox implements ProcessSandbox {
 			...this.#environment,
 			...(this.#user ? ["--user", this.#user] : []),
 			this.#image,
-			"/bin/sh",
+			this.executionEnvironment.shell,
 			"-lc",
 			command,
 		];

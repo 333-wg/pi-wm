@@ -26,19 +26,23 @@ test("creates a member, inspects real communication, filters tasks and opens its
 	await dialog.getByRole("textbox", { name: "任务目标" }).fill("Inspect the shared workspace");
 	await dialog.getByRole("button", { name: "创建并运行" }).click();
 	await expect(dialog).toHaveCount(0);
-	await expect(team.locator(".teams-task.state-completed")).toHaveCount(1);
-	await expect(team.locator(".teams-member")).toHaveCount(2);
+	await expect(team.locator(".teams-task-enhanced.state-completed")).toHaveCount(1);
+	await expect(team.locator(".teams-member-enhanced")).toHaveCount(2);
 	await team.getByRole("button", { name: /通信流/ }).click();
 	await expect(team.locator(".teams-feed")).toContainText("Demo runtime received: Inspect the shared workspace");
 	await team.getByRole("combobox", { name: "全部类型" }).selectOption("dispatch");
 	await expect(team.locator(".teams-feed li")).toHaveCount(1);
-	await team.getByRole("button", { name: "关闭", exact: true }).click();
+	await page.keyboard.press("Escape");
+	await expect(team.locator(".teams-inspector")).toHaveCount(0);
 	await team.getByRole("searchbox").fill("not-a-task");
 	await expect(team.getByText("没有匹配的任务")).toBeVisible();
 	await team.getByRole("searchbox").clear();
 	await page.screenshot({ path: testInfo.outputPath("teams-desktop.png") });
-	await team.locator(".teams-task").click();
+	await team.locator(".teams-task-enhanced").click();
 	await expect(team.locator(".teams-result")).toContainText("Demo runtime received:");
+	await page.keyboard.press("Escape");
+	await expect(team.locator(".teams-inspector")).toHaveCount(0);
+	await team.locator(".teams-task-enhanced").click();
 	await team.getByRole("button", { name: "打开成员对话" }).click();
 	await expect(page.getByRole("button", { name: "返回上级对话" })).toBeVisible();
 	await expect(page.getByText(/Demo runtime received: Inspect the shared workspace/)).toBeVisible();
@@ -67,13 +71,13 @@ test("runs a dependency plan through approval and gateway restart, with mobile-s
 	await dialog.getByRole("textbox", { name: "步骤任务", exact: true }).nth(1).fill("Verify release after approval");
 	await dialog.getByRole("checkbox", { name: "安全审查", exact: true }).check();
 	await dialog.getByRole("button", { name: "创建计划", exact: true }).click();
-	await expect(team.locator(".teams-task")).toHaveCount(2);
+	await expect(team.locator(".teams-task-enhanced")).toHaveCount(2);
 	await expect(team.locator("[data-dependency]")).toHaveCount(1);
 	await team.getByRole("button", { name: "启动计划", exact: true }).click();
-	await expect(team.locator(".teams-task").filter({ hasText: "等待批准" })).toHaveCount(1);
-	await expect(team.locator(".teams-task").filter({ hasText: "等待依赖" })).toHaveCount(1);
-	await expect(team.locator(".teams-member")).toHaveCount(2);
-	await team.locator(".teams-task").filter({ hasText: "安全审查" }).click();
+	await expect(team.locator(".teams-task-enhanced").filter({ hasText: "等待批准" })).toHaveCount(1);
+	await expect(team.locator(".teams-task-enhanced").filter({ hasText: "等待依赖" })).toHaveCount(1);
+	await expect(team.locator(".teams-member-enhanced")).toHaveCount(2);
+	await team.locator(".teams-task-enhanced").filter({ hasText: "安全审查" }).click();
 	const approval = team.getByRole("region", { name: "需要批准工具调用" });
 	await expect(approval).toBeVisible();
 	await page.screenshot({ path: testInfo.outputPath("teams-dependency-approval.png") });
@@ -81,16 +85,16 @@ test("runs a dependency plan through approval and gateway restart, with mobile-s
 	await page.reload();
 	await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
 	await page.getByRole("tab", { name: "子任务", exact: true }).click();
-	await expect(team.locator(".teams-task")).toHaveCount(2);
-	await team.locator(".teams-task").filter({ hasText: "安全审查" }).click();
+	await expect(team.locator(".teams-task-enhanced")).toHaveCount(2);
+	await team.locator(".teams-task-enhanced").filter({ hasText: "安全审查" }).click();
 	await expect(approval).toBeVisible();
 	await approval.getByRole("button", { name: "允许", exact: true }).click();
-	await expect(team.locator(".teams-task.state-completed")).toHaveCount(2);
-	await team.getByRole("button", { name: "关闭", exact: true }).click();
-	await expect(team.locator(".teams-member")).toHaveCount(3);
+	await expect(team.locator(".teams-task-enhanced.state-completed")).toHaveCount(2);
+	await team.locator(".teams-inspector > header").getByRole("button", { name: "关闭", exact: true }).click();
+	await expect(team.locator(".teams-member-enhanced")).toHaveCount(3);
 	expect(
 		await team
-			.locator(".teams-member img")
+			.locator(".teams-member-enhanced img")
 			.evaluateAll((images) =>
 				images.every((image) => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)
 			)
@@ -111,10 +115,15 @@ test("runs a dependency plan through approval and gateway restart, with mobile-s
 	await team.getByRole("button", { name: "任务列表", exact: true }).click();
 	await team.locator(".teams-task-list button").first().click();
 	await expect(team.getByRole("complementary", { name: "任务详情" })).toBeVisible();
-	const box = await team.locator(".teams-inspector").boundingBox();
-	expect(box!.x).toBeGreaterThanOrEqual(0);
-	expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+	await expect
+		.poll(async () => {
+			const box = await team.locator(".teams-inspector").boundingBox();
+			return box !== null && box.x >= 0 && box.x + box.width <= 390;
+		})
+		.toBe(true);
 	await page.screenshot({ path: testInfo.outputPath("teams-mobile-inspector.png") });
+	await team.locator(".teams-inspector > header").getByRole("button", { name: "关闭", exact: true }).click();
+	await expect(team.locator(".teams-inspector")).toHaveCount(0);
 });
 
 test("stops a running member without reporting success", async ({ page }) => {
@@ -133,8 +142,8 @@ test("stops a running member without reporting success", async ({ page }) => {
 	await dialog.getByRole("textbox", { name: "成员名称" }).fill("Long running member");
 	await dialog.getByRole("textbox", { name: "任务目标" }).fill("/long");
 	await dialog.getByRole("button", { name: "创建并运行" }).click();
-	await team.locator(".teams-task").click();
+	await team.locator(".teams-task-enhanced").click();
 	await team.getByRole("button", { name: "停止任务", exact: true }).click();
-	await expect(team.locator(".teams-task")).toContainText("已取消");
-	await expect(team.locator(".teams-task.state-completed")).toHaveCount(0);
+	await expect(team.locator(".teams-task-enhanced")).toContainText("已取消");
+	await expect(team.locator(".teams-task-enhanced.state-completed")).toHaveCount(0);
 });

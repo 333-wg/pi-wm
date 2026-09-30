@@ -1,0 +1,731 @@
+/* ============================================
+   Agent Teams UI Enhancement - Phase 1
+   视觉设计升级：成员卡片、任务卡片、动画系统
+   ============================================ */
+
+/* === 增强的配色系统 === */
+:root {
+	/* 状态色彩 */
+	--team-waiting: #94a3b8;
+	--team-running: #3b82f6;
+	--team-completed: #10b981;
+	--team-attention: #f59e0b;
+	--team-error: #ef4444;
+
+	/* 渐变色 */
+	--gradient-success: linear-gradient(135deg, #10b981 0%, #059669 100%);
+	--gradient-running: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+	--gradient-attention: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+	--gradient-error: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+
+	/* 阴影系统 */
+	--shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+	--shadow-card-hover: 0 4px 6px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.08);
+	--shadow-card-active: 0 10px 15px rgba(0, 0, 0, 0.12), 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* === 动画关键帧 === */
+@keyframes card-appear {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes progress-fill {
+	from {
+		transform: scaleX(0);
+	}
+	to {
+		transform: scaleX(1);
+	}
+}
+
+@keyframes pulse-status {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.6;
+	}
+}
+
+@keyframes status-change {
+	0%,
+	100% {
+		transform: scale(1);
+	}
+	50% {
+		transform: scale(1.02);
+	}
+}
+
+@keyframes shimmer {
+	0% {
+		background-position: -200% center;
+	}
+	100% {
+		background-position: 200% center;
+	}
+}
+
+@keyframes float-up {
+	from {
+		transform: translateY(0);
+	}
+	to {
+		transform: translateY(-2px);
+	}
+}
+
+/* === 增强的成员卡片设计 === */
+.teams-member-enhanced {
+	position: relative;
+	display: flex;
+	justify-content: flex-start;
+	text-align: left;
+	flex: 0 0 210px;
+	min-height: 108px;
+	padding: 14px;
+	border-top: 3px solid var(--member-accent);
+	border-radius: 8px;
+	overflow: hidden;
+	box-shadow: var(--shadow-card);
+	transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+	animation: card-appear 0.4s ease-out;
+	background: var(--surface);
+}
+
+.teams-member-enhanced:hover {
+	box-shadow: var(--shadow-card-hover);
+	transform: translateY(-2px);
+}
+
+.teams-member-enhanced.selected {
+	outline: 2px solid var(--member-accent);
+	outline-offset: 1px;
+	box-shadow: var(--shadow-card-active);
+}
+
+.teams-member-enhanced.is-lead {
+	flex-basis: 230px;
+	background: linear-gradient(135deg, var(--green-soft) 0%, color-mix(in srgb, var(--green-soft) 95%, white) 100%);
+	border-top-color: var(--green);
+}
+
+/* 成员状态指示灯 */
+.teams-member-enhanced::before {
+	content: "";
+	position: absolute;
+	top: 14px;
+	right: 14px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--muted);
+	transition: all 0.3s ease;
+}
+
+.teams-member-enhanced[data-status="working"]::before,
+.teams-member-enhanced[data-status="running"]::before {
+	background: var(--team-running);
+	animation: pulse-status 2s ease-in-out infinite;
+}
+
+.teams-member-enhanced[data-status="idle"]::before,
+.teams-member-enhanced[data-status="completed"]::before {
+	background: var(--team-completed);
+}
+
+.teams-member-enhanced[data-status="error"]::before {
+	background: var(--team-error);
+	animation: pulse-status 1s ease-in-out infinite;
+}
+
+/* 增强的成员头像 */
+.teams-member-enhanced img {
+	width: 56px;
+	height: 70px;
+	flex: 0 0 56px;
+	object-fit: contain;
+	transition: transform 0.3s ease;
+	filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+}
+
+.teams-member-enhanced:hover img {
+	transform: scale(1.05);
+}
+
+/* 成员信息 */
+.teams-member-copy-enhanced {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	min-width: 0;
+	flex: 1;
+}
+
+.teams-member-copy-enhanced small {
+	font-size: 9px;
+	color: var(--member-accent);
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.teams-member-copy-enhanced strong {
+	font-size: 13px;
+	font-weight: 600;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	line-height: 1.3;
+}
+
+.teams-member-copy-enhanced > span {
+	font-size: 10px;
+	color: var(--muted);
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+/* 增强的进度条 */
+.teams-member-progress-enhanced {
+	position: absolute;
+	height: 3px;
+	background: var(--track);
+	bottom: 0;
+	left: 0;
+	right: 0;
+	overflow: hidden;
+}
+
+.teams-member-progress-enhanced > span {
+	display: block;
+	height: 100%;
+	background: var(--member-accent);
+	transform-origin: left;
+	animation: progress-fill 0.8s ease-out;
+	transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+	position: relative;
+}
+
+/* 进度条渐变效果 */
+.teams-member-progress-enhanced > span::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(
+		90deg,
+		transparent 0%,
+		rgba(255, 255, 255, 0.3) 50%,
+		transparent 100%
+	);
+	animation: shimmer 2s infinite;
+	background-size: 200% 100%;
+}
+
+/* 任务统计徽章 */
+.teams-member-stats {
+	display: flex;
+	gap: 6px;
+	margin-top: 2px;
+}
+
+.teams-member-stat-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 2px 6px;
+	border-radius: 10px;
+	background: var(--surface-muted);
+	font-size: 9px;
+	font-weight: 600;
+	color: var(--text-soft);
+}
+
+/* === 增强的任务卡片设计 === */
+.teams-task-enhanced {
+	position: absolute;
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	justify-content: space-between;
+	gap: 6px;
+	padding: 12px 14px;
+	text-align: left;
+	border-left: 4px solid var(--line-strong);
+	border-radius: 6px;
+	box-shadow: var(--shadow-card);
+	background: var(--surface);
+	transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+	animation: card-appear 0.3s ease-out;
+	cursor: pointer;
+}
+
+.teams-task-enhanced:hover {
+	box-shadow: var(--shadow-card-hover);
+	transform: translateY(-1px);
+}
+
+.teams-task-enhanced.selected {
+	outline: 2px solid var(--blue);
+	outline-offset: 1px;
+	box-shadow: var(--shadow-card-active);
+}
+
+/* 任务状态颜色 */
+.teams-task-enhanced.state-running {
+	border-left-color: var(--team-running);
+	background: linear-gradient(
+		to right,
+		color-mix(in srgb, var(--team-running) 5%, var(--surface)) 0%,
+		var(--surface) 100%
+	);
+}
+
+.teams-task-enhanced.state-attention {
+	border-left-color: var(--team-attention);
+	background: linear-gradient(
+		to right,
+		color-mix(in srgb, var(--team-attention) 5%, var(--surface)) 0%,
+		var(--surface) 100%
+	);
+}
+
+.teams-task-enhanced.state-completed {
+	border-left-color: var(--team-completed);
+	background: linear-gradient(
+		to right,
+		color-mix(in srgb, var(--team-completed) 5%, var(--surface)) 0%,
+		var(--surface) 100%
+	);
+}
+
+.teams-task-enhanced.state-waiting {
+	border-left-color: var(--team-waiting);
+}
+
+/* 任务标题 */
+.teams-task-enhanced strong {
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1.4;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	word-break: break-word;
+}
+
+/* 任务描述 */
+.teams-task-objective-enhanced {
+	font-size: 11px;
+	color: var(--muted);
+	line-height: 1.4;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	word-break: break-word;
+}
+
+/* 任务底部信息 */
+.teams-task-footer-enhanced {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	margin-top: 2px;
+}
+
+/* 增强的状态徽章 */
+.teams-status-enhanced {
+	display: inline-flex;
+	gap: 4px;
+	align-items: center;
+	padding: 3px 8px;
+	border-radius: 12px;
+	font-size: 10px;
+	font-weight: 600;
+	white-space: nowrap;
+	transition: all 0.3s ease;
+}
+
+.teams-status-enhanced.state-running {
+	color: var(--team-running);
+	background: color-mix(in srgb, var(--team-running) 15%, transparent);
+}
+
+.teams-status-enhanced.state-attention {
+	color: var(--team-attention);
+	background: color-mix(in srgb, var(--team-attention) 15%, transparent);
+}
+
+.teams-status-enhanced.state-completed {
+	color: var(--team-completed);
+	background: color-mix(in srgb, var(--team-completed) 15%, transparent);
+}
+
+.teams-status-enhanced.state-waiting {
+	color: var(--team-waiting);
+	background: color-mix(in srgb, var(--team-waiting) 15%, transparent);
+}
+
+/* 状态图标动画 */
+.teams-status-enhanced.state-running svg {
+	animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* 依赖关系徽章 */
+.teams-dependency-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 2px 6px;
+	border-radius: 10px;
+	background: var(--surface-muted);
+	font-size: 9px;
+	font-weight: 600;
+	color: var(--text-soft);
+}
+
+/* === 增强的泳道视图 === */
+.teams-canvas-enhanced {
+	position: relative;
+	transform-origin: top left;
+	transition: transform 0.2s ease-out;
+}
+
+/* 优化的依赖连接线 */
+.teams-edges-enhanced {
+	position: absolute;
+	left: 0;
+	top: 0;
+	pointer-events: none;
+}
+
+.teams-edges-enhanced path {
+	stroke: var(--faint-soft);
+	stroke-width: 2;
+	fill: none;
+	transition: all 0.3s ease;
+}
+
+.teams-edges-enhanced path.satisfied {
+	stroke: var(--team-completed);
+	stroke-width: 2.5;
+}
+
+.teams-edges-enhanced path.highlighted {
+	stroke: var(--blue);
+	stroke-width: 3;
+	filter: drop-shadow(0 0 4px var(--blue));
+}
+
+/* 泳道背景斑马纹 */
+.teams-lane-enhanced {
+	position: absolute;
+	left: 0;
+	transition: background-color 0.2s ease;
+}
+
+.teams-lane-enhanced:nth-child(even) {
+	background-color: color-mix(in srgb, var(--surface-muted) 30%, transparent);
+}
+
+.teams-lane-enhanced:hover {
+	background-color: color-mix(in srgb, var(--blue) 5%, var(--surface-muted));
+}
+
+/* === 增强的检查器面板 === */
+.teams-inspector-enhanced,
+.teams-inspector {
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	border-left: 1px solid var(--line);
+	background: var(--panel);
+	box-shadow: -2px 0 8px rgba(0, 0, 0, 0.05);
+	position: relative;
+	z-index: 10;
+}
+
+.teams-inspector-enhanced > header,
+.teams-inspector > header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	min-height: 52px;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--line);
+	background: var(--surface-muted);
+	position: sticky;
+	top: 0;
+	z-index: 5;
+}
+
+.teams-inspector-enhanced h3,
+.teams-inspector h3 {
+	font-size: 13px;
+	font-weight: 600;
+}
+
+/* 增强关闭按钮的可见性 */
+.teams-inspector .icon-button,
+.teams-inspector-enhanced .icon-button {
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	flex-shrink: 0;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.teams-inspector .icon-button:hover,
+.teams-inspector-enhanced .icon-button:hover {
+	background: var(--red-soft);
+	border-color: var(--red);
+	color: var(--red);
+	transform: scale(1.1);
+}
+
+.teams-inspector .icon-button:active,
+.teams-inspector-enhanced .icon-button:active {
+	transform: scale(0.95);
+}
+
+/* === 指标卡片 === */
+.teams-metrics-enhanced {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+	gap: 12px;
+	margin: 16px 0;
+}
+
+.teams-metric-card {
+	padding: 12px;
+	border-radius: 8px;
+	background: var(--surface-muted);
+	border: 1px solid var(--line-soft);
+	transition: all 0.2s ease;
+}
+
+.teams-metric-card:hover {
+	border-color: var(--line);
+	box-shadow: var(--shadow-sm);
+}
+
+.teams-metric-card dt {
+	font-size: 10px;
+	color: var(--muted);
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	margin-bottom: 6px;
+}
+
+.teams-metric-card dd {
+	margin: 0;
+	font-size: 18px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	color: var(--text);
+}
+
+/* === 加载状态 === */
+.teams-loading {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 40px;
+	color: var(--muted);
+}
+
+.teams-loading-spinner {
+	animation: spin 1s linear infinite;
+}
+
+/* === 响应式优化 === */
+/* === 响应式优化 === */
+@media (max-width: 1100px) {
+	.teams-member-enhanced {
+		flex-basis: clamp(180px, 45vw, 210px);
+		min-height: 100px;
+		padding: 12px;
+	}
+
+	.teams-member-enhanced img {
+		width: 48px;
+		height: 60px;
+	}
+
+	/* 小屏幕上，详情面板改为浮动覆盖层 */
+	.teams-body.with-inspector {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.teams-workbench .teams-inspector {
+		position: fixed;
+		top: 0;
+		bottom: 0;
+		right: 0;
+		width: min(420px, 95vw);
+		z-index: 100;
+		box-shadow: -4px 0 16px rgba(0, 0, 0, 0.2);
+		animation: slide-in-right 0.3s ease-out;
+	}
+
+	/* 添加遮罩层 */
+	.teams-body.with-inspector::before {
+		content: "";
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.3);
+		z-index: 99;
+		animation: fade-in 0.3s ease-out;
+	}
+}
+
+@keyframes slide-in-right {
+	from {
+		transform: translateX(100%);
+	}
+	to {
+		transform: translateX(0);
+	}
+}
+
+@keyframes fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@media (max-width: 600px) {
+	.teams-member-enhanced {
+		flex-basis: clamp(160px, 90vw, 180px);
+		min-height: 92px;
+		padding: 10px;
+	}
+
+	.teams-member-enhanced.is-lead {
+		flex-basis: clamp(170px, 90vw, 190px);
+	}
+
+	.teams-member-enhanced img {
+		width: 42px;
+		height: 52px;
+	}
+
+	.teams-task-enhanced {
+		padding: 10px 12px;
+	}
+
+	.teams-workbench .teams-inspector {
+		width: 100vw;
+		border-radius: 0;
+	}
+}
+
+/* === 无障碍增强 === */
+@media (prefers-reduced-motion: reduce) {
+	.teams-member-enhanced,
+	.teams-task-enhanced,
+	.teams-status-enhanced,
+	.teams-edges-enhanced path {
+		animation: none !important;
+		transition: none !important;
+	}
+
+	.teams-member-progress-enhanced > span {
+		transition: none !important;
+	}
+}
+
+/* === 任务详情头部 === */
+/* === 任务详情头部 === */
+.teams-detail-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+/* 统一的关闭按钮样式 - 32×32 */
+.teams-inspector .icon-button,
+.teams-inspector-enhanced .icon-button,
+.persistent-member-detail .icon-button,
+.persistent-team-detail .icon-button {
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	flex-shrink: 0;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	cursor: pointer;
+	transition: all 0.2s ease;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.teams-inspector .icon-button:hover,
+.teams-inspector-enhanced .icon-button:hover,
+.persistent-member-detail .icon-button:hover,
+.persistent-team-detail .icon-button:hover {
+	background: var(--red-soft);
+	border-color: var(--red);
+	color: var(--red);
+	transform: scale(1.05);
+}
+
+.teams-inspector .icon-button:active,
+.teams-inspector-enhanced .icon-button:active,
+.persistent-member-detail .icon-button:active,
+.persistent-team-detail .icon-button:active {
+	transform: scale(0.95);
+}
+@media (prefers-color-scheme: dark) {
+	.teams-member-enhanced {
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+	}
+
+	.teams-member-enhanced:hover {
+		box-shadow: 0 4px 6px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
+	}
+
+	.teams-task-enhanced {
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+	}
+
+	.teams-task-enhanced:hover {
+		box-shadow: 0 4px 6px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
+	}
+}

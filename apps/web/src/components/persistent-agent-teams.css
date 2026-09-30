@@ -254,11 +254,18 @@
 	border-top: 1px solid var(--line);
 	flex-shrink: 0;
 }
+.persistent-team-detail header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 12px;
+}
 .persistent-team-detail h3 {
 	font-size: 14px;
 	display: flex;
 	gap: 8px;
 	align-items: center;
+	margin: 0;
 }
 .persistent-team-detail p,
 .persistent-team-detail pre {

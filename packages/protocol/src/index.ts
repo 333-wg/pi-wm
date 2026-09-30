@@ -1547,9 +1547,14 @@ export const SessionSummarySchema = StrictObject({
 	parentSessionId: Type.Optional(Id),
 	sourceToolCallId: Type.Optional(Id),
 });
+export const RuntimeHistoryRewindSchema = StrictObject({
+	id: Id,
+	leafId: Type.Union([Id, Type.Null()]),
+});
 export const SessionSnapshotSchema = StrictObject({
 	session: SessionSummarySchema,
 	runtimeHistoryId: Type.Optional(Id),
+	runtimeHistoryRewind: Type.Optional(RuntimeHistoryRewindSchema),
 	revision: Revision,
 	model: ModelRefSchema,
 	thinkingLevel: ThinkingLevelSchema,

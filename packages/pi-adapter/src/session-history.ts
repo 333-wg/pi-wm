@@ -3,7 +3,7 @@ import { mkdir, open, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AgentRuntime, DurableOperation } from "@wuming/orchestrator";
-import type { TranscriptItem } from "@wuming/protocol";
+import type { SessionSnapshot, TranscriptItem } from "@wuming/protocol";
 
 export type HistoryBranchInput = Parameters<NonNullable<AgentRuntime["branchSession"]>>[0];
 
@@ -98,6 +98,52 @@ export function selectHistoryBranch(
 		if (previous?.type === "custom" && previous.customType === "wuming-turn-input") end -= 1;
 	} else end += 1;
 	return branch.slice(0, end);
+}
+
+export function prepareHistoryRewind(
+	manager: SessionManager,
+	input: Parameters<NonNullable<AgentRuntime["prepareHistoryRewind"]>>[0],
+	operations: DurableOperation[]
+): { leafId: string | null } {
+	const retained = selectHistoryBranch(
+		manager,
+		{
+			...input,
+			targetSessionId: input.snapshot.session.id,
+			historyId: input.snapshot.runtimeHistoryId ?? input.snapshot.session.id,
+		},
+		operations
+	);
+	return { leafId: retained.at(-1)?.id ?? null };
+}
+
+/** Apply only a committed edit; the receipt makes reopening/retrying idempotent. */
+export function applyHistoryRewind(manager: SessionManager, rewind: SessionSnapshot["runtimeHistoryRewind"]): void {
+	if (!rewind) return;
+	const customType = "wuming-history-rewind";
+	if (
+		manager
+			.getBranch()
+			.some(
+				(entry) =>
+					entry.type === "custom_message" &&
+					entry.customType === customType &&
+					(entry.details as { rewindId?: string } | undefined)?.rewindId === rewind.id
+			)
+	)
+		return;
+	if (rewind.leafId !== null && !manager.getEntry(rewind.leafId))
+		throw new Error("The edit position is missing from the original model history; conversation was not reset");
+	if (rewind.leafId === null) manager.resetLeaf();
+	else manager.branch(rewind.leafId);
+	manager.appendCustomMessageEntry(
+		customType,
+		"A user message was edited in this conversation. Continue from the retained earlier context and the latest " +
+			"user request. Superseded messages are not part of the current context. This does not undo file edits, " +
+			"commands, or other external effects. Inspect the current state before repeating operations.",
+		false,
+		{ rewindId: rewind.id }
+	);
 }
 
 export async function persistHistoryBranch(

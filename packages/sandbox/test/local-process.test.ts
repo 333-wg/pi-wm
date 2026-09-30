@@ -8,6 +8,17 @@ import { join } from "node:path";
 afterEach(() => vi.unstubAllEnvs());
 
 describe("LocalProcessSandbox", () => {
+	it("reports the actual local command shell rather than the user's login shell", () => {
+		vi.stubEnv("SHELL", "/not-the-command-shell");
+		vi.stubEnv("ComSpec", "C:\\Windows\\System32\\cmd.exe");
+		const sandbox = new LocalProcessSandbox({ workspaceRoot: process.cwd() });
+		expect(sandbox.executionEnvironment).toEqual({
+			backend: "local",
+			platform: process.platform,
+			shell: process.platform === "win32" ? "C:\\Windows\\System32\\cmd.exe" : "/bin/sh",
+			cwd: process.cwd(),
+		});
+	});
 	it("removes host configuration and IPC without removing user tools, proxies or credentials", () => {
 		expect(
 			workspaceProcessEnvironment({

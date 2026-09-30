@@ -30,6 +30,7 @@ import designAvatar from "../assets/agent-teams/ui-designer.png";
 import qaAvatar from "../assets/agent-teams/qa-engineer.png";
 import dataAvatar from "../assets/agent-teams/data-analyst.png";
 import "./agent-teams.css";
+import "./agent-teams-enhanced.css";
 import "./persistent-agent-teams.css";
 
 type TeamCommand = Exclude<Extract<Command, { type: `team.${string}` }>, { type: "team.list" }>;
@@ -117,6 +118,24 @@ export function PersistentAgentTeams({ workspaceId, connected, available, listTe
 			clearTimeout(timer);
 		};
 	}, [available, connected, refresh]);
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				if (selected) {
+					setSelected(undefined);
+					e.preventDefault();
+				} else if (selectedMember) {
+					setSelectedMember(undefined);
+					e.preventDefault();
+				}
+			}
+		};
+
+		if (selected || selectedMember) {
+			window.addEventListener("keydown", handleKeyDown);
+			return () => window.removeEventListener("keydown", handleKeyDown);
+		}
+	}, [selected, selectedMember]);
 	useEffect(() => {
 		if (revision === undefined || !teamId) {
 			setFrame(null);
@@ -518,7 +537,18 @@ export function PersistentAgentTeams({ workspaceId, connected, available, listTe
 								)}
 								{task && (
 									<section className="persistent-team-detail">
-										<h3>{task.title}</h3>
+										<header>
+											<h3>{task.title}</h3>
+											<button
+												type="button"
+												className="icon-button"
+												title={label("关闭", "Close")}
+												aria-label={label("关闭", "Close")}
+												onClick={() => setSelected(undefined)}
+											>
+												<X size={14} />
+											</button>
+										</header>
 										<p>{task.description}</p>
 										<dl>
 											<dt>{label("负责人", "Owner")}</dt>

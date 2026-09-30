@@ -53,6 +53,13 @@ export interface ProcessSandbox {
 	readonly networkAccess?: boolean;
 	/** Executable used by run_python for this backend. */
 	readonly pythonExecutable?: string;
+	/** Actual command environment, not necessarily the Gateway host or file-tool root. */
+	readonly executionEnvironment?: {
+		backend: "local" | "docker";
+		platform: string;
+		shell: string;
+		cwd: string;
+	};
 	exec(
 		command: string,
 		options?: {

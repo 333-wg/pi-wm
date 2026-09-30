@@ -40,6 +40,7 @@ import designAvatar from "../assets/agent-teams/ui-designer.png";
 import qaAvatar from "../assets/agent-teams/qa-engineer.png";
 import dataAvatar from "../assets/agent-teams/data-analyst.png";
 import "./agent-teams.css";
+import "./agent-teams-enhanced.css";
 
 type Props = {
 	snapshot: SessionSnapshot;
@@ -216,6 +217,27 @@ export function AgentTeamsWorkbench(props: Props) {
 		const timer = setTimeout(() => setReplay(next), 1000 / speed);
 		return () => clearTimeout(timer);
 	}, [history, playing, replay, speed]);
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				if (selectedTask) {
+					setSelectedTask(undefined);
+					e.preventDefault();
+				} else if (selectedMember) {
+					setSelectedMember(undefined);
+					e.preventDefault();
+				} else if (feedOpen) {
+					setFeedOpen(false);
+					e.preventDefault();
+				}
+			}
+		};
+
+		if (selectedTask || selectedMember || feedOpen) {
+			window.addEventListener("keydown", handleKeyDown);
+			return () => window.removeEventListener("keydown", handleKeyDown);
+		}
+	}, [selectedTask, selectedMember, feedOpen]);
 	const perform = async (action: () => Promise<unknown>) => {
 		if (pending.current) return;
 		pending.current = true;
@@ -336,13 +358,14 @@ export function AgentTeamsWorkbench(props: Props) {
 								return (
 									<button
 										type="button"
-										className={`teams-member ${entry.lead ? "is-lead" : ""} ${selectedMember === entry.id ? "selected" : ""}`}
+										className={`teams-member-enhanced ${entry.lead ? "is-lead" : ""} ${selectedMember === entry.id ? "selected" : ""}`}
 										key={entry.id}
 										style={
 											{
 												"--member-accent": entry.lead ? "var(--green)" : accents[(index - 1) % accents.length],
 											} as CSSProperties
 										}
+										data-status={entry.lead ? (entry.status === "idle" ? "idle" : "working") : entry.status}
 										aria-pressed={selectedMember === entry.id}
 										onClick={() => {
 											setSelectedMember(entry.id);
@@ -351,7 +374,7 @@ export function AgentTeamsWorkbench(props: Props) {
 										}}
 									>
 										<img src={entry.lead ? leadAvatar : avatars[(index - 1) % avatars.length]} alt="" />
-										<span className="teams-member-copy">
+										<div className="teams-member-copy-enhanced">
 											<small>{entry.lead ? t("lead") : `AGENT ${String(index).padStart(2, "0")}`}</small>
 											<strong title={entry.name}>{entry.name}</strong>
 											<span>
@@ -359,8 +382,13 @@ export function AgentTeamsWorkbench(props: Props) {
 													? t(entry.status === "idle" ? "idle" : "working")
 													: t(entry.status as Parameters<TeamText>[0])}
 											</span>
-										</span>
-										<span className="teams-member-progress">
+											<div className="teams-member-stats">
+												<span className="teams-member-stat-badge">
+													{completed}/{owned.length}
+												</span>
+											</div>
+										</div>
+										<span className="teams-member-progress-enhanced">
 											<span style={{ width: `${owned.length ? (completed / owned.length) * 100 : 0}%` }} />
 										</span>
 									</button>
@@ -651,7 +679,18 @@ export function AgentTeamsWorkbench(props: Props) {
 							)}
 							{task && (
 								<>
-									<TeamStatus task={task} t={t} />
+									<div className="teams-detail-header">
+										<TeamStatus task={task} t={t} />
+										<button
+											type="button"
+											className="icon-button teams-detail-close"
+											title={t("close")}
+											aria-label={t("close")}
+											onClick={() => setSelectedTask(undefined)}
+										>
+											<X size={16} />
+										</button>
+									</div>
 									<h4>{task.title}</h4>
 									<p className="teams-muted">
 										{resultMember?.name ?? t("unassigned")}

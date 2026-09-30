@@ -1,9 +1,15 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, it } from "vitest";
-import { persistHistoryBranch, selectHistoryBranch, sessionHistoryDirectory } from "../src/session-history.js";
+import {
+	applyHistoryRewind,
+	prepareHistoryRewind,
+	persistHistoryBranch,
+	selectHistoryBranch,
+	sessionHistoryDirectory,
+} from "../src/session-history.js";
 import { recoverDurableSession } from "../src/session-recovery.js";
 import { recoveryAssistant, recoveryOperation, recoverySnapshot } from "./recovery-fixtures.js";
 
@@ -78,30 +84,85 @@ it("retains raw attachments, confirmed results and earlier compaction but exclud
 	).toHaveLength(2);
 });
 
-it("does not recover abandoned requests after an edit, including after compaction", async () => {
+it.each(["branch", "in-place"])(
+	"does not recover abandoned requests after a %s edit, including after compaction",
+	async (mode) => {
+		const { manager, snapshot, operations, second } = setup();
+		const retained = SessionManager.inMemory();
+		const content = selectHistoryBranch(
+			manager,
+			{ snapshot, targetSessionId: snapshot.session.id, historyId: "edit", beforeItemId: second.payload.userItemId },
+			operations
+		);
+		// Use the same recovery path as the runtime with a fresh active branch.
+		retained.appendMessage({ role: "user", content: "CURRENT_REQUEST", timestamp: 70 });
+		const edited = {
+			...snapshot,
+			transcript: [],
+			...(mode === "branch"
+				? { runtimeHistoryId: "edit" }
+				: {
+						runtimeHistoryRewind: { id: "edit", leafId: null },
+					}),
+		};
+		let loaded = false;
+		await recoverDurableSession(retained, {
+			snapshot: edited,
+			operations,
+			signal: new AbortController().signal,
+			loadPrompt: async () => {
+				loaded = true;
+				return { text: "SHOULD_NOT_LOAD", images: [] };
+			},
+		});
+		expect(loaded).toBe(false);
+		expect(JSON.stringify(retained.buildSessionContext().messages)).not.toContain("OBSOLETE_REQUEST");
+		expect(JSON.stringify(content)).not.toContain("OBSOLETE_SUMMARY");
+	}
+);
+
+it("locates edits without mutation and resumes in the same file after reopening", async () => {
 	const { manager, snapshot, operations, second } = setup();
-	const retained = SessionManager.inMemory();
-	const content = selectHistoryBranch(
+	const root = await mkdtemp(join(tmpdir(), "wuming-history-rewind-"));
+	roots.push(root);
+	await persistHistoryBranch(
+		root,
+		root,
 		manager,
-		{ snapshot, targetSessionId: snapshot.session.id, historyId: "edit", beforeItemId: second.payload.userItemId },
+		{ snapshot, targetSessionId: "source", historyId: "initial" },
 		operations
 	);
-	// Use the same recovery path as the runtime with a fresh active branch.
-	retained.appendMessage({ role: "user", content: "CURRENT_REQUEST", timestamp: 70 });
-	const edited = { ...snapshot, runtimeHistoryId: "edit", transcript: [] };
-	let loaded = false;
-	await recoverDurableSession(retained, {
-		snapshot: edited,
-		operations,
-		signal: new AbortController().signal,
-		loadPrompt: async () => {
-			loaded = true;
-			return { text: "SHOULD_NOT_LOAD", images: [] };
-		},
-	});
-	expect(loaded).toBe(false);
-	expect(JSON.stringify(retained.buildSessionContext().messages)).not.toContain("OBSOLETE_REQUEST");
-	expect(JSON.stringify(content)).not.toContain("OBSOLETE_SUMMARY");
+	const directory = sessionHistoryDirectory(root, "source", "initial");
+	const source = SessionManager.continueRecent(root, directory);
+	const file = source.getSessionFile()!;
+	const original = await readFile(file, "utf8");
+	const originalLeaf = source.getLeafId();
+	const position = prepareHistoryRewind(source, { snapshot, beforeItemId: second.payload.userItemId }, operations);
+	expect(source.getLeafId()).toBe(originalLeaf);
+	expect(await readFile(file, "utf8")).toBe(original);
+	const rewind = { id: "edit", ...position };
+	applyHistoryRewind(source, rewind);
+	source.appendMessage({ role: "user", content: "REVISED_REQUEST", timestamp: 70 });
+	const reopened = SessionManager.continueRecent(root, directory);
+	const leaf = reopened.getLeafId();
+	applyHistoryRewind(reopened, rewind);
+	expect(reopened.getLeafId()).toBe(leaf);
+	expect(reopened.getSessionFile()).toBe(file);
+	expect(await readdir(directory)).toHaveLength(1);
+	expect((await readFile(file, "utf8")).startsWith(original)).toBe(true);
+	const active = JSON.stringify(reopened.getBranch());
+	for (const text of ["EXPANDED_ATTACHMENT", "FULL_RAW_RESULT", "RETAINED_SUMMARY", "REVISED_REQUEST"])
+		expect(active).toContain(text);
+	for (const text of ["OBSOLETE_REQUEST", "OBSOLETE_ANSWER", "OBSOLETE_SUMMARY"]) expect(active).not.toContain(text);
+});
+
+it("keeps the existing history untouched when the edit position cannot be found", () => {
+	const { manager } = setup();
+	const original = manager.getEntries();
+	const leaf = manager.getLeafId();
+	expect(() => applyHistoryRewind(manager, { id: "edit", leafId: "missing" })).toThrow("edit position is missing");
+	expect(manager.getEntries()).toEqual(original);
+	expect(manager.getLeafId()).toBe(leaf);
 });
 
 it("refuses display-only forks and never mistakes the next request for a missing earlier input", () => {

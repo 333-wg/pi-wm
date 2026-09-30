@@ -56,6 +56,12 @@ describe("DockerProcessSandbox", () => {
 			runner,
 		});
 		expect(sandbox.networkAccess).toBe(false);
+		expect(sandbox.executionEnvironment).toEqual({
+			backend: "docker",
+			platform: "linux",
+			shell: "/bin/sh",
+			cwd: "/workspace",
+		});
 		await expect(sandbox.exec("npm test")).resolves.toMatchObject({
 			exitCode: 0,
 			stdout: "ok",

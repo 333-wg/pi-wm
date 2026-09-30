@@ -154,13 +154,17 @@ export function reduceSessionEvent(current: SessionSnapshot | undefined, event: 
 
 	switch (event.type) {
 		case "session.history.rewound": {
+			if (!event.runtimeHistoryId && !event.runtimeHistoryRewind)
+				throw new SessionInvariantError("session_mismatch", "Missing history rewind position");
 			const index = current.transcript.findIndex((item) => item.id === event.beforeItemId);
 			if (index < 0 || current.transcript[index]?.type !== "user")
 				throw new SessionInvariantError("session_mismatch", "The edited user message no longer exists");
+			const { runtimeHistoryRewind: _previousRewind, ...retained } = next;
 			return {
-				...next,
+				...retained,
 				transcript: current.transcript.slice(0, index),
-				runtimeHistoryId: event.runtimeHistoryId,
+				...(event.runtimeHistoryId === undefined ? {} : { runtimeHistoryId: event.runtimeHistoryId }),
+				...(event.runtimeHistoryRewind === undefined ? {} : { runtimeHistoryRewind: event.runtimeHistoryRewind }),
 				contextUsage: { model: current.model, tokens: null, basis: "unknown" },
 			};
 		}

@@ -453,11 +453,19 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		this.#maxProgressPreviewChars = options.maxProgressPreviewChars ?? 200_000;
 	}
 
-	async #selectedSkills(snapshot: SessionSnapshot, ids: string[]): Promise<ResolvedSkill[]> {
+	#availableTools(session: PiSessionLike): ReadonlySet<string> {
+		return new Set(
+			(session.getCapabilityManifests?.() ?? []).flatMap((manifest) =>
+				manifest.modelVisible !== false && manifest.tool?.exposure === "direct" ? [manifest.tool.name] : []
+			)
+		);
+	}
+
+	async #selectedSkills(snapshot: SessionSnapshot, ids: string[], session: PiSessionLike): Promise<ResolvedSkill[]> {
 		if (ids.length === 0) return [];
 		if (!this.#resolveSkills) throw new Error("Selected skills cannot be loaded: no skill resolver configured");
 		const requested = new Set(ids);
-		const resolved = await this.#resolveSkills(snapshot, [...requested]);
+		const resolved = await this.#resolveSkills(snapshot, [...requested], this.#availableTools(session));
 		const byId = new Map<string, ResolvedSkill>();
 		for (const skill of resolved) {
 			if (!requested.has(skill.id) || byId.has(skill.id))
@@ -481,6 +489,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		}
 		const configurationKey = [
 			snapshot.runtimeHistoryId ?? "",
+			snapshot.runtimeHistoryRewind?.id ?? "",
 			snapshot.model.provider,
 			snapshot.model.id,
 			snapshot.thinkingLevel,
@@ -538,6 +547,14 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		const entry = this.#sessions.get(sessionId);
 		this.#sessions.delete(sessionId);
 		if (entry) (await entry.pending).dispose();
+	}
+
+	async prepareHistoryRewind(input: Parameters<NonNullable<AgentRuntime["prepareHistoryRewind"]>>[0]) {
+		const session = await this.#session(input.snapshot);
+		if (session.isStreaming) throw new Error("Stop the current turn before changing conversation history");
+		if (!session.prepareHistoryRewind) throw new Error("This runtime cannot safely edit conversation history");
+		const operations = (await this.#resolveRecoveryOperations?.(input.snapshot)) ?? [];
+		return session.prepareHistoryRewind(input, operations);
 	}
 
 	async branchSession(input: Parameters<NonNullable<AgentRuntime["branchSession"]>>[0]): Promise<void> {
@@ -642,7 +659,12 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		}
 		const usage = input.session.getContextUsage?.() ?? initialUsage;
 		const additional = this.#resolveContextFragments
-			? await this.#resolveContextFragments(input.snapshot, input.operationId, input.query)
+			? await this.#resolveContextFragments(
+					input.snapshot,
+					input.operationId,
+					input.query,
+					this.#availableTools(input.session)
+				)
 			: [];
 		const skillFragments: ContextFragment[] = input.skills.map((skill) => ({
 			id: `skill:${skill.id}`,
@@ -699,7 +721,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			this.#resolveArtifact
 		);
 		const requestedSkillIds = input.operation.payload.skills ?? [];
-		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds);
+		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds, session);
 		const additionalManifests = this.#resolveCapabilityManifests
 			? await this.#resolveCapabilityManifests(input.snapshot, input.operation)
 			: [];
@@ -1215,7 +1237,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 	async resolveCapabilities(input: Parameters<NonNullable<AgentRuntime["resolveCapabilities"]>>[0]) {
 		const session = await this.#session(input.snapshot);
 		const requestedSkillIds = input.operation.payload.skills ?? [];
-		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds);
+		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds, session);
 		const additionalManifests = this.#resolveCapabilityManifests
 			? await this.#resolveCapabilityManifests(input.snapshot, input.operation)
 			: [];
@@ -1238,7 +1260,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 			this.#resolveArtifact
 		);
 		const requestedSkillIds = input.operation.payload.skills ?? [];
-		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds);
+		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds, session);
 		if (input.signal.aborted) throw input.signal.reason;
 		const context = await this.#assembleContext({
 			snapshot: input.snapshot,
@@ -1282,7 +1304,7 @@ export class PiAgentRuntime implements AgentRuntime, AsyncDisposable {
 		);
 		if (input.signal.aborted) throw input.signal.reason;
 		const requestedSkillIds = input.operation.payload.skills ?? [];
-		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds);
+		const resolvedSkills = await this.#selectedSkills(input.snapshot, requestedSkillIds, session);
 		const additionalManifests = this.#resolveCapabilityManifests
 			? await this.#resolveCapabilityManifests(input.snapshot, input.operation)
 			: [];

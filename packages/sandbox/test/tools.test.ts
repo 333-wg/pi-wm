@@ -3,7 +3,7 @@ import type { ApprovalBroker } from "../src/approval.js";
 import type { BrowserAction, BrowserAutomation } from "../src/types.js";
 import type { ArtifactRef, SessionSnapshot } from "@wuming/protocol";
 import { describe, expect, it } from "vitest";
-import { createSandboxTools } from "../src/index.js";
+import { createSandboxTools, LocalProcessSandbox, DockerProcessSandbox } from "../src/index.js";
 
 // Pi invokes a tool with five positional arguments, the last being the extension
 // context. These tools only forward it to Pi's own read/write/edit definitions
@@ -46,6 +46,61 @@ const approvals = { authorize: async () => {} } as unknown as ApprovalBroker;
 function artifact(name: string, content: Buffer): ArtifactRef {
 	return { id: `artifact-${name}`, name, mimeType: "text/plain", size: content.length };
 }
+
+describe("sandbox command environment guidance", () => {
+	const files = {
+		root: "C:/host project",
+		async readText() {
+			return { content: "", bytesRead: 0, totalBytes: 0, truncated: false };
+		},
+		async writeText() {
+			return { bytesWritten: 0 };
+		},
+		async editText() {
+			return { bytesWritten: 0, replacements: 0 };
+		},
+	};
+	it.each([
+		new LocalProcessSandbox({ workspaceRoot: files.root }),
+		new DockerProcessSandbox({ workspaceRoot: files.root, image: "node@sha256:abc" }),
+	])("injects real backend metadata only with available command tools: $executionEnvironment.backend", (process) => {
+		const tools = createSandboxTools({ snapshot, approvals, executor: { files, process } });
+		const exec = tools.find((tool) => tool.name === "exec")!;
+		expect(exec.promptGuidelines?.join("\n")).toContain(JSON.stringify(process.executionEnvironment));
+		expect(exec.promptGuidelines).toEqual(tools.find((tool) => tool.name === "run_python")?.promptGuidelines);
+		if (process.executionEnvironment.backend === "local") {
+			expect(exec.promptGuidelines?.join("\n")).toContain("working directory is not an OS sandbox");
+		} else {
+			expect(exec.promptGuidelines?.join("\n")).toContain("command paths use the container workspace");
+			expect(exec.description).toContain("Network access is disabled");
+		}
+		for (const restricted of [
+			createSandboxTools({
+				snapshot: { ...snapshot, sandboxMode: "read_only" },
+				approvals,
+				executor: { files, process },
+			}),
+			createSandboxTools({ snapshot, approvals, executor: { files } }),
+		]) {
+			expect(restricted.some((tool) => ["exec", "shell", "run_python"].includes(tool.name))).toBe(false);
+			expect(restricted.flatMap((tool) => tool.promptGuidelines ?? []).join("\n")).not.toContain(
+				"Command execution environment"
+			);
+		}
+	});
+	it("does not invent environment or network details for a custom backend", () => {
+		const process = {
+			async exec() {
+				return { exitCode: 0, stdout: "", stderr: "", truncated: false, timedOut: false };
+			},
+		};
+		const tools = createSandboxTools({ snapshot, approvals, executor: { files, process } });
+		const exec = tools.find((tool) => tool.name === "exec")!;
+		expect(exec.promptGuidelines?.join("\n")).toContain("platform, shell and working directory are not reported");
+		expect(exec.description).toContain("Process network access is unknown");
+		expect(exec.description).not.toContain("Network access is disabled");
+	});
+});
 
 describe("sandbox tool output artifacts", () => {
 	it("gates skill source before file IO, output updates or artifact creation", async () => {
@@ -863,7 +918,7 @@ describe("sandbox tool output artifacts", () => {
 		);
 	});
 
-	it("keeps browser interaction out of read-only sessions", () => {
+	it("keeps browser interaction and unavailable recovery instructions out of read-only sessions", async () => {
 		const browser: BrowserAutomation = {
 			async open() {
 				throw new Error("unused");
@@ -878,7 +933,15 @@ describe("sandbox tool output artifacts", () => {
 				throw new Error("unused");
 			},
 			async diagnostics() {
-				throw new Error("unused");
+				return {
+					url: "https://example.com",
+					console: [],
+					pageErrors: [],
+					httpErrors: [],
+					failedRequests: [
+						{ url: "https://example.com/asset.png", method: "GET", error: "net::ERR_BLOCKED_BY_CLIENT", timestamp: 1 },
+					],
+				};
 			},
 			async tabs() {
 				return [];
@@ -913,6 +976,14 @@ describe("sandbox tool output artifacts", () => {
 			"browser_tabs",
 			"browser_close",
 		]);
+		const diagnostics = tools.find((tool) => tool.name === "browser_diagnostics")!;
+		const result = await diagnostics.execute("diagnostics", {}, undefined, undefined, noContext);
+		expect(result.details).toMatchObject({ networkPolicyBlocked: true });
+		const guidance = diagnostics.description + JSON.stringify(result.content);
+		for (const unavailable of ["browser_download", "browser_search", "web_fetch", "web_search"])
+			expect(guidance).not.toContain(unavailable);
+		expect(guidance).toContain("report the limitation");
+		expect(guidance).toContain("Do not retry the same or alternate CDN with exec/curl");
 	});
 
 	it("uses the user browser for search and saves browser downloads to the workspace", async () => {

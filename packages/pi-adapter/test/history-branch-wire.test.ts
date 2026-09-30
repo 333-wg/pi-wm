@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { expect, it } from "vitest";
 import { createDefaultPiSessionFactory } from "../src/default-factory.js";
 import { PiAgentRuntime } from "../src/pi-agent-runtime.js";
+import { sessionHistoryDirectory } from "../src/session-history.js";
 
 it.each([false, true])(
 	"preserves provider history on edit, continue and fork (restart=%s)",
@@ -138,6 +139,9 @@ it.each([false, true])(
 			const firstReply = first.transcript.at(-1)!;
 			await send("OBSOLETE_TASK");
 			const source = store.loadSnapshot(id)!;
+			const historyDirectory = sessionHistoryDirectory(join(root, "sessions"), id);
+			const originalFiles = await readdir(historyDirectory);
+			const originalHistory = await readFile(join(historyDirectory, originalFiles[0]!), "utf8");
 			const obsolete = source.transcript.find(
 				(item) =>
 					item.type === "user" && item.content.some((part) => part.type === "text" && part.text === "OBSOLETE_TASK")
@@ -150,6 +154,9 @@ it.each([false, true])(
 				content: [{ type: "text", text: "REVISED_TASK" }],
 				edit: { itemId: obsolete.id, expectedRevision: source.revision },
 			});
+			expect(store.loadSnapshot(id)!.runtimeHistoryId).toBe(source.runtimeHistoryId);
+			expect(await readdir(historyDirectory)).toEqual(originalFiles);
+			expect(await readFile(join(historyDirectory, originalFiles[0]!), "utf8")).toBe(originalHistory);
 			if (restart) {
 				await runtime[Symbol.asyncDispose]();
 				store.close();
@@ -171,6 +178,25 @@ it.each([false, true])(
 			for (const text of ["OBSOLETE_TASK", "OBSOLETE_ANSWER"]) expect(editedRequest).not.toContain(text);
 			await send("CONTINUE");
 			expect(JSON.stringify(requests.at(-1)!.messages)).not.toContain("OBSOLETE_TASK");
+			const afterEdit = store.loadSnapshot(id)!;
+			const revised = afterEdit.transcript.find(
+				(item) =>
+					item.type === "user" && item.content.some((part) => part.type === "text" && part.text === "REVISED_TASK")
+			)!;
+			await send("REVISED_AGAIN", id, { itemId: revised.id, expectedRevision: afterEdit.revision });
+			await runtime[Symbol.asyncDispose]();
+			runtime = createRuntime();
+			orchestrator = new SessionOrchestrator(store, runtime);
+			await send("AFTER_RESTART");
+			const continued = JSON.stringify(requests.at(-1)!.messages);
+			for (const text of ["ORIGINAL_RELEASE_TASK", "RAW_CONFIRMED_RESULT", "REVISED_AGAIN", "AFTER_RESTART"])
+				expect(continued).toContain(text);
+			for (const text of ["OBSOLETE_TASK", "REVISED_TASK", "CONTINUE"]) expect(continued).not.toContain(text);
+			expect(store.loadSnapshot(id)!.runtimeHistoryId).toBe(source.runtimeHistoryId);
+			expect(await readdir(historyDirectory)).toEqual(originalFiles);
+			expect((await readFile(join(historyDirectory, originalFiles[0]!), "utf8")).startsWith(originalHistory)).toBe(
+				true
+			);
 			expect(writes).toBe(1);
 			const fork = await orchestrator.forkSession({
 				principalId: "test",
@@ -197,6 +223,13 @@ it.each([false, true])(
 			for (const text of ["ORIGINAL_RELEASE_TASK", "RAW_CONFIRMED_RESULT", "FORK_CONTINUE"])
 				expect(firstEdit).not.toContain(text);
 			expect(store.loadSnapshot(forkState.session.id)!.session.id).toBe(forkState.session.id);
+			expect(store.loadSnapshot(forkState.session.id)!.runtimeHistoryId).toBe(forkState.runtimeHistoryId);
+			await runtime[Symbol.asyncDispose]();
+			runtime = createRuntime();
+			orchestrator = new SessionOrchestrator(store, runtime);
+			await send("AFTER_FIRST_EDIT_RESTART", forkState.session.id);
+			expect(JSON.stringify(requests.at(-1)!.messages)).toContain("REWRITE_FIRST");
+			expect(JSON.stringify(requests.at(-1)!.messages)).not.toContain("ORIGINAL_RELEASE_TASK");
 			expect(writes).toBe(1);
 		} finally {
 			await runtime?.[Symbol.asyncDispose]();

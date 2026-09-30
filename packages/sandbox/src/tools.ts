@@ -80,7 +80,7 @@ function browserDiagnosticsAdvice(result: BrowserDiagnostics): string | undefine
 		blocked.length +
 		" browser request(s)." +
 		hostSummary +
-		" Do not retry the same or alternate CDN with exec/curl. Prefer browser_search or browser_download so the request uses the user device browser and local workspace. Use web_fetch or web_search only when the user-browser path itself is unavailable, then reload the page and recheck diagnostics."
+		" Do not retry the same or alternate CDN with exec/curl. Use only registered browser tools for further inspection. A server-side fallback is allowed only when the user-browser path itself is unavailable and the fallback is authorized. If the necessary capability is absent, report the limitation; do not invent a tool or bypass the boundary."
 	);
 }
 
@@ -654,7 +654,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 				name: "web_fetch",
 				label: "web_fetch",
 				description:
-					"Read a known public HTTP(S) page through the authorized Gateway network path. Inspect the evidence state: HTTP success may contain only navigation or a loading shell. Use browser_open for dynamic pages; never bypass an explicit network or permission block.",
+					"Read a known public HTTP(S) page through the authorized Gateway network path. Inspect the evidence state: HTTP success may contain only navigation or a loading shell. For dynamic pages use an available browser tool; if none is registered, report that limitation. Never bypass an explicit network or permission block.",
 				promptSnippet: "Read a known public URL and report whether page content was obtained",
 				parameters: Type.Object({
 					url: Type.String({ minLength: 1, maxLength: 4096 }),
@@ -795,7 +795,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 					name: "browser_search",
 					label: "browser_search",
 					description:
-						"Search the configured general search engine through a temporary user-device browser tab without changing the active page. For a named website use browser_open on its own search page instead. Results are candidate links, not verified page contents.",
+						"Search the configured general search engine through a temporary user-device browser tab without changing the active page. For a named website use its own search page when a browser navigation tool is registered. Results are candidate links, not verified page contents.",
 					promptSnippet: "Search the web through the user device browser",
 					parameters: Type.Object({
 						query: Type.String({ minLength: 1, maxLength: 2000 }),
@@ -973,7 +973,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 					"Capture the current Chromium viewport as a PNG so visual layout, clipping, overlap, responsive behavior, and canvas rendering can be verified.",
 				promptSnippet: "Capture visual evidence from the current browser page",
 				promptGuidelines: [
-					"Inspect the image content returned by browser_screenshot, not just its artifact path. Describe concrete layout observations, repair defects, and capture fresh screenshots after changes. Use desktop and mobile viewport sizes for responsive UI work. If images cannot be inspected by the current model, disclose that visual review is incomplete.",
+					"Inspect the image content returned by browser_screenshot, not just its artifact path. Describe concrete layout observations, repair defects, and capture fresh screenshots after changes. Use desktop and mobile viewport sizes when viewport controls are available; otherwise report limited coverage. If images cannot be inspected by the current model, disclose that visual review is incomplete.",
 				],
 				parameters: Type.Object({
 					full_page: Type.Optional(
@@ -1029,7 +1029,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 				name: "browser_diagnostics",
 				label: "browser_diagnostics",
 				description:
-					"Read browser console messages, uncaught page errors, failed requests, and HTTP 4xx/5xx responses collected since this page session began. The result identifies browser policy/proxy blocks so the agent can use browser_search or browser_download on the user device instead of repeatedly retrying a CDN.",
+					"Read browser console messages, uncaught page errors, failed requests, and HTTP 4xx/5xx responses collected since this page session began. The result identifies browser policy/proxy blocks. Use only registered tools for follow-up inspection instead of repeatedly retrying a CDN.",
 				promptSnippet: "Inspect browser console and classify network policy or proxy failures",
 				parameters: Type.Object({
 					clear: Type.Optional(Type.Boolean({ description: "Clear collected diagnostics after reading" })),
@@ -1488,7 +1488,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 		label: "write_file",
 		// As with read_file: Pi's guideline text names `write`, which is not our name.
 		promptGuidelines: [
-			"Use write_file only for new files or complete rewrites; use edit to change part of an existing file.",
+			"Use write_file only for new files or complete rewrites. For partial changes, prefer a registered precise-edit tool; if none is available, report the limitation rather than overwriting unrelated work.",
 		],
 		description: `${writeDefinition.description} Paths must stay inside the isolated workspace.`,
 		executionMode: "sequential",
@@ -1555,11 +1555,19 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 	tools.push(defineTool(write), defineTool(edit));
 
 	if (options.executor.process) {
-		// The container is offline unless the deployment opted in, and the model has
-		// to know which it is before it reaches for a package manager.
-		const network = options.executor.process.networkAccess
-			? "The current process environment has network access, so dependencies can be installed."
-			: "Network access is disabled.";
+		const network =
+			options.executor.process.networkAccess === undefined
+				? "Process network access is unknown; do not assume dependencies can be downloaded."
+				: options.executor.process.networkAccess
+					? "The current process environment has network access, so dependencies can be installed."
+					: "Network access is disabled.";
+		const environment = options.executor.process.executionEnvironment;
+		const processGuidelines = [
+			environment
+				? `Command execution environment (host-supplied data): ${JSON.stringify(environment)}. ${environment.backend === "local" ? "Commands run with the local OS user's permissions; the working directory is not an OS sandbox. Keep operations within the authorized project scope." : "Commands run inside Docker; command paths use the container workspace, not the host file-tool root."}`
+				: "Command backend, platform, shell and working directory are not reported. Do not infer them from the Gateway host or assume a container; inspect the execution environment before relying on platform-specific commands.",
+			network,
+		];
 		const executeCommand = async (
 			toolCallId: string,
 			params: { command?: string; cmd?: string; timeout?: number },
@@ -1593,6 +1601,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 				label: "exec",
 				description: `Run a shell command in the configured workspace environment. ${network}`,
 				promptSnippet: "Run workspace commands",
+				promptGuidelines: processGuidelines,
 				parameters: commandParameters,
 				executionMode: "sequential",
 				async execute(toolCallId, params, signal, onUpdate) {
@@ -1622,6 +1631,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 				label: "run_python",
 				description: `Run Python 3 code in the configured workspace environment. Files persist in the workspace; process state does not. ${network}`,
 				promptSnippet: "Run Python 3 code",
+				promptGuidelines: processGuidelines,
 				parameters: Type.Object({
 					code: Type.String({ minLength: 1, maxLength: 32 * 1024 }),
 					timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 1200, description: "Timeout in seconds" })),

@@ -13,6 +13,11 @@ on:
         required: false
         default: ""
         type: string
+      full_desktop_tests:
+        description: Run the full desktop regression suite in addition to required package smoke checks
+        required: true
+        default: false
+        type: boolean
   pull_request:
     paths:
       - ".github/workflows/desktop-macos.yml"
@@ -57,7 +62,9 @@ jobs:
       - run: npm ci --legacy-peer-deps --no-audit --no-fund
       - name: Build native DMG and ZIP (ad-hoc signed, not notarized)
         run: npm run desktop:dist
-      - run: npm run test:desktop
+      - name: Optional full desktop regression
+        if: github.event_name != 'workflow_dispatch' || inputs.full_desktop_tests
+        run: npm run test:desktop
       - name: Verify archive, native runtime and packaged application
         run: node scripts/verify-desktop-macos.mjs
       - uses: actions/upload-artifact@v4

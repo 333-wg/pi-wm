@@ -12,3 +12,9 @@
 - Write future GitHub release titles, release notes, download and installation instructions, verification summaries, and known limitations in Simplified Chinese by default.
 - Do not use English-only release descriptions unless the user explicitly requests English for that release.
 - Preserve product names, version numbers, filenames, commands, URLs, and technical identifiers as needed.
+
+# Release Validation
+
+- Default to focused, risk-based release checks: type checking, regression tests for changed behavior, and package/update-metadata integrity verification. Do not rerun the full test suite or lengthy installation matrices on every release.
+- Expand validation when installer, updater, dependency, or cross-platform runtime changes require it, or when focused checks reveal a regression. Never suppress a known failure to publish.
+- State which checks passed and which were intentionally omitted in the release notes. Avoid duplicating successful checks across local and CI runs.

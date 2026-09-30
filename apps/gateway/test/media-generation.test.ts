@@ -1092,6 +1092,33 @@ describe("image generation via official and relay endpoints", () => {
 });
 
 describe("durable video generation", () => {
+	it.each(["image", "video"] as const)(
+		"does not advertise unavailable retrieval after a restricted %s submission",
+		async (kind) => {
+			const f = await fixture();
+			await f.configure(kind);
+			f.fetchMock.mockResolvedValueOnce(
+				json(
+					kind === "image"
+						? { data: [{ url: "https://cdn.example/image.png" }] }
+						: { id: "video-job", status: "queued" }
+				)
+			);
+			if (kind === "image") f.download.mockRejectedValueOnce(new Error("Fixture retrieval unavailable"));
+			const name = `generate_${kind}`;
+			const tool = f
+				.service()
+				.createTools(snapshot(), f.approvals as unknown as ApprovalBroker, () => new Set([name]))
+				.find((tool) => tool.name === name)!;
+			const result = await tool.execute("generate", { prompt: "fixture" }, undefined, undefined, undefined as never);
+			const text = result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+			expect(text).not.toContain(`get_generated_${kind}`);
+			expect(text).toContain("retrieval is unavailable in this session");
+			expect(result.details).toHaveProperty("jobId");
+			expect(f.fetchMock).toHaveBeenCalledTimes(1);
+		}
+	);
+
 	it("uses Agnes 2.5 Flash automatically and preserves the submitted protocol across preference changes", async () => {
 		const f = await fixture();
 		await f.configure("video", "https://apihub.agnes-ai.com/v1", "agnes-video-2.5-flash");

@@ -19,6 +19,9 @@
 		"check": "tsc -p tsconfig.json --noEmit",
 		"test": "vitest run"
 	},
+	"devDependencies": {
+		"@wuming/sandbox": "0.1.0"
+	},
 	"dependencies": {
 		"@earendil-works/pi-ai": "0.84.3",
 		"@earendil-works/pi-coding-agent": "0.84.3",

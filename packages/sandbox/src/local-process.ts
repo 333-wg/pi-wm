@@ -70,6 +70,15 @@ export class LocalProcessSandbox implements ProcessSandbox {
 		this.pythonExecutable = options.pythonExecutable ?? (process.platform === "win32" ? "python" : "python3");
 	}
 
+	get executionEnvironment() {
+		return {
+			backend: "local" as const,
+			platform: process.platform,
+			shell: process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh",
+			cwd: this.#workspaceRoot,
+		};
+	}
+
 	async exec(
 		command: string,
 		options: { timeoutMs?: number; signal?: AbortSignal; onOutput?: (chunk: string) => void } = {}
@@ -78,7 +87,7 @@ export class LocalProcessSandbox implements ProcessSandbox {
 		if (!command.trim()) throw new SandboxError("process_failed", "Command must not be empty");
 		if (command.length > 64 * 1024) throw new SandboxError("process_failed", "Command exceeds 64 KiB limit");
 		const timeoutMs = Math.min(this.#maxTimeoutMs, Math.max(1, options.timeoutMs ?? this.#defaultTimeoutMs));
-		const shell = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
+		const { shell } = this.executionEnvironment;
 		// Match Node's cmd.exe shell quoting; C-runtime escaping changes embedded quotes.
 		const args = process.platform === "win32" ? ["/d", "/s", "/c", `"${command}"`] : ["-lc", command];
 		const child = spawn(shell, args, {
