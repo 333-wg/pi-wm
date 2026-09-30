@@ -1,5 +1,15 @@
 # Desktop Updates and GitHub Releases
 
+## 日常发版精简验证
+
+默认按改动风险选择验证，不在每次发版重复完整仓库测试、完整浏览器测试或 Windows 安装升级矩阵。
+
+- 保留 `npm run check`、受影响功能的少量定向回归、桌面构建，以及安装包摘要、blockmap、更新源与附件一致性检查。
+- 界面改动抽查对应交互与桌面、手机布局；不运行无关页面的完整 E2E。
+- 打包后的应用保留一次隔离启动检查。Mac 手动发布默认跳过完整桌面测试，但始终保留归档、签名、原生运行时和应用启动验证；需要完整桌面回归时开启工作流的 `full_desktop_tests`。
+- 修改安装器、更新器、依赖或原生运行时时，再按风险补充相关专项测试及真实安装升级验证。已发现的失败必须修复，不得以精简验证为由忽略。
+- 本地与 CI 不重复执行同一套已通过的检查；发布说明明确记录实际通过的检查，以及未执行的全量或真实升级验证。
+
 ## User Experience
 
 - Desktop only: Settings > About & updates, plus the application menu.
@@ -43,11 +53,12 @@ Use Node 22.19+ (Node 22), as required by the existing desktop runtime packaging
 
    $env:WUMING_UPDATE_REPOSITORY = 'YOUR_OWNER/YOUR_RELEASE_REPOSITORY'
 
-3. Run the checks and build:
+3. Run type checks, focused regressions for the changed behavior, and build:
 
    npm run check
-   npm run test:desktop
    npm run desktop:dist
+
+   Run `npm run test:desktop` and the relevant installation gates when desktop runtime, installer or updater changes require broader coverage.
 
 The build script validates the repository and injects both electron-builder's GitHub publish configuration and the desktop's repository metadata. It always uses publish=never, even if GH_TOKEN is present. Configured installer builds automatically run release-file verification after packaging; directory-only builds do not have release metadata to verify.
 
