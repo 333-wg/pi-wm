@@ -205,6 +205,9 @@ import {
 	writeProjectOrder,
 } from "./lib/workspaces.js";
 import { useTheme } from "./use-theme.js";
+import { useWallpaper } from "./use-wallpaper.js";
+import { wallpaperStyle } from "./lib/wallpaper.js";
+import { WallpaperLayer } from "./components/WallpaperLayer.js";
 import { applyCompletion, cycleIndex, detectTrigger, quoteMention, type Trigger } from "./lib/suggest.js";
 const TerminalWorkbench = lazy(() =>
 	import("./terminal-view.js").then((module) => ({ default: module.TerminalWorkbench }))
@@ -5055,6 +5058,7 @@ export function App() {
 	const [shortcutsOpen, setShortcutsOpen] = useState(false);
 	const [evaluationRun, setEvaluationRun] = useState<RunSummary>();
 	const theme = useTheme();
+	const wallpaper = useWallpaper();
 	const { locale, setLocale, t } = useLocale();
 	const [collapsedProjectIds, setCollapsedProjectIds] = useState(() => new Set<string>());
 	const [projectOrder, setProjectOrder] = useState(() => readProjectOrder(localStorage));
@@ -5478,7 +5482,11 @@ export function App() {
 		};
 	});
 
-	const completedProcesses = completedTurnProcesses(transcript ?? [], active || liveTrace.length > 0, client.runs);
+	const hasLiveTrace = liveTrace.length > 0;
+	const completedProcesses = useMemo(
+		() => completedTurnProcesses(transcript ?? [], active || hasLiveTrace, client.runs),
+		[transcript, active, hasLiveTrace, client.runs]
+	);
 	const processByItem = new Map(
 		completedProcesses.flatMap((process) => [...process.itemIds].map((id) => [id, process] as const))
 	);
@@ -6004,7 +6012,7 @@ export function App() {
 		toggleSidebar,
 	]);
 
-	const themeSetting = <ThemeSettings theme={theme} locale={locale} />;
+	const themeSetting = <ThemeSettings theme={theme} locale={locale} wallpaper={wallpaper} />;
 	const languageSetting = (
 		<div className="language-setting">
 			<div>
@@ -6184,8 +6192,18 @@ export function App() {
 	return (
 		<div
 			className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${resizingSidebar ? "resizing-sidebar" : ""} ${browserOpen ? "with-browser" : ""} ${!browserOpen && showRight && workbenchView === "chat" && client.snapshot ? "with-right" : ""}`}
-			style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+			style={
+				{
+					"--sidebar-width": `${sidebarWidth}px`,
+					...wallpaperStyle(wallpaper.settings, wallpaper.imageUrl),
+				} as CSSProperties
+			}
+			data-wallpaper={
+				wallpaper.settings.kind !== "none" && (wallpaper.settings.kind !== "image" || Boolean(wallpaper.imageUrl))
+			}
+			data-wallpaper-scene={workbenchView === "chat" && !client.snapshot ? "home" : "work"}
 		>
+			{wallpaper.settings.kind !== "none" && <WallpaperLayer wallpaper={wallpaper} mode={theme.resolved} />}
 			<aside className={`sidebar ${mobileNav ? "mobile-open" : ""}`}>
 				<div className="brand-row">
 					<img className="brand-mark" src={clover} alt="" width={32} height={32} />
@@ -6692,86 +6710,93 @@ export function App() {
 									</div>
 								)}
 							{processGroups.map((section) => {
-								const content = section.groups.map((group) => (
-									<ToolGroup tools={group.tools} key={`${client.snapshot?.session.id}:${group.key}`}>
-										{group.entries.map((entry) => {
-											if (entry.kind === "assistant")
+								const renderContent = () =>
+									section.groups.map((group) => (
+										<ToolGroup tools={group.tools} key={`${client.snapshot?.session.id}:${group.key}`}>
+											{group.entries.map((entry) => {
+												if (entry.kind === "assistant")
+													return (
+														<LiveAssistantView
+															item={entry.item}
+															compacting={compactionStatus === "running"}
+															key={`assistant:${entry.item.id}`}
+														/>
+													);
+												if (entry.kind === "tool")
+													return (
+														<LiveToolView
+															tool={entry.item}
+															onOpenSubagent={
+																entry.item.toolName === "subagent"
+																	? openToolSubagent(entry.item.toolCallId, entry.item.input)
+																	: undefined
+															}
+															onDownload={client.downloadArtifact}
+															onLoadArtifact={client.loadArtifact}
+															awaitingApproval={
+																client.snapshot?.pendingApprovals.some(
+																	(approval) => approval.toolCallId === entry.item.toolCallId
+																) ?? false
+															}
+															key={`tool:${entry.item.toolCallId}`}
+														/>
+													);
+												const item = entry.item;
+												const failureRun =
+													item.type === "assistant" && item.error
+														? client.runs.find((run) => item.id === `${run.id}:error`)
+														: undefined;
 												return (
-													<LiveAssistantView
-														item={entry.item}
-														compacting={compactionStatus === "running"}
-														key={`assistant:${entry.item.id}`}
-													/>
-												);
-											if (entry.kind === "tool")
-												return (
-													<LiveToolView
-														tool={entry.item}
+													<TranscriptItemView
+														item={item}
 														onOpenSubagent={
-															entry.item.toolName === "subagent"
-																? openToolSubagent(entry.item.toolCallId, entry.item.input)
+															item.type === "tool" && item.toolName === "subagent"
+																? openToolSubagent(item.toolCallId, item.input)
 																: undefined
 														}
+														key={item.id}
+														transcript={client.snapshot?.transcript ?? []}
+														turnActive={reasoningPhase}
+														now={Date.now()}
 														onDownload={client.downloadArtifact}
 														onLoadArtifact={client.loadArtifact}
-														awaitingApproval={
-															client.snapshot?.pendingApprovals.some(
-																(approval) => approval.toolCallId === entry.item.toolCallId
-															) ?? false
+														renderedToolCalls={renderedToolCalls}
+														actions={item.type === "tool" ? undefined : messageActions(item)}
+														failureActions={
+															item.type === "assistant" && item.error
+																? {
+																		run: failureRun,
+																		resumeDesktop: desktopContinuation(client.snapshot?.transcript ?? [], item.id),
+																		busy: messageBusyId === item.id,
+																		disabled: branchDisabled,
+																		disabledTitle: branchTitle,
+																		onRetry: () => retryFailedTurn(item),
+																		onOpenSettings: () => openSettings("models"),
+																		onOpenUsage: () => openSettings("usage"),
+																	}
+																: undefined
 														}
-														key={`tool:${entry.item.toolCallId}`}
 													/>
 												);
-											const item = entry.item;
-											const failureRun =
-												item.type === "assistant" && item.error
-													? client.runs.find((run) => item.id === `${run.id}:error`)
-													: undefined;
-											return (
-												<TranscriptItemView
-													item={item}
-													onOpenSubagent={
-														item.type === "tool" && item.toolName === "subagent"
-															? openToolSubagent(item.toolCallId, item.input)
-															: undefined
-													}
-													key={item.id}
-													transcript={client.snapshot?.transcript ?? []}
-													turnActive={reasoningPhase}
-													now={Date.now()}
-													onDownload={client.downloadArtifact}
-													onLoadArtifact={client.loadArtifact}
-													renderedToolCalls={renderedToolCalls}
-													actions={item.type === "tool" ? undefined : messageActions(item)}
-													failureActions={
-														item.type === "assistant" && item.error
-															? {
-																	run: failureRun,
-																	resumeDesktop: desktopContinuation(client.snapshot?.transcript ?? [], item.id),
-																	busy: messageBusyId === item.id,
-																	disabled: branchDisabled,
-																	disabledTitle: branchTitle,
-																	onRetry: () => retryFailedTurn(item),
-																	onOpenSettings: () => openSettings("models"),
-																	onOpenUsage: () => openSettings("usage"),
-																}
-															: undefined
-													}
-												/>
-											);
-										})}
-									</ToolGroup>
-								));
+											})}
+										</ToolGroup>
+									));
 								return section.process ? (
 									<TurnProcess
 										key={`${client.snapshot?.session.id}:${section.key}`}
 										durationMs={section.process.durationMs}
-										reveal={!!searchTarget && section.process.itemIds.has(searchTarget.messageId)}
+										reveal={
+											searchTarget &&
+											searchTarget.sessionId === client.snapshot?.session.id &&
+											section.process.itemIds.has(searchTarget.messageId)
+												? searchTarget
+												: undefined
+										}
 									>
-										{content}
+										{renderContent}
 									</TurnProcess>
 								) : (
-									<Fragment key={section.key}>{content}</Fragment>
+									<Fragment key={section.key}>{renderContent()}</Fragment>
 								);
 							})}
 							{compactionStatus && <CompactionActivity status={compactionStatus} />}

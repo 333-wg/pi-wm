@@ -35,7 +35,7 @@ export function withAlpha(color: string, alpha: number): string | undefined {
 /** Shaped like `getComputedStyle(element).getPropertyValue`. */
 export type TokenReader = (name: string) => string;
 
-export function terminalTheme(read: TokenReader): ITheme {
+export function terminalTheme(read: TokenReader, wallpaper = false): ITheme {
 	// A missing token leaves its slot out so xterm keeps its own default. Naming a
 	// fallback colour here would put back the duplication this module removes.
 	const token = (name: string): string | undefined => read(name).trim() || undefined;
@@ -45,7 +45,8 @@ export function terminalTheme(read: TokenReader): ITheme {
 	const selection = accent === undefined ? undefined : withAlpha(accent, SELECTION_ALPHA);
 	// Assigned one by one rather than spread so a misspelled key is a type error.
 	const theme: ITheme = {};
-	if (background !== undefined) theme.background = background;
+	if (wallpaper) theme.background = "#00000000";
+	else if (background !== undefined) theme.background = background;
 	if (foreground !== undefined) theme.foreground = foreground;
 	if (accent !== undefined) theme.cursor = accent;
 	if (selection !== undefined) theme.selectionBackground = selection;

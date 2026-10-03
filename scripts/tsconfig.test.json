@@ -8,5 +8,5 @@
 		"noEmit": true,
 		"types": ["node"]
 	},
-	"include": ["lib/**/*.test.ts", "verify-pi-files.ts", "verify-pi-skills.ts"]
+	"include": ["lib/**/*.test.ts", "verify-pi-files.ts", "verify-pi-skills.ts", "verify-task-benchmark.ts"]
 }

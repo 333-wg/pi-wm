@@ -190,7 +190,7 @@ export function buildTeamFrame(
 	return { sessionId: parentId, members: [...members.values()], tasks, messages };
 }
 
-export const TEAM_LAYOUT = { label: 164, pitch: 264, row: 120, top: 42, width: 224, height: 92 };
+export const TEAM_LAYOUT = { label: 164, pitch: 264, row: 152, top: 42, width: 224, height: 128 };
 
 /** Dependency depth determines columns; separate rows keep arbitrary fan-in readable. */
 export function layoutTeamTasks(tasks: TeamTask[]) {

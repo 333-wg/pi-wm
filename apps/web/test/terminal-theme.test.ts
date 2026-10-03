@@ -17,6 +17,10 @@ const RESOLVED = {
 };
 
 describe("terminalTheme", () => {
+	it("uses a transparent canvas only in wallpaper mode, retaining text and selection", () => {
+		expect(terminalTheme(reader(TOKENS), true)).toStrictEqual({ ...RESOLVED, background: "#00000000" });
+		expect(terminalTheme(reader(TOKENS), false)).toStrictEqual(RESOLVED);
+	});
 	it("hands xterm what the token block says", () => {
 		expect(terminalTheme(reader(TOKENS))).toStrictEqual(RESOLVED);
 	});

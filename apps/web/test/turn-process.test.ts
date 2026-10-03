@@ -93,8 +93,25 @@ describe("completed turn processes", () => {
 		expect(html).toContain("用时 6 分 14 秒");
 		expect(html).toContain('aria-expanded="false"');
 		expect(html).toContain('hidden=""');
-		const revealed = renderLocalized(createElement(TurnProcess, { reveal: true, children: "progress" }));
+		expect(html).not.toContain(">progress<");
+		const revealed = renderLocalized(
+			createElement(TurnProcess, { reveal: { messageId: "progress" }, children: "progress" })
+		);
 		expect(revealed).toContain('aria-expanded="true"');
 		expect(revealed).not.toContain('hidden=""');
+		expect(revealed).toContain(">progress<");
+	});
+	it("does not construct hidden details until the process is revealed", () => {
+		let renders = 0;
+		const children = () => {
+			renders++;
+			return "deferred evidence";
+		};
+		expect(renderLocalized(createElement(TurnProcess, { children }))).not.toContain("deferred evidence");
+		expect(renders).toBe(0);
+		expect(renderLocalized(createElement(TurnProcess, { children, reveal: { messageId: "progress" } }))).toContain(
+			"deferred evidence"
+		);
+		expect(renders).toBe(1);
 	});
 });

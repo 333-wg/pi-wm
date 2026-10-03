@@ -377,6 +377,14 @@ class DemoRuntime implements AgentRuntime {
 		}) => Promise<void>
 	) {}
 
+	async prepareHistoryRewind(input: Parameters<NonNullable<AgentRuntime["prepareHistoryRewind"]>>[0]) {
+		if (this.#active.has(input.snapshot.session.id)) throw new Error("Demo session is still active");
+		if (!input.snapshot.transcript.some((item) => item.id === input.beforeItemId && item.type === "user"))
+			throw new Error("The edited demo message no longer exists");
+		// Demo has no separate model history; the durable snapshot owns the rewind.
+		return { leafId: null };
+	}
+
 	async executeTurn(input: Parameters<AgentRuntime["executeTurn"]>[0]) {
 		const text = input.operation.payload.content
 			.filter(

@@ -1,0 +1,639 @@
+.wallpaper-settings {
+	margin: 18px 0 0;
+	padding: 16px 0 0;
+	border: 0;
+	border-top: 1px solid var(--line);
+	min-width: 0;
+}
+.wallpaper-settings legend {
+	font-size: 13px;
+	font-weight: 600;
+	padding: 0 6px 0 0;
+}
+.wallpaper-help {
+	font-size: 12px;
+	color: var(--muted);
+	line-height: 1.6;
+	margin: 4px 0 12px;
+}
+.wallpaper-options {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+	margin-bottom: 12px;
+}
+.wallpaper-options button {
+	min-width: 0;
+	padding: 7px;
+	display: grid;
+	gap: 7px;
+	border-radius: 8px;
+	border: 1px solid var(--line-strong);
+	background: var(--surface);
+	color: var(--text);
+	font-size: 12px;
+	cursor: pointer;
+}
+.wallpaper-options button[aria-pressed="true"] {
+	border-color: var(--green);
+	box-shadow: inset 0 0 0 1px var(--green);
+}
+.wallpaper-options button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.wallpaper-option-art {
+	height: 40px;
+	border-radius: 4px;
+	background-color: var(--bg);
+	background-image: var(--wallpaper-art);
+	background-size: cover;
+	background-position: center;
+}
+.wallpaper-library {
+	margin-block: 20px 12px;
+}
+.wallpaper-library-heading {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	font-size: 13px;
+	margin-bottom: 6px;
+}
+.wallpaper-library-heading > span {
+	color: var(--muted);
+	font-size: 12px;
+}
+.wallpaper-library-empty {
+	padding: 20px 12px;
+	border: 1px dashed var(--line-strong);
+	border-radius: 8px;
+	color: var(--muted);
+	font-size: 12px;
+	text-align: center;
+}
+.wallpaper-library-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 10px;
+}
+.wallpaper-library-card {
+	min-width: 0;
+	align-self: start;
+	border: 1px solid var(--line-strong);
+	border-radius: 9px;
+	overflow: hidden;
+	background: var(--surface);
+}
+.wallpaper-library-card[data-active="true"] {
+	border-color: var(--green);
+	box-shadow: 0 0 0 1px var(--green);
+}
+.wallpaper-library-select {
+	position: relative;
+	display: grid;
+	width: 100%;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+}
+.wallpaper-library-select img {
+	display: block;
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	object-fit: cover;
+	background: var(--surface-sunken);
+}
+.wallpaper-library-name {
+	display: block;
+	min-width: 0;
+	padding: 8px;
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wallpaper-library-badge {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	padding: 3px 5px;
+	border-radius: 4px;
+	background: var(--solid);
+	color: var(--solid-text);
+	font-size: 10px;
+}
+.wallpaper-library-delete {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 5px;
+	width: 100%;
+	min-height: 32px;
+	border: 0;
+	border-top: 1px solid var(--line-soft);
+	color: var(--muted);
+	background: transparent;
+	cursor: pointer;
+	font-size: 12px;
+}
+.wallpaper-library-delete:hover {
+	color: var(--red);
+	background: var(--red-soft);
+}
+.wallpaper-delete-confirm {
+	border-top: 1px solid var(--line-soft);
+	padding: 8px;
+	font-size: 12px;
+}
+.wallpaper-delete-confirm p {
+	margin: 0 0 8px;
+	line-height: 1.5;
+}
+.wallpaper-delete-confirm > div {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.wallpaper-delete-confirm button {
+	flex: 1;
+	padding: 6px;
+	border: 1px solid var(--line-strong);
+	border-radius: 4px;
+	color: var(--text);
+	background: var(--surface);
+	cursor: pointer;
+	font-size: 12px;
+	white-space: nowrap;
+}
+.wallpaper-delete-confirm .wallpaper-delete-danger {
+	color: var(--red);
+	border-color: var(--red-border);
+	background: var(--red-soft);
+}
+.wallpaper-library button:disabled {
+	cursor: wait;
+	opacity: 0.6;
+}
+@media (max-width: 720px) {
+	.wallpaper-library-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+.wallpaper-upload {
+	margin-block: 14px 18px;
+	padding: 14px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--surface-muted);
+	color: var(--text);
+}
+.wallpaper-upload-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.wallpaper-upload-icon {
+	display: grid;
+	place-items: center;
+	width: 40px;
+	height: 40px;
+	flex-shrink: 0;
+	border: 1px solid var(--green-border);
+	border-radius: 10px;
+	background: var(--green-soft);
+	color: var(--green);
+}
+.wallpaper-upload-copy {
+	display: grid;
+	gap: 5px;
+	flex: 1;
+	min-width: 150px;
+}
+.wallpaper-upload-copy strong {
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1.4;
+}
+.wallpaper-upload-copy > span {
+	font-size: 11px;
+	color: var(--muted);
+	line-height: 1.5;
+}
+.wallpaper-upload-button {
+	display: inline-flex;
+	justify-content: center;
+	align-items: center;
+	gap: 6px;
+	min-height: 36px;
+	padding: 8px 12px;
+	border: 1px solid var(--green-border);
+	border-radius: 7px;
+	background: var(--green-soft);
+	color: var(--green);
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.wallpaper-upload-button:hover:not(:disabled) {
+	border-color: var(--green);
+	background: var(--surface-hover);
+}
+.wallpaper-upload-button:disabled {
+	opacity: 0.6;
+	cursor: wait;
+}
+.wallpaper-upload-note {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	margin: 11px 0 0;
+	font-size: 11px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+.wallpaper-upload-note > svg {
+	flex-shrink: 0;
+	margin-top: 2px;
+}
+.wallpaper-upload input[hidden] {
+	display: none;
+}
+@media (max-width: 480px) {
+	.wallpaper-upload-button {
+		width: 100%;
+	}
+}
+.wallpaper-reset {
+	padding: 7px 10px;
+	border: 1px solid var(--line-strong);
+	border-radius: 6px;
+	background: var(--surface);
+	color: var(--text);
+	cursor: pointer;
+}
+.wallpaper-preview {
+	height: 120px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 18px;
+	display: flex;
+	align-items: center;
+	background-size: cover;
+	background-position: var(--wallpaper-position);
+}
+.wallpaper-preview {
+	position: relative;
+	isolation: isolate;
+	overflow: hidden;
+	background-image: none;
+}
+.wallpaper-preview-art {
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	background-image:
+		linear-gradient(
+			color-mix(in srgb, var(--bg) var(--wallpaper-shade), transparent),
+			color-mix(in srgb, var(--bg) var(--wallpaper-shade), transparent)
+		),
+		var(--wallpaper-art);
+	background-size: cover;
+	background-position: var(--wallpaper-position);
+	filter: blur(var(--wallpaper-blur));
+}
+.wallpaper-preview-surface {
+	display: grid;
+	gap: 8px;
+	padding: 12px;
+	border-radius: 8px;
+	font-size: 12px;
+	background: color-mix(
+		in srgb,
+		var(--wallpaper-solid-panel, var(--panel)) calc(var(--wallpaper-panel) * 0.55),
+		transparent
+	);
+}
+.wallpaper-controls {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+	margin: 14px 0;
+}
+.wallpaper-controls label {
+	min-width: 0;
+	font-size: 12px;
+}
+.wallpaper-controls label > span {
+	display: flex;
+	justify-content: space-between;
+	gap: 6px;
+}
+.wallpaper-controls output {
+	color: var(--muted);
+}
+.wallpaper-strength {
+	display: grid;
+	gap: 8px;
+	margin: 14px 0;
+	font-size: 12px;
+}
+.wallpaper-strength > span {
+	display: flex;
+	justify-content: space-between;
+}
+.wallpaper-strength input {
+	width: 100%;
+	accent-color: var(--green);
+}
+.wallpaper-advanced summary {
+	cursor: pointer;
+	font-size: 12px;
+	color: var(--text-soft);
+	padding-block: 8px;
+}
+.wallpaper-controls input {
+	width: 100%;
+	accent-color: var(--green);
+}
+.settings-dialog .wallpaper-motion {
+	display: flex;
+	flex-direction: row;
+	align-items: flex-start;
+	gap: 6px;
+	font-size: 12px;
+	line-height: 1.6;
+	margin: 12px 0;
+}
+.wallpaper-motion input {
+	flex-shrink: 0;
+	accent-color: var(--green);
+}
+.wallpaper-error {
+	color: var(--red);
+	font-size: 12px;
+	line-height: 1.6;
+}
+.wallpaper-reset {
+	margin-top: 10px;
+	font-size: 12px;
+}
+.wallpaper-settings :is(button, input):focus-visible {
+	outline: 2px solid var(--green);
+	outline-offset: 2px;
+}
+/* One window-wide image; palette colours remain intact when wallpaper is off.
+   Capture the original colours on html, then remap surface tokens on body so
+   nested panels and portals share the material without recursive variables. */
+html[data-wallpaper="true"] {
+	--wallpaper-base: var(--bg);
+	--wallpaper-solid-panel: var(--panel);
+	--wallpaper-solid-surface: var(--surface);
+	--wallpaper-solid-muted: var(--surface-muted);
+	--wallpaper-solid-sunken: var(--surface-sunken);
+	--wallpaper-solid-hover: var(--surface-hover);
+	--wallpaper-solid-code: var(--surface-code);
+	--wallpaper-solid-sidebar: var(--sidebar);
+	--wallpaper-glass: color-mix(in srgb, var(--wallpaper-solid-panel) calc(var(--wallpaper-panel) * 0.55), transparent);
+	--wallpaper-reading: color-mix(
+		in srgb,
+		var(--wallpaper-solid-panel) calc(var(--wallpaper-panel) * 0.95),
+		transparent
+	);
+}
+html[data-wallpaper="true"] body {
+	isolation: isolate;
+	--panel: var(--wallpaper-glass);
+	--surface: color-mix(in srgb, var(--wallpaper-solid-surface) calc(var(--wallpaper-panel) * 0.55), transparent);
+	--surface-muted: color-mix(in srgb, var(--wallpaper-solid-muted) 20%, transparent);
+	--surface-sunken: color-mix(in srgb, var(--wallpaper-solid-sunken) 24%, transparent);
+	--surface-hover: color-mix(in srgb, var(--wallpaper-solid-hover) 55%, transparent);
+	--surface-code: color-mix(in srgb, var(--wallpaper-solid-code) 90%, transparent);
+	--sidebar: color-mix(in srgb, var(--wallpaper-solid-sidebar) 16%, transparent);
+	--sidebar-wash: transparent;
+	--head-wash: transparent;
+	--composer-fade: transparent;
+}
+html[data-wallpaper="true"] .app-shell {
+	background: transparent;
+}
+html[data-wallpaper="true"] .desktop-titlebar {
+	background: transparent;
+	border-color: transparent;
+}
+.wallpaper-layer {
+	position: fixed;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	overflow: hidden;
+}
+.wallpaper-art,
+.wallpaper-veil {
+	position: absolute;
+	inset: 0;
+}
+.wallpaper-art {
+	filter: blur(var(--wallpaper-blur));
+	background-image: var(--wallpaper-art);
+	background-position: var(--wallpaper-position);
+	background-size: cover;
+}
+.wallpaper-art[data-moving="true"] {
+	animation: wallpaper-drift 24s ease-in-out infinite alternate;
+}
+.wallpaper-veil {
+	/* Strength is the inverse of this veil: 100% must leave the image unobscured.
+	   Readability belongs to local message/code/control surfaces, not a fixed global dimmer. */
+	background: color-mix(in srgb, var(--wallpaper-base) var(--wallpaper-shade), transparent);
+}
+.app-shell[data-wallpaper="true"] > :is(.sidebar, .workspace-main),
+.app-shell[data-wallpaper="true"]
+	:is(
+		.topbar,
+		.code-workbench,
+		.tools-workbench,
+		.teams-workbench,
+		.subagents-workbench,
+		.skills-workbench,
+		.mcp-workbench,
+		.scheduled-tasks,
+		.workbench-content,
+		.settings-navigation
+	) {
+	background: transparent;
+}
+.app-shell[data-wallpaper="true"] > .sidebar {
+	border-right-color: color-mix(in srgb, var(--line) 40%, transparent);
+}
+.app-shell[data-wallpaper="true"] .topbar {
+	border-bottom-color: transparent;
+}
+.app-shell[data-wallpaper="true"]
+	:is(
+		.workbench-tabs,
+		.sidebar-new-chat,
+		.session-search input,
+		.composer,
+		.right-rail,
+		.workbench-sidebar,
+		.skills-sidebar,
+		.subagents-sidebar
+	) {
+	background: var(--wallpaper-glass);
+	backdrop-filter: blur(12px) saturate(110%);
+}
+.app-shell[data-wallpaper="true"] .composer {
+	border-radius: 16px;
+	border-color: color-mix(in srgb, var(--line-strong) 65%, transparent);
+	box-shadow: var(--shadow-md);
+}
+.app-shell[data-wallpaper="true"] :is(.composer textarea, .composer-project-context, .composer-actions) {
+	background: transparent;
+}
+.app-shell[data-wallpaper="true"] .workbench-tabs {
+	border-radius: 10px;
+	border-color: color-mix(in srgb, var(--line) 45%, transparent);
+}
+/* Dense content owns a readable local surface; the full pane stays transparent. */
+.app-shell[data-wallpaper="true"] .message-row:not(.user) {
+	background: var(--wallpaper-reading);
+	border: 1px solid var(--line-soft);
+	border-radius: 12px;
+	padding: 16px;
+	margin-block: 8px;
+}
+html[data-wallpaper="true"] :is(.settings-dialog, .command-palette, .git-dialog, .teams-modal, .scheduled-modal) {
+	background: color-mix(in srgb, var(--wallpaper-solid-panel) 88%, transparent);
+	backdrop-filter: blur(24px) saturate(110%);
+}
+html[data-wallpaper="true"] :is(.settings-navigation, .settings-shell-header) {
+	background: transparent;
+}
+html[data-wallpaper="true"]
+	:is(.suggest-menu, .model-menu, .thinking-menu, .permission-menu, .project-menu, .session-menu) {
+	background: color-mix(in srgb, var(--wallpaper-solid-panel) 88%, transparent);
+	backdrop-filter: blur(20px);
+}
+.app-shell[data-wallpaper="true"] .terminal-workbench {
+	--term-text: var(--text);
+	--term-muted: var(--muted);
+	--term-ready: var(--green);
+	--term-head: var(--wallpaper-glass);
+	--term-line: var(--line);
+	background: var(--wallpaper-reading);
+}
+/* Teams and Subtasks share the window wallpaper. Only individual content
+   cards get a reading surface; never blur or paint the full board. */
+.app-shell[data-wallpaper="true"] .teams-workbench {
+	--team-card: var(--wallpaper-reading);
+}
+.app-shell[data-wallpaper="true"]
+	:is(
+		.teams-heading,
+		.persistent-team-objective,
+		.persistent-team-members,
+		.persistent-team-history,
+		.persistent-team-board,
+		.persistent-team-mailbox,
+		.teams-main,
+		.teams-inspector,
+		.teams-formation,
+		.teams-timeline,
+		.teams-toolbar,
+		.teams-filters
+	) {
+	background: transparent;
+	backdrop-filter: none;
+}
+.app-shell[data-wallpaper="true"] .teams-canvas-scroll {
+	background-color: transparent;
+	background-image: radial-gradient(circle, var(--line) 0.7px, transparent 0.7px);
+	background-size: 20px 20px;
+}
+.app-shell[data-wallpaper="true"]
+	:is(
+		.persistent-team-member,
+		.persistent-team-messages article,
+		.teams-task-enhanced,
+		.teams-member,
+		.teams-member-enhanced,
+		.teams-feed li,
+		.persistent-team-detail,
+		.persistent-member-detail,
+		.teams-inspector-scroll
+	) {
+	--surface: var(--team-card);
+	background: var(--team-card);
+}
+.app-shell[data-wallpaper="true"] :is(.teams-lane-owner, .teams-lane-title, .teams-stage) {
+	text-shadow: 0 1px 3px var(--wallpaper-base);
+}
+/* xterm's viewport has its own opaque fallback below the themed renderer. */
+.app-shell[data-wallpaper="true"] .terminal-surface .xterm-viewport {
+	background: transparent;
+}
+.app-shell[data-wallpaper="true"] :is(.terminal-heading, .terminal-location) {
+	background: transparent;
+}
+.app-shell[data-wallpaper="true"] .composer-wrap {
+	background: transparent;
+}
+.app-shell[data-wallpaper="true"] .transcript:has(> .empty-state:only-child) {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.app-shell[data-wallpaper="true"] .empty-state {
+	min-height: 0;
+	width: 100%;
+	max-width: 540px;
+	padding: 32px 24px;
+	border: 0;
+	border-radius: 0;
+	text-align: center;
+	background: transparent;
+	box-shadow: none;
+	text-shadow: 0 1px 12px var(--wallpaper-base);
+}
+.app-shell[data-wallpaper="true"] .empty-state h2 {
+	font-size: clamp(22px, 2.2vw, 30px);
+	letter-spacing: -0.025em;
+}
+.app-shell[data-wallpaper="true"] .empty-state p {
+	color: var(--text-soft);
+}
+.app-shell[data-wallpaper="true"] .empty-icon {
+	background: var(--wallpaper-glass);
+	border-radius: 14px;
+}
+@keyframes wallpaper-drift {
+	from {
+		transform: scale(1.08) translate(-1%, -1%);
+	}
+	to {
+		transform: scale(1.18) translate(1%, 1%);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.wallpaper-art[data-moving="true"] {
+		animation: none;
+	}
+}
+@media (max-width: 720px) {
+	.app-shell[data-wallpaper="true"] > .sidebar.mobile-open {
+		background: color-mix(in srgb, var(--wallpaper-solid-panel) 65%, transparent);
+		backdrop-filter: blur(24px);
+	}
+	.wallpaper-controls {
+		grid-template-columns: 1fr;
+	}
+}

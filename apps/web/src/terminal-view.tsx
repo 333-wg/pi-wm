@@ -81,9 +81,14 @@ export function TerminalView({
 	useEffect(() => {
 		const container = containerRef.current;
 		if (!container) return;
-		const readTheme = () => terminalTheme((name) => getComputedStyle(container).getPropertyValue(name));
+		const readTheme = () =>
+			terminalTheme(
+				(name) => getComputedStyle(container).getPropertyValue(name),
+				document.documentElement.dataset.wallpaper === "true"
+			);
 		const term = new Terminal({
 			convertEol: true,
+			allowTransparency: true,
 			cursorBlink: true,
 			disableStdin: true,
 			fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
@@ -124,7 +129,7 @@ export function TerminalView({
 		const themeObserver = new MutationObserver(() => {
 			term.options.theme = readTheme();
 		});
-		themeObserver.observe(document.documentElement, { attributeFilter: ["data-theme"] });
+		themeObserver.observe(document.documentElement, { attributeFilter: ["data-theme", "data-wallpaper"] });
 		const input = term.onData((data) => session.input(data));
 		session.connect();
 		return () => {

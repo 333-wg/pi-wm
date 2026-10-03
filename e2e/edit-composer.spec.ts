@@ -2,10 +2,10 @@ import { expect, test } from "@playwright/test";
 import { openApp, startWebApp, stopWebApp } from "./harness.js";
 
 let webUrl: string;
-test.beforeAll(async () => {
+test.beforeEach(async () => {
 	webUrl = await startWebApp();
 });
-test.afterAll(async () => {
+test.afterEach(async () => {
 	await stopWebApp();
 });
 
@@ -92,5 +92,12 @@ for (const width of [1365, 390]) {
 		await expect(page.locator(".message-row.user")).toHaveCount(1);
 		await expect(page.locator(".message-row.user").first()).toContainText("edited first prompt");
 		await expect(firstEdit).toBeEnabled();
+		const sessionTitle = await page.locator(".session-entry.selected .session-open").innerText();
+		await page.reload();
+		if (width < 720) await page.getByRole("button", { name: "打开导航", exact: true }).click();
+		await page.locator(".session-open").filter({ hasText: sessionTitle }).click();
+		await expect(page.locator(".message-row.user")).toHaveCount(1);
+		await expect(page.locator(".message-row.user").first()).toContainText("edited first prompt");
+		await expect(page.locator(".transcript")).not.toContainText("edited image prompt");
 	});
 }

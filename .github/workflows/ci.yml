@@ -6,8 +6,7 @@
 # Deliberately not here:
 #   * `verify:pi-*` — those talk to real model providers with real keys and bill
 #     per run, so they stay manual.
-#   * the Playwright suite (`npm run test:e2e`) — it needs browsers and a running
-#     gateway + web stack; adding it is a separate step with its own caching.
+#   * the full Playwright suite; a bounded, no-provider core gate runs below.
 name: check
 
 on:
@@ -47,3 +46,18 @@ jobs:
 
       # Every workspace's vitest suite.
       - run: npm test
+
+      # Isolated demo/loopback providers only; never load saved model credentials.
+      - name: Core browser workflows
+        run: npm run test:e2e:core
+
+      - name: Retain browser evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-browser-evidence
+          path: |
+            playwright-report/core/
+            test-results/core/
+          if-no-files-found: ignore
+          retention-days: 14

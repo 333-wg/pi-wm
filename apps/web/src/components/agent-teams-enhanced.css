@@ -5,13 +5,6 @@
 
 /* === 增强的配色系统 === */
 :root {
-	/* 状态色彩 */
-	--team-waiting: #94a3b8;
-	--team-running: #3b82f6;
-	--team-completed: #10b981;
-	--team-attention: #f59e0b;
-	--team-error: #ef4444;
-
 	/* 渐变色 */
 	--gradient-success: linear-gradient(135deg, #10b981 0%, #059669 100%);
 	--gradient-running: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
@@ -251,12 +244,13 @@
 }
 
 /* === 增强的任务卡片设计 === */
-.teams-task-enhanced {
+.teams-workbench .teams-task-enhanced {
 	position: absolute;
-	display: flex;
-	flex-direction: column;
+	display: grid;
+	grid-template-rows: 32px 30px 20px;
+	align-content: space-between;
 	align-items: stretch;
-	justify-content: space-between;
+	justify-content: stretch;
 	gap: 6px;
 	padding: 12px 14px;
 	text-align: left;
@@ -264,12 +258,13 @@
 	border-radius: 6px;
 	box-shadow: var(--shadow-card);
 	background: var(--surface);
-	transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+	/* Theme colours and dependency coordinates must update together. */
+	transition: box-shadow 0.2s ease, transform 0.2s ease;
 	animation: card-appear 0.3s ease-out;
 	cursor: pointer;
 }
 
-.teams-task-enhanced:hover {
+.teams-workbench .teams-task-enhanced:hover {
 	box-shadow: var(--shadow-card-hover);
 	transform: translateY(-1px);
 }
@@ -281,7 +276,7 @@
 }
 
 /* 任务状态颜色 */
-.teams-task-enhanced.state-running {
+.teams-workbench .teams-task-enhanced.state-running {
 	border-left-color: var(--team-running);
 	background: linear-gradient(
 		to right,
@@ -290,7 +285,7 @@
 	);
 }
 
-.teams-task-enhanced.state-attention {
+.teams-workbench .teams-task-enhanced.state-attention {
 	border-left-color: var(--team-attention);
 	background: linear-gradient(
 		to right,
@@ -299,7 +294,7 @@
 	);
 }
 
-.teams-task-enhanced.state-completed {
+.teams-workbench .teams-task-enhanced.state-completed {
 	border-left-color: var(--team-completed);
 	background: linear-gradient(
 		to right,
@@ -308,7 +303,7 @@
 	);
 }
 
-.teams-task-enhanced.state-waiting {
+.teams-workbench .teams-task-enhanced.state-waiting {
 	border-left-color: var(--team-waiting);
 }
 
@@ -316,7 +311,7 @@
 .teams-task-enhanced strong {
 	font-size: 12px;
 	font-weight: 600;
-	line-height: 1.4;
+	line-height: 16px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	display: -webkit-box;
@@ -329,7 +324,7 @@
 .teams-task-objective-enhanced {
 	font-size: 11px;
 	color: var(--muted);
-	line-height: 1.4;
+	line-height: 15px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	display: -webkit-box;
@@ -355,6 +350,7 @@
 	padding: 3px 8px;
 	border-radius: 12px;
 	font-size: 10px;
+	line-height: 12px;
 	font-weight: 600;
 	white-space: nowrap;
 	transition: all 0.3s ease;
@@ -362,22 +358,22 @@
 
 .teams-status-enhanced.state-running {
 	color: var(--team-running);
-	background: color-mix(in srgb, var(--team-running) 15%, transparent);
+	background: var(--blue-soft);
 }
 
 .teams-status-enhanced.state-attention {
 	color: var(--team-attention);
-	background: color-mix(in srgb, var(--team-attention) 15%, transparent);
+	background: var(--amber-soft);
 }
 
 .teams-status-enhanced.state-completed {
 	color: var(--team-completed);
-	background: color-mix(in srgb, var(--team-completed) 15%, transparent);
+	background: var(--green-soft);
 }
 
 .teams-status-enhanced.state-waiting {
 	color: var(--team-waiting);
-	background: color-mix(in srgb, var(--team-waiting) 15%, transparent);
+	background: var(--surface-muted);
 }
 
 /* 状态图标动画 */
@@ -642,7 +638,7 @@
 		height: 52px;
 	}
 
-	.teams-task-enhanced {
+	.teams-workbench .teams-task-enhanced {
 		padding: 10px 12px;
 	}
 

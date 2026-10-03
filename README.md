@@ -218,6 +218,8 @@ npm run build
 
 提交问题时，请提供操作系统、Node.js 版本、启动方式、复现步骤，以及脱敏后的错误信息。修改功能时，建议同时补充对应测试和文档。
 
+日常改动可先运行 `npm run test:e2e:core`；长会话性能记录使用 `npm run test:performance`。覆盖范围见[质量基线与核心回归](docs/quality-baselines.md)。[真实任务基准](docs/task-benchmark.md)默认只列计划，收费运行须显式传入 `--run`。
+
 真实模型验收命令可能调用付费服务，请先阅读[开发与配置详解](docs/development-guide.md#verify-a-real-pi-provider)，不要将其当作无费用的普通测试。
 
 <details>

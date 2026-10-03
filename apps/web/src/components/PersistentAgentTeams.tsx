@@ -316,7 +316,13 @@ export function PersistentAgentTeams({ workspaceId, connected, available, listTe
 				team && (
 					<>
 						<div className="persistent-team-objective">
-							<p>{team.objective}</p>
+							<details className="persistent-team-objective-copy" key={team.id}>
+								<summary>
+									<strong>{label("团队目标", "Team objective")}</strong>
+									<span>{team.objective}</span>
+								</summary>
+								<p>{team.objective}</p>
+							</details>
 							<span>
 								{team.tasks.filter((value) => value.status === "completed").length}/{team.tasks.length}{" "}
 								{label("任务", "tasks")} · {team.members.length} {label("成员", "members")} · $

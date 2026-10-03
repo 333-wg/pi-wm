@@ -36,13 +36,42 @@
 	padding: 12px 20px;
 	display: flex;
 	gap: 16px;
+	align-items: flex-start;
 	justify-content: space-between;
 	border-bottom: 1px solid var(--line);
+	flex-shrink: 0;
+}
+.persistent-team-objective-copy {
+	flex: 1;
+	min-width: 0;
+}
+.persistent-team-objective-copy summary {
+	cursor: pointer;
+	line-height: 1.6;
+}
+.persistent-team-objective-copy summary:focus-visible {
+	outline: 2px solid var(--green);
+	outline-offset: 3px;
+	border-radius: 4px;
+}
+.persistent-team-objective-copy summary > span {
+	display: -webkit-box;
+	-webkit-line-clamp: 1;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	color: var(--muted);
+	margin-top: 4px;
+}
+.persistent-team-objective-copy[open] summary > span {
+	display: none;
 }
 .persistent-team-objective p {
-	margin: 0;
+	margin: 8px 0 0;
+	white-space: pre-wrap;
+	line-height: 1.7;
 	overflow-wrap: anywhere;
-	max-height: 70px;
+	max-height: 160px;
 	overflow: auto;
 }
 .persistent-team-objective > span {
@@ -64,8 +93,9 @@
 	flex-wrap: wrap;
 	gap: 10px;
 	border: 1px solid var(--line);
-	border-radius: 6px;
-	padding: 10px;
+	border-radius: 10px;
+	padding: 12px;
+	background: var(--surface);
 	border-top: 2px solid var(--green);
 }
 .persistent-team-member:nth-child(3n + 2) {
@@ -197,7 +227,7 @@
 }
 .persistent-team-content {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) 300px;
+	grid-template-columns: minmax(0, 1fr) clamp(280px, 27%, 360px);
 	flex: 1;
 	min-height: 0;
 	overflow: hidden;
@@ -292,6 +322,7 @@
 	display: flex;
 	flex-direction: column;
 	border-left: 1px solid var(--line);
+	background: var(--surface-muted);
 }
 .persistent-team-mailbox > h3 {
 	display: flex;
@@ -305,11 +336,15 @@
 	overflow: auto;
 	flex: 1;
 	min-height: 100px;
-	padding: 0 14px;
+	padding: 12px;
 }
 .persistent-team-messages article {
-	padding: 12px 0;
-	border-bottom: 1px solid var(--line);
+	padding: 12px;
+	margin-bottom: 10px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--surface);
+	line-height: 1.65;
 }
 .persistent-team-messages header {
 	display: flex;
@@ -364,6 +399,10 @@
 	.persistent-team-objective {
 		flex-direction: column;
 		gap: 8px;
+		padding: 10px 12px;
+	}
+	.persistent-team-objective-copy {
+		width: 100%;
 	}
 	.persistent-team-history,
 	.persistent-team-members {

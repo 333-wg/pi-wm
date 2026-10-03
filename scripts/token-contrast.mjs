@@ -32,6 +32,10 @@ const stylesheet = join(dirname(fileURLToPath(import.meta.url)), "..", "apps/web
  * re-pitch of a *surface* safe.
  */
 export const PAIRS = [
+	{ fore: "--team-waiting", back: "--surface-muted", floor: 4.5, where: "team waiting status" },
+	{ fore: "--team-running", back: "--blue-soft", floor: 4.5, where: "team running status" },
+	{ fore: "--team-completed", back: "--green-soft", floor: 4.5, where: "team completed status" },
+	{ fore: "--team-attention", back: "--amber-soft", floor: 4.5, where: "team attention status" },
 	// The text ramp, against every surface it is actually painted on.
 	{ fore: "--ink", back: "--panel", floor: 4.5, where: "transcript headings" },
 	{ fore: "--ink", back: "--surface", floor: 4.5, where: "card titles" },

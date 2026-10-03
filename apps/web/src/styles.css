@@ -63,6 +63,13 @@
      state a dot can show, but it still has to clear 3:1 to be perceivable. */
 	--dot: #828b85;
 
+	/* Team states inherit each palette's accessible accent colours. */
+	--team-waiting: var(--muted);
+	--team-running: var(--blue);
+	--team-completed: var(--green-strong);
+	--team-attention: var(--amber);
+	--team-error: var(--red);
+
 	--blue: #286a9b;
 	--blue-soft: #e6f0f7;
 	--blue-border: #cfe0ec;
@@ -678,10 +685,51 @@ button {
 	opacity: 0.5;
 	cursor: not-allowed;
 }
-.sidebar-new-chat {
+.sidebar-new-chat,
+.sidebar-scheduled {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
 	flex: 0 0 auto;
 	width: 100%;
+	min-height: 40px;
+	gap: 9px;
+	padding: 0 12px;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	font-family: inherit;
+	font-size: 13px;
+	line-height: 1.3;
+	letter-spacing: 0;
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.sidebar-new-chat {
 	margin-top: 16px;
+	border-color: var(--green-border);
+}
+.sidebar-scheduled {
+	margin-top: 6px;
+	background: transparent;
+	color: var(--text-soft);
+	font-weight: 500;
+}
+.sidebar-scheduled > svg {
+	flex: 0 0 auto;
+}
+.sidebar-scheduled:hover {
+	background: var(--surface-hover);
+	color: var(--green-strong);
+}
+.sidebar-scheduled.selected {
+	background: var(--green-soft);
+	color: var(--green-strong);
+	border-color: var(--green-border);
+}
+.sidebar-scheduled:focus-visible {
+	outline: 2px solid var(--green);
+	outline-offset: 2px;
 }
 .topbar-new-chat {
 	display: none;
@@ -5419,8 +5467,6 @@ button {
 	color: var(--muted);
 	font-size: 10px;
 }
-.sidebar-scheduled { display: flex; align-items: center; gap: 10px; margin: 0 12px 12px; padding: 10px 12px; border: 0; border-radius: 6px; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
-.sidebar-scheduled:hover, .sidebar-scheduled.selected { background: var(--surface); color: var(--green); }
 .scheduled-tasks { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 28px; color: var(--text); background: var(--panel); }
 .scheduled-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .scheduled-heading h1 { font-size: 22px; margin: 0 0 6px; }
