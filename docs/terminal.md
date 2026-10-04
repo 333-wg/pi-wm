@@ -5,6 +5,13 @@ It is not a textarea-backed command simulator.
 
 ## Desktop and session behavior
 
+点击“终端”或执行 `/terminal` 会在右侧展开终端面板，不再替换当前对话或清空草稿。
+桌面默认仅占部分宽度；拖动左侧分隔线可左右调节，也可聚焦分隔线后用左右方向键调整，
+双击分隔线恢复默认宽度。窄屏使用右侧抽屉，保留原页面，避免将对话压缩得过窄。
+再次点击“终端”或点击“收起终端面板”只隐藏面板，命令继续运行；终端工具栏里的
+“关闭终端”仍会确认并结束进程。切换工作台页面会收起面板，重新打开后保留原终端。
+终端、浏览器预览和运行详情面板互斥显示，避免挤占对话空间。
+
 The terminal and chat share the gateway URL/subprotocol resolver. Desktop windows
 use the loopback WebSocket address supplied by the desktop bridge, never the
 `wuming://app/` page host. Browser deployments use their HTTP(S) origin.

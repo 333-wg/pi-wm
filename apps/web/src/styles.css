@@ -3108,8 +3108,8 @@ button {
 .thinking-trigger-label {
 	min-width: 0;
 	flex: 0 1 auto;
-	overflow: visible;
-	text-overflow: clip;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	line-height: 1;
 }
 .thinking-trigger-effort {
@@ -3198,6 +3198,7 @@ button {
 	font-size: 14px;
 	font-weight: 500;
 }
+.thinking-model-option-source,
 .thinking-model-option-desc {
 	padding-left: 22px;
 	color: var(--muted);

@@ -183,6 +183,11 @@ function parseModels(payload: unknown): {
 }
 
 function metadata(config: StoredConfig, capabilities: CustomModelCapabilities): ModelMetadata {
+	const serviceUrl = new URL(config.baseUrl);
+	serviceUrl.username = "";
+	serviceUrl.password = "";
+	serviceUrl.search = "";
+	serviceUrl.hash = "";
 	return {
 		model: { provider: config.provider, id: config.id },
 		name: config.name,
@@ -194,6 +199,7 @@ function metadata(config: StoredConfig, capabilities: CustomModelCapabilities): 
 		maxOutputTokens: config.maxOutputTokens,
 		authenticated: true,
 		custom: true,
+		serviceUrl: serviceUrl.href,
 	};
 }
 
@@ -546,13 +552,17 @@ export class CustomModelRegistry {
 
 	async removeService(provider: string): Promise<void> {
 		if (!this.#services.has(provider)) return;
-		if ([...this.#configs.values()].some((config) => config.provider === provider)) {
-			throw Object.assign(new Error("Remove the models under this service before deleting the service"), {
-				protocolCode: "conflict",
-			});
-		}
+		const service = this.#services.get(provider)!;
+		const removed = [...this.#configs].filter(([, config]) => config.provider === provider);
+		for (const [key] of removed) this.#configs.delete(key);
 		this.#services.delete(provider);
-		await this.#persist();
+		try {
+			await this.#persist();
+		} catch (error) {
+			this.#services.set(provider, service);
+			for (const [key, config] of removed) this.#configs.set(key, config);
+			throw error;
+		}
 	}
 
 	async #discover(connection: CustomModelConnection): Promise<

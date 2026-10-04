@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ModelMetadata } from "@wuming/protocol";
-import { modelThinkingDescription, thinkingLabel, thinkingOptions } from "../src/components/ThinkingPicker.js";
+import {
+	modelServiceLabel,
+	modelThinkingDescription,
+	thinkingLabel,
+	thinkingOptions,
+} from "../src/components/ThinkingPicker.js";
 import { THINKING_LEVELS } from "../src/lib/thinking-preference.js";
 
 describe("thinking picker options", () => {
@@ -13,6 +18,17 @@ describe("thinking picker options", () => {
 		maxOutputTokens: 1000,
 		authenticated: true,
 	};
+
+	it("distinguishes relay paths and ports without displaying URL credentials or query secrets", () => {
+		expect(modelServiceLabel({ ...model, serviceUrl: "https://relay.example:8443/team-a/v1" })).toBe(
+			"relay.example:8443/team-a/v1"
+		);
+		expect(
+			modelServiceLabel({ ...model, serviceUrl: "https://user:secret@relay.example/team-b/v1?key=secret#private" })
+		).toBe("relay.example/team-b/v1");
+		expect(modelServiceLabel(model)).toBe("relay");
+		expect(modelServiceLabel({ ...model, serviceUrl: "invalid" })).toBe("relay");
+	});
 
 	it("distinguishes unknown, unsupported, budget, and toggle capabilities", () => {
 		expect(

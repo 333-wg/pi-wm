@@ -103,6 +103,7 @@ export const ModelMetadataSchema = StrictObject({
 	maxOutputTokens: Type.Integer({ minimum: 1 }),
 	authenticated: Type.Boolean(),
 	custom: Type.Optional(Type.Boolean()),
+	serviceUrl: Type.Optional(Type.String({ maxLength: 4096 })),
 });
 export type ModelMetadata = Static<typeof ModelMetadataSchema>;
 

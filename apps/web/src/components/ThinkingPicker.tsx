@@ -2,6 +2,7 @@ import { createTranslator, useT, type Translate } from "../lib/locale.js";
 import { ArrowLeft, Bot, Check, ChevronDown, ChevronRight, Info } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { ModelMetadata, ModelRef, ThinkingLevel } from "@wuming/protocol";
+import { createPortal } from "react-dom";
 import { THINKING_LEVELS } from "../lib/thinking-preference.js";
 
 interface ThinkingOption {
@@ -57,6 +58,18 @@ export function modelThinkingDescription(model: ModelMetadata, t: Translate = cr
 				: description;
 }
 
+export function modelServiceLabel(model: ModelMetadata): string {
+	if (model.serviceUrl) {
+		try {
+			const url = new URL(model.serviceUrl);
+			if (url.protocol === "https:" || url.protocol === "http:") return `${url.host}${url.pathname.replace(/\/$/, "")}`;
+		} catch {
+			// Older gateways may omit the service URL; keep the provider as a fallback.
+		}
+	}
+	return model.model.provider;
+}
+
 export function ThinkingPicker({
 	level,
 	supported,
@@ -107,7 +120,7 @@ export function ThinkingPicker({
 			return;
 		}
 		const closeOutside = (event: PointerEvent) => {
-			if (!root.current?.contains(event.target as Node)) {
+			if (!root.current?.contains(event.target as Node) && !effortMenu.current?.contains(event.target as Node)) {
 				setOpen(false);
 				setShowEffortMenu(false);
 			}
@@ -242,6 +255,9 @@ export function ThinkingPicker({
 											<Bot size={15} />
 											<strong>{model.name}</strong>
 										</span>
+										<span className="thinking-model-option-source">
+											{t("modelService")}：{modelServiceLabel(model)}
+										</span>
 										<span className="thinking-model-option-desc">{modelThinkingDescription(model, t)}</span>
 									</span>
 									{model.model.provider === selectedModel?.model.provider &&
@@ -255,9 +271,6 @@ export function ThinkingPicker({
 							className="thinking-menu-item"
 							type="button"
 							disabled={effortLocked || saving}
-							onMouseEnter={() => {
-								if (!effortLocked) setShowEffortMenu(true);
-							}}
 							onClick={() => {
 								if (!effortLocked) setShowEffortMenu(true);
 							}}
@@ -269,54 +282,56 @@ export function ThinkingPicker({
 							</span>
 						</button>
 					</div>
-					{showEffortMenu && (
-						<div
-							className="thinking-effort-menu"
-							role="menu"
-							aria-label={t("thinkingEffort")}
-							ref={effortMenu}
-							style={effortPosition}
-						>
-							<button
-								className="icon-button"
-								type="button"
-								aria-label={t("backToModelSettings")}
-								title={t("backToModelSettings")}
-								onClick={() => setShowEffortMenu(false)}
+					{showEffortMenu &&
+						createPortal(
+							<div
+								className="thinking-effort-menu"
+								role="menu"
+								aria-label={t("thinkingEffort")}
+								ref={effortMenu}
+								style={effortPosition}
 							>
-								<ArrowLeft size={16} />
-							</button>
-							{!toggleOnly && <div className="thinking-menu-intro">{t("thinkingEffortHint")}</div>}
-							<div className="thinking-options">
-								{options.map((option) => (
-									<button
-										className="thinking-option"
-										type="button"
-										role="menuitemradio"
-										aria-checked={option.id === level}
-										disabled={saving}
-										key={option.id}
-										onClick={() => void select(option)}
-									>
-										<span className="thinking-option-content">
-											<span className="thinking-option-header">
-												<strong>{option.label}</strong>
-												{option.id === "medium" && <span className="thinking-badge">{t("default")}</span>}
-												{option.id === "max" && <Info size={14} className="thinking-info" />}
+								<button
+									className="icon-button"
+									type="button"
+									aria-label={t("backToModelSettings")}
+									title={t("backToModelSettings")}
+									onClick={() => setShowEffortMenu(false)}
+								>
+									<ArrowLeft size={16} />
+								</button>
+								{!toggleOnly && <div className="thinking-menu-intro">{t("thinkingEffortHint")}</div>}
+								<div className="thinking-options">
+									{options.map((option) => (
+										<button
+											className="thinking-option"
+											type="button"
+											role="menuitemradio"
+											aria-checked={option.id === level}
+											disabled={saving}
+											key={option.id}
+											onClick={() => void select(option)}
+										>
+											<span className="thinking-option-content">
+												<span className="thinking-option-header">
+													<strong>{option.label}</strong>
+													{option.id === "medium" && <span className="thinking-badge">{t("default")}</span>}
+													{option.id === "max" && <Info size={14} className="thinking-info" />}
+												</span>
+												<span className="thinking-option-desc">{option.description}</span>
 											</span>
-											<span className="thinking-option-desc">{option.description}</span>
-										</span>
-										{option.id === level && <Check className="thinking-check" size={20} />}
-									</button>
-								))}
-							</div>
-							{error && (
-								<div className="thinking-error" role="alert">
-									{error}
+											{option.id === level && <Check className="thinking-check" size={20} />}
+										</button>
+									))}
 								</div>
-							)}
-						</div>
-					)}
+								{error && (
+									<div className="thinking-error" role="alert">
+										{error}
+									</div>
+								)}
+							</div>,
+							document.body
+						)}
 				</div>
 			)}
 		</div>

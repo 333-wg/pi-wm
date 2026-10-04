@@ -111,7 +111,8 @@ const zh = {
 	credentialSaved: "密钥已加密保存 · {count} 个模型",
 	refreshModels: "刷新并管理模型",
 	deleteService: "删除模型服务",
-	deleteServiceBlocked: "请先删除该服务下的模型",
+	deleteServiceConfirm:
+		"删除模型服务 {service}？这会同时删除保存的 API 密钥及该服务下的 {count} 个模型（含对话、图片和视频模型），无法撤销。其他服务不受影响。",
 	editModel: "编辑模型",
 	testModel: "测试模型",
 	deleteModel: "删除模型",
@@ -296,7 +297,8 @@ const en: Record<keyof typeof zh, string> = {
 	credentialSaved: "Credential encrypted · {count} models",
 	refreshModels: "Refresh and manage models",
 	deleteService: "Delete model service",
-	deleteServiceBlocked: "Delete the models under this service first",
+	deleteServiceConfirm:
+		"Delete model service {service}? This permanently removes its saved API key and all {count} models (including chat, image and video models). Other services are not affected.",
 	editModel: "Edit model",
 	testModel: "Test model",
 	deleteModel: "Delete model",

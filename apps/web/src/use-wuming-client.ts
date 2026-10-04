@@ -474,10 +474,15 @@ export function useWumingClient() {
 		[refreshModels]
 	);
 
-	const removeCustomModelService = useCallback(async (provider: string) => {
-		const result = await requestRef.current?.({ type: "model.custom.service.remove", provider });
-		if (result?.type !== "model.custom.service.removed") throw new Error("删除模型服务失败");
-	}, []);
+	const removeCustomModelService = useCallback(
+		async (provider: string) => {
+			const result = await requestRef.current?.({ type: "model.custom.service.remove", provider });
+			if (result?.type !== "model.custom.service.removed") throw new Error("删除模型服务失败");
+			setModelSettingsRevision((value) => value + 1);
+			await refreshModels();
+		},
+		[refreshModels]
+	);
 
 	const getCustomModelSettings = useCallback(async (model: ModelRef) => {
 		const result = await requestRef.current?.({ type: "model.custom.get", model });
@@ -599,19 +604,30 @@ export function useWumingClient() {
 	const refreshFollowUpQueue = useCallback(async (sessionId: string) => {
 		const version = ++queueRefreshVersion.current;
 		const result = await requestRef.current?.({ type: "turn.queue.list", sessionId });
-		if (result?.type === "turn.queue.list" && snapshotRef.current?.session.id === sessionId && version === queueRefreshVersion.current)
+		if (
+			result?.type === "turn.queue.list" &&
+			snapshotRef.current?.session.id === sessionId &&
+			version === queueRefreshVersion.current
+		)
 			setState((current) => ({ ...current, followUpQueue: { sessionId, entries: result.entries } }));
 	}, []);
 	const runsRefreshVersion = useRef(0);
-	const refreshRuns = useCallback(async (sessionId: string) => {
-		const version = ++runsRefreshVersion.current;
-		await refreshFollowUpQueue(sessionId);
-		const result = await requestRef.current?.({ type: "session.run.list", sessionId, limit: 20 });
-		if (result?.type === "session.run.list" && snapshotRef.current?.session.id === sessionId && version === runsRefreshVersion.current) {
-			setState((current) => ({ ...current, runs: result.runs }));
-		}
-		return result?.type === "session.run.list" ? result.runs : [];
-	}, [refreshFollowUpQueue]);
+	const refreshRuns = useCallback(
+		async (sessionId: string) => {
+			const version = ++runsRefreshVersion.current;
+			await refreshFollowUpQueue(sessionId);
+			const result = await requestRef.current?.({ type: "session.run.list", sessionId, limit: 20 });
+			if (
+				result?.type === "session.run.list" &&
+				snapshotRef.current?.session.id === sessionId &&
+				version === runsRefreshVersion.current
+			) {
+				setState((current) => ({ ...current, runs: result.runs }));
+			}
+			return result?.type === "session.run.list" ? result.runs : [];
+		},
+		[refreshFollowUpQueue]
+	);
 
 	const refreshMemories = useCallback(async (sessionId: string) => {
 		const result = await requestRef.current?.({
@@ -2072,19 +2088,28 @@ export function useWumingClient() {
 		[refreshRuns, state.selectedSkill]
 	);
 
-	const changeQueuedFollowUp = useCallback(async (entry: QueuedFollowUp, text?: string, sendNow = false) => {
-		const sessionId = snapshotRef.current?.session.id;
-		if (!sessionId) throw new Error("未选择会话");
-		try {
-			const result = await requestRef.current?.({
-				...(sendNow ? { type: "turn.queue.send_now" as const } : text === undefined ? { type: "turn.queue.delete" as const } : { type: "turn.queue.update" as const, text }),
-				sessionId, operationId: entry.id, expectedUpdatedAt: entry.updatedAt,
-			});
-			if (result?.type !== "turn.queue.changed") throw new Error("队列更新失败");
-		} finally {
-			await refreshRuns(sessionId);
-		}
-	}, [refreshRuns]);
+	const changeQueuedFollowUp = useCallback(
+		async (entry: QueuedFollowUp, text?: string, sendNow = false) => {
+			const sessionId = snapshotRef.current?.session.id;
+			if (!sessionId) throw new Error("未选择会话");
+			try {
+				const result = await requestRef.current?.({
+					...(sendNow
+						? { type: "turn.queue.send_now" as const }
+						: text === undefined
+							? { type: "turn.queue.delete" as const }
+							: { type: "turn.queue.update" as const, text }),
+					sessionId,
+					operationId: entry.id,
+					expectedUpdatedAt: entry.updatedAt,
+				});
+				if (result?.type !== "turn.queue.changed") throw new Error("队列更新失败");
+			} finally {
+				await refreshRuns(sessionId);
+			}
+		},
+		[refreshRuns]
+	);
 
 	const renameSession = useCallback(
 		async (sessionId: string, name: string) => {

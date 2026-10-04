@@ -40,7 +40,33 @@ describe("custom model classification", () => {
 		expect(loaded.services()[0]?.modelCount).toBe(4);
 		expect(JSON.stringify(loaded.listMedia())).not.toContain(config.apiKey);
 		await expect(loaded.test({ provider: config.provider, id: "sora-2" })).rejects.toThrow("对话接口");
-		await expect(loaded.removeService(config.provider)).rejects.toThrow("Remove the models");
+		await loaded.set({ ...config, provider: "other-relay", baseUrl: "https://other.invalid/v1" });
+		const mediaOptions = { filePath: join(root, "media.enc"), encryptionKey: "test-key", imageModels: loaded };
+		const media = new MediaModelRegistry(mediaOptions);
+		await media.set(
+			loaded.resolveMedia({ kind: "image", provider: config.provider, baseUrl: config.baseUrl, model: config.id })
+		);
+		await media.set(
+			loaded.resolveMedia({ kind: "video", provider: config.provider, baseUrl: config.baseUrl, model: "sora-2" })
+		);
+		await loaded.removeService(config.provider);
+		expect(loaded.list()).toEqual([]);
+		expect(loaded.registrations()).toEqual([]);
+		expect(loaded.listMedia().map((item) => item.model)).toEqual([{ provider: "other-relay", id: config.id }]);
+		expect(loaded.services().map((item) => item.provider)).toEqual(["other-relay"]);
+		expect(() => loaded.get(config)).toThrow("does not exist");
+		expect(() =>
+			loaded.resolveMedia({ kind: "image", provider: config.provider, baseUrl: config.baseUrl, model: config.id })
+		).toThrow();
+		expect(media.resolve("image").provider).toBe("other-relay");
+		expect(() => media.resolve("video")).toThrow("not configured");
+		const reloaded = new CustomModelRegistry(options);
+		await reloaded.load();
+		expect(reloaded.services()).toEqual(loaded.services());
+		expect(reloaded.listMedia()).toEqual(loaded.listMedia());
+		const mediaReloaded = new MediaModelRegistry({ ...mediaOptions, imageModels: reloaded });
+		await mediaReloaded.load();
+		expect(mediaReloaded.list()).toEqual(media.list());
 	});
 
 	it("uses declared output capabilities and preserves manual overrides through refresh and reload", async () => {

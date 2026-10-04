@@ -1,3 +1,58 @@
+.app-shell.with-terminal {
+	grid-template-columns: var(--sidebar-width, 252px) minmax(320px, 1fr) minmax(280px, min(var(--terminal-width, 38%), calc(100% - var(--sidebar-width, 252px) - 320px)));
+	transition: none;
+}
+.app-shell.sidebar-collapsed.with-terminal {
+	grid-template-columns: 0 minmax(320px, 1fr) minmax(280px, min(var(--terminal-width, 38%), calc(100% - 320px)));
+}
+.app-shell.with-terminal .topbar-title { flex: 0 1 110px; }
+.app-shell.with-terminal .workbench-tabs { overflow-x: auto; scrollbar-width: none; }
+.app-shell.with-terminal .topbar-actions { flex-shrink: 0; }
+.terminal-dock {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	border-left: 1px solid var(--line);
+	background: var(--panel);
+}
+.terminal-dock[hidden] { display: none; }
+.terminal-dock-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex: 0 0 57px;
+	padding: 0 12px;
+	border-bottom: 1px solid var(--line);
+	font-size: 13px;
+}
+.terminal-resizer {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -4px;
+	width: 8px;
+	cursor: col-resize;
+	touch-action: none;
+	user-select: none;
+	z-index: 2;
+}
+.terminal-resizer:hover, .terminal-resizer:focus-visible {
+	background: var(--green-border);
+}
+/* Keep the conversation mounted on narrow windows; expose a strip behind the drawer. */
+@media (max-width: 1080px) {
+	.app-shell.with-terminal { grid-template-columns: var(--sidebar-width, 252px) minmax(0, 1fr); }
+	.app-shell.sidebar-collapsed.with-terminal { grid-template-columns: 0 minmax(0, 1fr); }
+	.terminal-dock {
+		position: absolute;
+		inset: 57px 0 0 auto;
+		width: clamp(280px, var(--terminal-width, 86vw), calc(100% - 24px));
+		z-index: 25;
+		box-shadow: var(--shadow-rail);
+	}
+}
 .terminal-workbench[hidden] {
 	display: none;
 }

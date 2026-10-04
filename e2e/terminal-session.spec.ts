@@ -36,11 +36,38 @@ test("keeps the real shell across navigation and disconnection, closes explicitl
 	if (process.platform === "win32")
 		await page.addInitScript(() => localStorage.setItem("wuming.terminal.shell", "cmd"));
 	await openApp(page, webUrl);
+	const composer = page.getByRole("textbox", { name: "消息", exact: true });
+	await composer.fill("保留这条未发送的草稿");
 	await page.getByRole("tab", { name: "终端", exact: true }).click();
+	await expect(page.getByRole("tab", { name: "对话", exact: true })).toHaveAttribute("aria-selected", "true");
+	await expect(composer).toBeVisible();
+	await expect(composer).toHaveValue("保留这条未发送的草稿");
+	const dock = page.getByRole("complementary", { name: "终端面板", exact: true });
+	const initial = (await dock.boundingBox())!;
+	expect(initial.width).toBeLessThan(1440 / 2);
+	const splitter = page.getByRole("separator", { name: "调整终端宽度" });
+	const handle = (await splitter.boundingBox())!;
+	await page.mouse.move(handle.x + handle.width / 2, handle.y + 150);
+	await page.mouse.down();
+	await page.mouse.move(handle.x - 100, handle.y + 150, { steps: 8 });
+	await page.mouse.up();
+	await expect.poll(async () => (await dock.boundingBox())!.width).toBeGreaterThan(initial.width + 90);
+	const dragged = (await dock.boundingBox())!.width;
+	await splitter.focus();
+	await page.keyboard.press("ArrowRight");
+	await expect.poll(async () => (await dock.boundingBox())!.width).toBeLessThan(dragged - 25);
 	const panel = page.locator(".terminal-workbench:not([hidden])");
 	await expect(panel.getByRole("status")).toHaveText("就绪");
 	await command(page, process.platform === "win32" ? "set TERMINAL_KEEP=retained" : "export TERMINAL_KEEP=retained");
 	await command(page, `node -e "console.log('BEFORE'+'-SWITCH')"`);
+	await expect(panel.locator(".xterm-rows")).toContainText("BEFORE-SWITCH");
+	await page.getByRole("button", { name: "收起终端面板", exact: true }).click();
+	await expect(dock).toBeHidden();
+	await expect(composer).toHaveValue("保留这条未发送的草稿");
+	await composer.fill("/terminal");
+	await page.getByRole("listbox", { name: "快捷命令" }).getByRole("option").filter({ hasText: "/terminal" }).click();
+	await expect(dock).toBeVisible();
+	await expect(page.getByRole("tab", { name: "对话", exact: true })).toHaveAttribute("aria-selected", "true");
 	await expect(panel.locator(".xterm-rows")).toContainText("BEFORE-SWITCH");
 	await page.getByRole("tab", { name: "文件", exact: true }).click();
 	await expect(page.locator(".terminal-workbench")).toBeHidden();
@@ -57,6 +84,9 @@ test("keeps the real shell across navigation and disconnection, closes explicitl
 	await page.screenshot({ path: "test-results/terminal-desktop.png" });
 	await page.setViewportSize({ width: 390, height: 844 });
 	await expect(panel).toBeVisible();
+	const mobileDock = (await dock.boundingBox())!;
+	expect(mobileDock.x).toBeGreaterThanOrEqual(23);
+	expect(mobileDock.x + mobileDock.width).toBeLessThanOrEqual(391);
 	for (const button of await panel.locator(".terminal-actions button").all()) {
 		const bounds = await button.boundingBox();
 		expect(bounds).not.toBeNull();
@@ -70,4 +100,8 @@ test("keeps the real shell across navigation and disconnection, closes explicitl
 	await expect(panel.getByRole("status")).toHaveText("就绪");
 	await command(page, `node -e "console.log('NEW'+'-'+String(process.env.TERMINAL_KEEP))"`);
 	await expect(panel.locator(".xterm-rows")).toContainText("NEW-undefined");
+	await page.getByRole("button", { name: "收起终端面板", exact: true }).click();
+	await expect(dock).toBeHidden();
+	await page.getByRole("tab", { name: "对话", exact: true }).click();
+	await expect(composer).toBeVisible();
 });

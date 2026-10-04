@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Eraser, Play, RotateCcw, Square, Unplug, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useLocale } from "./lib/locale.js";
 import { terminalTheme } from "./lib/terminal-theme.js";
 import { TerminalSession, type TerminalState } from "./lib/terminal-session.js";
 import "./terminal.css";
@@ -28,18 +29,95 @@ export function TerminalWorkbench({
 	token,
 	workspaceId,
 	active,
+	onClose,
 }: {
 	token: string;
 	workspaceId?: string;
 	active: boolean;
+	onClose: () => void;
 }) {
+	const { locale } = useLocale();
+	const label = (zh: string, en: string) => (locale === "en" ? en : zh);
+	const panel = useRef<HTMLElement>(null);
+	const drag = useRef<{ x: number; width: number } | null>(null);
+	const [width, setWidth] = useState(0);
+	const resize = (value: number) => {
+		const shell = panel.current?.parentElement;
+		if (!shell) return;
+		const sidebar = shell.querySelector<HTMLElement>(".sidebar")?.getBoundingClientRect().width ?? 0;
+		const maximum = window.innerWidth <= 1080 ? shell.clientWidth - 24 : shell.clientWidth - sidebar - 320;
+		const next = Math.round(Math.max(280, Math.min(maximum, value)));
+		shell.style.setProperty("--terminal-width", `${next}px`);
+		setWidth(next);
+	};
+	useEffect(() => {
+		const element = panel.current;
+		if (!element) return;
+		const observer = new ResizeObserver(() => {
+			if (element.clientWidth) setWidth(Math.round(element.getBoundingClientRect().width));
+		});
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, []);
 	const [workspaces, setWorkspaces] = useState<string[]>([]);
 	useEffect(() => {
 		if (active && workspaceId)
 			setWorkspaces((current) => (current.includes(workspaceId) ? current : [...current, workspaceId]));
 	}, [workspaceId, active]);
 	return (
-		<>
+		<aside
+			id="terminal-dock"
+			className="terminal-dock"
+			ref={panel}
+			hidden={!active}
+			aria-label={label("终端面板", "Terminal panel")}
+		>
+			<div
+				className="terminal-resizer"
+				role="separator"
+				aria-label={label("调整终端宽度", "Resize terminal")}
+				aria-orientation="vertical"
+				aria-valuenow={width}
+				aria-valuemin={280}
+				tabIndex={0}
+				onKeyDown={(event) => {
+					if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+					event.preventDefault();
+					resize(width + (event.key === "ArrowLeft" ? 32 : -32));
+				}}
+				onPointerDown={(event) => {
+					if (event.button !== 0) return;
+					event.preventDefault();
+					drag.current = { x: event.clientX, width };
+					event.currentTarget.setPointerCapture(event.pointerId);
+				}}
+				onPointerMove={(event) => {
+					if (drag.current && event.currentTarget.hasPointerCapture(event.pointerId))
+						resize(drag.current.width + drag.current.x - event.clientX);
+				}}
+				onPointerUp={(event) => {
+					if (event.currentTarget.hasPointerCapture(event.pointerId))
+						event.currentTarget.releasePointerCapture(event.pointerId);
+					drag.current = null;
+				}}
+				onLostPointerCapture={() => {
+					drag.current = null;
+				}}
+				onDoubleClick={() => panel.current?.parentElement?.style.removeProperty("--terminal-width")}
+			/>
+			<header className="terminal-dock-header">
+				<strong>{label("终端", "Terminal")}</strong>
+				<button
+					className="icon-button"
+					type="button"
+					title={label("收起终端面板（保留运行）", "Hide terminal panel (keep running)")}
+					aria-label={label("收起终端面板", "Hide terminal panel")}
+					onClick={onClose}
+				>
+					<X size={16} />
+				</button>
+			</header>
+			{!workspaceId && <div className="workbench-empty">{label("请先选择项目", "Select a project first")}</div>}
 			{workspaces.map((workspace) => (
 				<TerminalView
 					key={workspace}
@@ -48,7 +126,7 @@ export function TerminalWorkbench({
 					active={active && workspaceId === workspace}
 				/>
 			))}
-		</>
+		</aside>
 	);
 }
 

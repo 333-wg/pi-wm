@@ -511,6 +511,44 @@ html[data-wallpaper="true"] .desktop-titlebar {
 	padding: 16px;
 	margin-block: 8px;
 }
+/* Dark wallpaper replies stay quiet until the reader approaches the row.
+   Keep the existing padding and transparent border so revealing the surface
+   never moves text. The row's padding is also the hover proximity area. */
+:root:is([data-theme="dark"], [data-theme="ink-night"], [data-theme="ink-blue"])
+	.app-shell[data-wallpaper="true"] .message-row.assistant {
+	background: transparent;
+	border-color: transparent;
+	box-shadow: none;
+	transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+:root:is([data-theme="dark"], [data-theme="ink-night"], [data-theme="ink-blue"])
+	.app-shell[data-wallpaper="true"] .message-row.assistant:focus-within {
+	background: var(--wallpaper-reading);
+	border-color: var(--line-soft);
+	box-shadow: 0 4px 16px rgb(0 0 0 / 12%);
+}
+@media (hover: hover) and (pointer: fine) {
+	:root:is([data-theme="dark"], [data-theme="ink-night"], [data-theme="ink-blue"])
+		.app-shell[data-wallpaper="true"] .message-row.assistant:hover {
+		background: var(--wallpaper-reading);
+		border-color: var(--line-soft);
+		box-shadow: 0 4px 16px rgb(0 0 0 / 12%);
+	}
+}
+/* Touch cannot reveal a reading surface on approach; retain a quiet tint
+   without a permanent outline or shadow, and avoid sticky hover states. */
+@media (hover: none), (pointer: coarse) {
+	:root:is([data-theme="dark"], [data-theme="ink-night"], [data-theme="ink-blue"])
+		.app-shell[data-wallpaper="true"] .message-row.assistant {
+		background: color-mix(in srgb, var(--wallpaper-reading) 45%, transparent);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	:root:is([data-theme="dark"], [data-theme="ink-night"], [data-theme="ink-blue"])
+		.app-shell[data-wallpaper="true"] .message-row.assistant {
+		transition: none;
+	}
+}
 html[data-wallpaper="true"] :is(.settings-dialog, .command-palette, .git-dialog, .teams-modal, .scheduled-modal) {
 	background: color-mix(in srgb, var(--wallpaper-solid-panel) 88%, transparent);
 	backdrop-filter: blur(24px) saturate(110%);
@@ -519,7 +557,7 @@ html[data-wallpaper="true"] :is(.settings-navigation, .settings-shell-header) {
 	background: transparent;
 }
 html[data-wallpaper="true"]
-	:is(.suggest-menu, .model-menu, .thinking-menu, .permission-menu, .project-menu, .session-menu) {
+	:is(.suggest-menu, .model-menu, .thinking-menu, .thinking-effort-menu, .permission-menu, .project-menu, .session-menu) {
 	background: color-mix(in srgb, var(--wallpaper-solid-panel) 88%, transparent);
 	backdrop-filter: blur(20px);
 }

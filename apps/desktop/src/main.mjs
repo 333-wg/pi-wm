@@ -133,7 +133,8 @@ async function boot() {
 		...(process.platform === "win32"
 			? {
 					titleBarStyle: "hidden",
-					titleBarOverlay: { color: "#f7f8f6", symbolColor: "#202522", height: 36 },
+					// Let the renderer paint one continuous titlebar, including alternate palettes.
+					titleBarOverlay: { color: "#00000000", symbolColor: "#202522", height: 36 },
 					autoHideMenuBar: true,
 				}
 			: {}),
@@ -260,7 +261,7 @@ async function boot() {
 		if (action === "menu") Menu.getApplicationMenu()?.popup({ window, x: 8, y: 36 });
 		else if (action === "theme" && (value === "light" || value === "dark"))
 			window.setTitleBarOverlay({
-				color: value === "dark" ? "#0e120f" : "#f7f8f6",
+				color: "#00000000",
 				symbolColor: value === "dark" ? "#dbe3dc" : "#202522",
 			});
 		else throw new Error("Invalid window action");

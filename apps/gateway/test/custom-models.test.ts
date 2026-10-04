@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CustomModelRegistry, loadOrCreateModelEncryptionKey } from "../src/custom-models.js";
@@ -217,6 +217,7 @@ describe("CustomModelRegistry", () => {
 				maxOutputTokens: 4096,
 				authenticated: true,
 				custom: true,
+				serviceUrl: config.baseUrl,
 			},
 		]);
 		expect(JSON.stringify(registry.list())).not.toContain(config.apiKey);
@@ -236,6 +237,13 @@ describe("CustomModelRegistry", () => {
 			apiKey: config.apiKey,
 			baseUrl: config.baseUrl,
 		});
+	});
+
+	it("exposes a service address without query secrets or fragments", async () => {
+		const registry = new CustomModelRegistry();
+		await registry.set({ ...config, baseUrl: `${config.baseUrl}?key=private-query#private-fragment` });
+		expect(registry.list()[0]?.serviceUrl).toBe(config.baseUrl);
+		expect(JSON.stringify(registry.list())).not.toContain("private-");
 	});
 
 	it("creates and reuses a local encryption key when no environment key is configured", async () => {
@@ -324,13 +332,40 @@ describe("CustomModelRegistry", () => {
 			expect(second.services()[0]?.modelCount).toBe(1);
 			await second.discover({ baseUrl: discovery.baseUrl, apiKey: "rotated-key" });
 			expect(second.registrations()[0]?.config.apiKey).toBe("rotated-key");
-			await expect(second.removeService(discovery.provider)).rejects.toMatchObject({
-				protocolCode: "conflict",
-			});
-			await second.remove({ provider: discovery.provider, id: "model-a" });
-			expect(second.services()[0]?.modelCount).toBe(0);
 			await second.removeService(discovery.provider);
 			expect(second.services()).toEqual([]);
+			expect(second.list()).toEqual([]);
+			expect(second.registrations()).toEqual([]);
+			const reloaded = new CustomModelRegistry({ filePath, encryptionKey: "master-key" });
+			await reloaded.load();
+			expect(reloaded.services()).toEqual([]);
+			expect(reloaded.list()).toEqual([]);
+			expect(decryptedCatalog(await readFile(filePath, "utf8"), "master-key")).toEqual({
+				version: 2,
+				services: [],
+				models: [],
+			});
+			await expect(reloaded.removeService(discovery.provider)).resolves.toBeUndefined();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps a service and its models when deletion cannot be persisted", async () => {
+		const root = await mkdtemp(join(tmpdir(), "wuming-service-delete-failure-"));
+		try {
+			const filePath = join(root, "models.enc");
+			const options = { filePath, encryptionKey: "test-key" };
+			const registry = new CustomModelRegistry(options);
+			await registry.set(config);
+			await mkdir(`${filePath}.${process.pid}.tmp`);
+			await expect(registry.removeService(config.provider)).rejects.toThrow();
+			expect(registry.services()[0]?.modelCount).toBe(1);
+			expect(registry.get(config).model.id).toBe(config.id);
+			const reloaded = new CustomModelRegistry(options);
+			await reloaded.load();
+			expect(reloaded.services()).toEqual(registry.services());
+			expect(reloaded.list()).toEqual(registry.list());
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

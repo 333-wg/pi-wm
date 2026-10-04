@@ -71,8 +71,31 @@ try {
 		}
 	});
 	assert.equal(invalidThemeRejected, true);
+	// Record real native calls while retaining Electron's rendering and IPC validation.
+	await desktop.evaluate(({ BrowserWindow }) => {
+		const window = BrowserWindow.getAllWindows()[0];
+		const original = window.setTitleBarOverlay.bind(window);
+		globalThis.chromeOverlay = undefined;
+		window.setTitleBarOverlay = (options) => {
+			globalThis.chromeOverlay = options;
+			return original(options);
+		};
+	});
+	async function captureNative(name) {
+		const image = await desktop.evaluate(async ({ BrowserWindow, desktopCapturer }) => {
+			const window = BrowserWindow.getAllWindows()[0];
+			const [width, height] = window.getSize();
+			const sources = await desktopCapturer.getSources({
+				types: ["window"], thumbnailSize: { width, height },
+			});
+			const source = sources.find((item) => item.id === window.getMediaSourceId());
+			return source?.thumbnail.toPNG().toString("base64");
+		});
+		assert.ok(image, "Native screenshot must include the Windows caption buttons");
+		await writeFile(join(output, name + ".png"), Buffer.from(image, "base64"));
+	}
 	for (const [width, height] of [
-		[1360, 900],
+		[1440, 900],
 		[800, 600],
 	]) {
 		await desktop.evaluate(
@@ -97,24 +120,28 @@ try {
 		assert.ok(layout.bottom <= layout.viewport);
 		assert.equal(layout.overflow, false);
 		await page.screenshot({ path: join(output, "light-" + width + ".png") });
-		if (width === 1360) {
-			const image = await desktop.evaluate(async ({ BrowserWindow, desktopCapturer }) => {
-				const window = BrowserWindow.getAllWindows()[0];
-				const sources = await desktopCapturer.getSources({
-					types: ["window"],
-					thumbnailSize: { width: 1360, height: 900 },
-				});
-				const source = sources.find((item) => item.id === window.getMediaSourceId());
-				return source?.thumbnail.toPNG().toString("base64");
-			});
-			if (image) await writeFile(join(output, "native-window.png"), Buffer.from(image, "base64"));
-		}
+		await captureNative("native-light-" + width);
 	}
-	await page.evaluate(() => {
-		document.documentElement.dataset.theme = "dark";
-	});
-	await expect(page.locator(".desktop-titlebar")).toHaveCSS("background-color", "rgb(14, 18, 15)");
-	await page.screenshot({ path: join(output, "dark-800.png") });
+	// Non-default palettes used to leave a hard-coded light/black rectangle behind
+	// the native controls. Test the renderer -> preload -> main path in both modes.
+	for (const [theme, background, symbolColor] of [
+		["paper", "rgb(251, 249, 244)", "#202522"],
+		["ink-blue", "rgb(26, 29, 36)", "#dbe3dc"],
+		["dark", "rgb(14, 18, 15)", "#dbe3dc"],
+		["light", "rgb(247, 248, 246)", "#202522"],
+	]) {
+		await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, theme);
+		await expect(page.locator(".desktop-titlebar")).toHaveCSS("background-color", background);
+		await expect.poll(() => desktop.evaluate(() => globalThis.chromeOverlay)).toEqual({
+			color: "#00000000", symbolColor,
+		});
+		await captureNative("native-" + theme + "-800");
+	}
+	// A contrasting renderer backdrop proves native controls do not introduce their
+	// own opaque block. This changes only the test DOM, not wallpaper preferences.
+	await page.locator(".desktop-titlebar").evaluate((element) => { element.style.background = "rgb(117, 122, 125)"; });
+	await captureNative("native-contrast-800");
+	await page.locator(".desktop-titlebar").evaluate((element) => { element.style.removeProperty("background"); });
 	const previewLayout = await page.evaluate(() => {
 		const dialog = document.createElement("dialog");
 		dialog.className = "image-viewer";
@@ -129,7 +156,7 @@ try {
 	assert.equal(previewLayout.top, 36);
 	assert.equal(previewLayout.bottom, previewLayout.height);
 	assert.deepEqual(errors, []);
-	console.log("Desktop chrome passed: menu, IPC validation, drag regions, light/dark themes, 1360/800px layouts.");
+	console.log("Desktop chrome passed: menu, IPC validation, drag regions, transparent native controls, four palettes, 1440/800px layouts.");
 } finally {
 	await desktop?.close();
 	await disposeProfile();

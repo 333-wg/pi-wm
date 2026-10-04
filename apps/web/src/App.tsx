@@ -657,12 +657,14 @@ function CustomModelSettings({
 		}
 	};
 	const removeService = async (service: CustomModelService) => {
+		if (!window.confirm(t("deleteServiceConfirm", { service: service.baseUrl, count: service.modelCount }))) return;
 		setLoadingService(service.provider);
 		setError(undefined);
 		setMessage(undefined);
 		try {
 			await onRemoveService(service.provider);
-			if (discovery?.provider === service.provider) setDiscovery(undefined);
+			if (discovery?.provider === service.provider) resetDiscovery();
+			if (editing?.model.provider === service.provider) setEditing(undefined);
 			await reloadServices();
 			setMessage(t("serviceDeleted"));
 		} catch (cause) {
@@ -819,8 +821,8 @@ function CustomModelSettings({
 						<button
 							type="button"
 							className="icon-button"
-							title={service.modelCount > 0 ? t("deleteServiceBlocked") : t("deleteService")}
-							disabled={service.modelCount > 0 || loadingService === service.provider}
+							title={t("deleteService")}
+							disabled={loadingService === service.provider}
 							onClick={() => void removeService(service)}
 						>
 							<Trash2 size={14} />
@@ -836,11 +838,15 @@ function CustomModelSettings({
 			)}
 			{savedModels.map((model) => {
 				const key = `${model.model.provider}/${model.model.id}`;
+				const service = services.find((item) => item.provider === model.model.provider);
 				return (
 					<div className="custom-model-row" key={key}>
 						<span className="custom-model-copy">
 							<strong>{model.name}</strong>
 							<small>{model.model.id}</small>
+							<small className="custom-model-source">
+								{t("modelService")}：{service?.baseUrl ?? model.model.provider}
+							</small>
 							<small>{modelThinkingDescription(model)}</small>
 						</span>
 						<div className="custom-model-row-actions">
@@ -5010,22 +5016,11 @@ export function App() {
 		client.executionEnvironment?.placement === "local_device"
 	);
 	const [workbenchView, setWorkbenchView] = useState<
-		| "chat"
-		| "automations"
-		| "scheduled"
-		| "files"
-		| "changes"
-		| "terminal"
-		| "tools"
-		| "skills"
-		| "mcp"
-		| "teams"
-		| "subtasks"
+		"chat" | "automations" | "scheduled" | "files" | "changes" | "tools" | "skills" | "mcp" | "teams" | "subtasks"
 	>("chat");
 	const [terminalVisited, setTerminalVisited] = useState(false);
-	useEffect(() => {
-		if (workbenchView === "terminal") setTerminalVisited(true);
-	}, [workbenchView]);
+	const [terminalOpen, setTerminalOpen] = useState(false);
+	useEffect(() => setTerminalOpen(false), [workbenchView]);
 	const [childMenuOpen, setChildMenuOpen] = useState(false);
 	const [browserOwner, setBrowserOwner] = useState<string>();
 	const [browserTarget, setBrowserTarget] = useState<{ owner: string; url: string; sequence: number }>();
@@ -5194,6 +5189,15 @@ export function App() {
 	const browserWorkspaceId = client.snapshot?.session.workspaceId ?? selectedWorkspace?.id;
 	const browserKey = JSON.stringify([browserWorkspaceId, browserSessionId]);
 	const browserOpen = browserOwner === browserKey && Boolean(browserWorkspaceId);
+	const openTerminal = useCallback(() => {
+		setTerminalVisited(true);
+		setTerminalOpen(true);
+		setBrowserOwner(undefined);
+		setShowRight(false);
+	}, []);
+	useEffect(() => {
+		if (browserOpen || showRight) setTerminalOpen(false);
+	}, [browserOpen, showRight]);
 	useEffect(() => {
 		if (browserOpen && showRight) setBrowserOwner(undefined);
 	}, [browserOpen, showRight]);
@@ -5691,7 +5695,7 @@ export function App() {
 			hint,
 			kind: "action",
 			icon,
-			run: () => setWorkbenchView(view),
+			run: () => (view === "terminal" ? openTerminal() : setWorkbenchView(view)),
 		});
 		const commands: ComposerCommand[] = [
 			{
@@ -5815,7 +5819,7 @@ export function App() {
 			}
 		}
 		return commands;
-	}, [canCompact, client, demoRuntime, sessionId, thinkingLevel, startNewChat, t]);
+	}, [canCompact, client, demoRuntime, sessionId, thinkingLevel, startNewChat, openTerminal, t]);
 
 	// The palette is the mouse-and-keyboard twin of the slash registry: the same
 	// commands, plus the navigation that has no place in a prompt.
@@ -6191,7 +6195,7 @@ export function App() {
 
 	return (
 		<div
-			className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${resizingSidebar ? "resizing-sidebar" : ""} ${browserOpen ? "with-browser" : ""} ${!browserOpen && showRight && workbenchView === "chat" && client.snapshot ? "with-right" : ""}`}
+			className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${resizingSidebar ? "resizing-sidebar" : ""} ${browserOpen ? "with-browser" : ""} ${terminalOpen ? "with-terminal" : ""} ${!browserOpen && !terminalOpen && showRight && workbenchView === "chat" && client.snapshot ? "with-right" : ""}`}
 			style={
 				{
 					"--sidebar-width": `${sidebarWidth}px`,
@@ -6511,10 +6515,11 @@ export function App() {
 						</button>
 						<button
 							role="tab"
-							aria-selected={workbenchView === "terminal"}
-							className={workbenchView === "terminal" ? "active" : ""}
+							aria-selected={terminalOpen}
+							aria-controls="terminal-dock"
+							className={terminalOpen ? "active" : ""}
 							title={t("terminal")}
-							onClick={() => setWorkbenchView("terminal")}
+							onClick={() => (terminalOpen ? setTerminalOpen(false) : openTerminal())}
 						>
 							<TerminalSquare size={15} />
 							<span>{t("terminal")}</span>
@@ -7125,16 +7130,6 @@ export function App() {
 				{workbenchView === "changes" && selectedWorkspace && (
 					<WorkspaceChangesView token={client.token} workspaceId={selectedWorkspace.id} />
 				)}
-				{terminalVisited && client.token && (
-					<Suspense fallback={<div className="workbench-empty">{t("loadingTerminal")}</div>}>
-						<TerminalWorkbench
-							key={client.token}
-							token={client.token}
-							{...(selectedWorkspace ? { workspaceId: selectedWorkspace.id } : {})}
-							active={workbenchView === "terminal"}
-						/>
-					</Suspense>
-				)}
 				{workbenchView === "tools" && selectedWorkspace && (
 					<ToolsView
 						tools={client.tools}
@@ -7175,6 +7170,17 @@ export function App() {
 				)}
 			</main>
 
+			{terminalVisited && client.token && (
+				<Suspense fallback={terminalOpen ? <div className="workbench-empty">{t("loadingTerminal")}</div> : null}>
+					<TerminalWorkbench
+						key={client.token}
+						token={client.token}
+						{...(selectedWorkspace ? { workspaceId: selectedWorkspace.id } : {})}
+						active={terminalOpen}
+						onClose={() => setTerminalOpen(false)}
+					/>
+				</Suspense>
+			)}
 			{browserOpen && browserWorkspaceId && (
 				<BrowserPanel
 					key={browserKey}
@@ -7187,7 +7193,7 @@ export function App() {
 					}}
 				/>
 			)}
-			{!browserOpen && showRight && workbenchView === "chat" && client.snapshot && (
+			{!browserOpen && !terminalOpen && showRight && workbenchView === "chat" && client.snapshot && (
 				<RightRail
 					snapshot={client.snapshot}
 					usageOverview={client.usageOverview}
@@ -7200,7 +7206,7 @@ export function App() {
 					onClose={() => setShowRight(false)}
 				/>
 			)}
-			{!browserOpen && showRight && workbenchView === "chat" && client.snapshot && (
+			{!browserOpen && !terminalOpen && showRight && workbenchView === "chat" && client.snapshot && (
 				<button className="right-rail-scrim" aria-label={t("closeRunPanel")} onClick={() => setShowRight(false)} />
 			)}
 			{mobileNav && (

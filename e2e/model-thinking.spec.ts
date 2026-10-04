@@ -178,7 +178,7 @@ test("manual levels persist, update the picker, and can return to automatic", as
 });
 
 for (const viewport of [
-	{ width: 1440, height: 1000 },
+	{ width: 1440, height: 900 },
 	{ width: 390, height: 844 },
 ]) {
 	test("keeps capability menus visible at " + viewport.width + "px", async ({ page }, testInfo) => {
@@ -193,5 +193,45 @@ for (const viewport of [
 		expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
 		expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
 		await page.screenshot({ path: testInfo.outputPath("model-thinking.png"), fullPage: true });
+	});
+
+	test("selects thinking effort with wallpaper at " + viewport.width + "px", async ({ page }, testInfo) => {
+		await page.setViewportSize(viewport);
+		if (viewport.width < 720) await page.getByRole("button", { name: "打开导航" }).click();
+		await page.getByRole("button", { name: "设置", exact: true }).click();
+		await page.getByRole("button", { name: "青绿极光", exact: true }).click();
+		await page.getByRole("button", { name: "关闭", exact: true }).click();
+		await expect(page.locator("html")).toHaveAttribute("data-wallpaper", "true");
+		await selectModel(page, "gpt-5.5");
+		await page.locator(".thinking-menu-item").click();
+		const menu = page.getByRole("menu", { name: "思考强度", exact: true });
+		const box = (await menu.boundingBox())!;
+		expect(box.x).toBeGreaterThanOrEqual(0);
+		expect(box.y).toBeGreaterThanOrEqual(0);
+		expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+		expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+		await page.screenshot({ path: testInfo.outputPath("wallpaper-thinking.png") });
+		await menu
+			.getByRole("menuitemradio")
+			.filter({ has: page.locator("strong", { hasText: /^高$/ }) })
+			.click();
+		await expect(menu).toHaveCount(0);
+		await expect(page.locator(".thinking-trigger-effort")).toHaveText("高");
+		await page.reload();
+		await selectModel(page, "gpt-5.5");
+		await page.locator(".thinking-menu-item").click();
+		await expect(
+			menu.getByRole("menuitemradio").filter({ has: page.locator("strong", { hasText: /^高$/ }) })
+		).toHaveAttribute("aria-checked", "true");
+		await menu.getByRole("button", { name: "返回模型设置" }).click();
+		await expect(menu).toHaveCount(0);
+		await expect(page.getByRole("menu", { name: "模型设置", exact: true })).toBeVisible();
+		await page.locator(".thinking-menu-item").click();
+		await page.keyboard.press("Escape");
+		await expect(menu).toHaveCount(0);
+		await page.locator(".thinking-menu-item").click();
+		await page.getByRole("tab", { name: "对话", exact: true }).click();
+		await expect(menu).toHaveCount(0);
+		await expect(page.locator(".thinking-trigger")).toHaveAttribute("aria-expanded", "false");
 	});
 }
