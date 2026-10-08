@@ -17,6 +17,7 @@ import { CompactionActivity } from "./components/CompactionActivity.js";
 import { GoalActivityCard } from "./components/GoalActivityCard";
 import { SkillManagerDialog } from "./components/SkillManagerDialog.js";
 import { McpView } from "./components/McpView.js";
+import { PhoneAccessSettings } from "./components/PhoneAccessSettings.js";
 import { MediaModelSettings } from "./components/MediaModelSettings.js";
 import { ComputerUseSettings, useComputerUse } from "./components/ComputerUseSettings.js";
 import { OfficialAccountSettings } from "./components/OfficialAccountSettings.js";
@@ -250,7 +251,8 @@ const STATUS_LABELS: Record<string, LocaleKey> = {
 
 const ONBOARDING_STORAGE_KEY = "wuming.onboarding.complete";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "wuming.sidebar.collapsed";
-type SettingsSection = "general" | "official" | "models" | "usage" | "connection" | "updates" | "computer" | "agents";
+type SettingsSection =
+	"phone" | "general" | "official" | "models" | "usage" | "connection" | "updates" | "computer" | "agents";
 type UsageRange = 7 | 14 | 30;
 const SIDEBAR_WIDTH_STORAGE_KEY = "wuming.sidebar.width";
 const DEFAULT_SIDEBAR_WIDTH = 252;
@@ -6175,6 +6177,16 @@ export function App() {
 			hint: locale === "en" ? "Desktop control" : "桌面控制",
 			icon: <Command size={17} />,
 		},
+		...(client.executionEnvironment?.placement === "local_device"
+			? [
+					{
+						id: "phone" as const,
+						label: locale === "en" ? "Phone access" : "手机访问",
+						hint: locale === "en" ? "Pair & continue" : "配对与远程接续",
+						icon: <Plug size={17} />,
+					},
+				]
+			: []),
 		{
 			id: "connection",
 			label: t("connectionSettings"),
@@ -7455,6 +7467,11 @@ export function App() {
 												hidden={settingsSection !== "updates"}
 											>
 												<DesktopUpdateSettings model={desktopUpdates} />
+											</section>
+										)}
+										{settingsSection === "phone" && (
+											<section className="settings-pane" id="settings-panel-phone">
+												<PhoneAccessSettings token={client.token} />
 											</section>
 										)}
 										<section

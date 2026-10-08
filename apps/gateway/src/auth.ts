@@ -2,6 +2,10 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { WorkspaceSummary } from "@wuming/protocol";
 
 export interface GatewayPrincipal {
+	/** Authenticated only by the independent phone listener; never accepted from a header. */
+	remoteDeviceId?: string;
+	/** Explicit desktop pairing grant, never supplied by the phone. */
+	phoneWorkbench?: boolean;
 	id: string;
 	workspaces: WorkspaceSummary[];
 	/** Only the single-user local profile may include hidden/unregistered workspaces in usage totals. */

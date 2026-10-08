@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { PhoneAccess, phoneCommandAllowed, type PhoneAccessOptions } from './phone-access.js';
 import {
   createServer,
   type IncomingMessage,
@@ -199,6 +200,7 @@ export interface GatewayEvaluationService {
 import type { AgentTeamService } from './agent-teams.js';
 
 export interface GatewayServerOptions {
+  phoneAccess?: PhoneAccessOptions;
   teams?: AgentTeamService;
   auth: GatewayAuth;
   orchestrator: SessionOrchestrator;
@@ -343,6 +345,7 @@ export class GatewayServer implements AsyncDisposable {
   readonly #onError: (error: unknown) => void;
   readonly #logger: StructuredLogger;
   readonly #http: HttpServer;
+  readonly #phone: PhoneAccess | undefined;
   #shuttingDown = false;
   #activeRequests = 0;
 
@@ -421,6 +424,22 @@ export class GatewayServer implements AsyncDisposable {
       maxPayload: options.maxPayloadBytes ?? 1024 * 1024,
       handleProtocols: (protocols) => (protocols.has('wuming.v1') ? 'wuming.v1' : false),
     });
+    this.#phone = options.phoneAccess ? new PhoneAccess(options.phoneAccess) : undefined;
+    this.#phone?.bind({
+      http: (request, response, principal) => this.#httpRequest(request, response, principal),
+      upgrade: (request, socket, head, principal) => {
+        if ([...this.#connections].filter(c => c.principal.remoteDeviceId === principal.remoteDeviceId).length >= 4)
+          return rejectUpgrade(socket, 429, 'Too Many Requests');
+        this.#wss.handleUpgrade(request, socket, head, ws => this.#accept(ws, principal, false));
+      },
+      revoke: deviceId => {
+        for (const connection of this.#connections)
+          if (connection.principal.remoteDeviceId && (!deviceId || connection.principal.remoteDeviceId === deviceId)) {
+            connection.ws.close(1008, 'Phone access revoked');
+            connection.ws.terminate();
+          }
+      },
+    });
     this.#http.on('upgrade', (request, socket, head) => {
       void this.#upgrade(request, socket, head);
     });
@@ -440,7 +459,7 @@ export class GatewayServer implements AsyncDisposable {
     });
   }
 
-  async #httpRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  async #httpRequest(request: IncomingMessage, response: ServerResponse, phonePrincipal?: GatewayPrincipal): Promise<void> {
     if (this.#shuttingDown) return this.#json(response, 503, { error: 'Server shutting down' });
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
@@ -448,8 +467,23 @@ export class GatewayServer implements AsyncDisposable {
         this.#json(response, 200, { status: 'ok' });
         return;
       }
-      if (!this.#originAllowed(request)) {
+      if (!phonePrincipal && !this.#originAllowed(request)) {
         this.#json(response, 403, { error: 'Origin is not allowed' });
+        return;
+      }
+      const phoneControl = /^\/api\/phone-access\/([a-z]+)$/.exec(url.pathname);
+      if (phoneControl) {
+        if (phonePrincipal || !this.#phone || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? ''))
+          throw Object.assign(new Error('Phone management is local-only'), { httpStatus: 403 });
+        const principal = await this.#authenticateHttp(request);
+        if (!principal || principal.remoteDeviceId) throw Object.assign(new Error('Desktop authentication required'), { httpStatus: 401 });
+        this.#requirePrincipalPermission(principal, 'admin');
+        const action = phoneControl[1]!;
+        if ((action === 'status' && request.method !== 'GET') || (action !== 'status' && request.method !== 'POST'))
+          throw Object.assign(new Error('Method not allowed'), { httpStatus: 405 });
+        const input: unknown = action === 'status' ? {} : JSON.parse((await this.#readRequestBody(request)).toString('utf8'));
+        if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('Invalid input'), { httpStatus: 400 });
+        this.#json(response, 200, await this.#phone.control(action, input as Record<string, unknown>, principal));
         return;
       }
       const upload = /^\/api\/workspaces\/([^/]+)\/artifacts$/.exec(url.pathname);
@@ -489,7 +523,7 @@ export class GatewayServer implements AsyncDisposable {
         this.#json(response, 404, { error: 'Not found' });
         return;
       }
-      const principal = await this.#authenticateHttp(request);
+      const principal = phonePrincipal ?? await this.#authenticateHttp(request);
       if (!principal) {
         response.setHeader('WWW-Authenticate', 'Bearer');
         this.#json(response, 401, { error: 'Unauthorized' });
@@ -683,7 +717,9 @@ export class GatewayServer implements AsyncDisposable {
         } catch {
           throw Object.assign(new Error('X-Wuming-File-Name is invalid'), { httpStatus: 400 });
         }
-        const content = await this.#readRequestBody(request);
+        const content = await this.#readRequestBody(request, phonePrincipal ? Math.min(this.#maxArtifactBytes, 10 * 1024 * 1024) : this.#maxArtifactBytes);
+        if (phonePrincipal?.remoteDeviceId && !this.#phone?.isActive(phonePrincipal.remoteDeviceId))
+          throw Object.assign(new Error('Device authorization expired or revoked'), { httpStatus: 403 });
         const created = await this.#artifacts.create({
           workspaceId,
           ownerId: principal.id,
@@ -712,7 +748,7 @@ export class GatewayServer implements AsyncDisposable {
           'content-type': value.record.ref.mimeType,
           'content-length': String(value.content.length),
           'content-disposition': `attachment; filename="artifact"; filename*=UTF-8''${encoded}`,
-          'cache-control': 'private, max-age=31536000, immutable',
+          'cache-control': phonePrincipal ? 'no-store' : 'private, max-age=31536000, immutable',
           'x-content-type-options': 'nosniff',
         });
         response.end(value.content);
@@ -890,9 +926,9 @@ export class GatewayServer implements AsyncDisposable {
     ].includes(type);
   }
 
-  async #readRequestBody(request: IncomingMessage): Promise<Buffer> {
+  async #readRequestBody(request: IncomingMessage, maximum = this.#maxArtifactBytes): Promise<Buffer> {
     const declared = Number(request.headers['content-length'] ?? 0);
-    if (Number.isFinite(declared) && declared > this.#maxArtifactBytes) {
+    if (Number.isFinite(declared) && declared > maximum) {
       throw Object.assign(new Error('Artifact exceeds the upload limit'), { httpStatus: 413 });
     }
     const chunks: Buffer[] = [];
@@ -900,7 +936,7 @@ export class GatewayServer implements AsyncDisposable {
     for await (const raw of request) {
       const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
       size += chunk.length;
-      if (size > this.#maxArtifactBytes)
+      if (size > maximum)
         throw Object.assign(new Error('Artifact exceeds the upload limit'), { httpStatus: 413 });
       chunks.push(chunk);
     }
@@ -1006,6 +1042,12 @@ export class GatewayServer implements AsyncDisposable {
 
   async #message(connection: ConnectionState, raw: RawData): Promise<void> {
     if (this.#shuttingDown) return connection.ws.close(1001, 'Server shutting down');
+    if (connection.principal.remoteDeviceId && !this.#phone?.isActive(connection.principal.remoteDeviceId))
+      return connection.ws.close(1008, 'Phone access revoked');
+    if (connection.principal.remoteDeviceId) {
+      try { this.#phone?.checkMessage(connection.principal.remoteDeviceId); }
+      catch { return connection.ws.close(1008, 'Phone request rate limit'); }
+    }
     let value: unknown;
     try {
       value = JSON.parse(raw.toString());
@@ -1039,8 +1081,8 @@ export class GatewayServer implements AsyncDisposable {
         type: 'hello',
         protocolVersion: PROTOCOL_VERSION,
         connectionId: connection.connectionId,
-        capabilities: this.#capabilities,
-        executionEnvironment: this.#executionEnvironment,
+        capabilities: connection.principal.remoteDeviceId ? this.#capabilities.filter(c => ['session.resume', 'approval', 'artifact'].includes(c)) : this.#capabilities,
+        executionEnvironment: connection.principal.remoteDeviceId ? { ...this.#executionEnvironment, terminalMode: 'disabled', previewEnabled: false } : this.#executionEnvironment,
         serverTime: this.#clock(),
       });
       if (message.resumeCursor) this.#replay(connection, message.resumeCursor);
@@ -1048,6 +1090,7 @@ export class GatewayServer implements AsyncDisposable {
     }
     if (message.type === 'hello') return connection.ws.close(1002, 'Hello already completed');
     if (message.type !== 'request') {
+      if (connection.principal.remoteDeviceId) return connection.ws.close(1008, 'Desktop-only capability');
       await this.#terminalMessage(connection, message as TerminalClientMessage);
       return;
     }
@@ -1177,12 +1220,22 @@ export class GatewayServer implements AsyncDisposable {
       idempotencyKey,
       connectionId: connection.connectionId,
       principalId: connection.principal.id,
+      ...(connection.principal.remoteDeviceId ? { remoteDeviceId: connection.principal.remoteDeviceId } : {}),
       command: command.type,
       ...(sessionId === undefined ? {} : { sessionId }),
     });
     try {
+      if (connection.principal.remoteDeviceId && !phoneCommandAllowed(command.type, connection.principal.phoneWorkbench))
+        throw Object.assign(new Error('此能力仅限电脑端'), { protocolCode: 'forbidden' });
       if (connection.principal.role === 'viewer' && !this.#isReadOnlyCommand(command.type))
         throw Object.assign(new Error('Permission denied'), { protocolCode: 'forbidden' });
+      if (connection.principal.remoteDeviceId) {
+        if (command.type === 'session.create' && (command.sandboxMode !== 'workspace_write' || command.approvalPolicy !== 'on_risk'))
+          throw Object.assign(new Error('手机新会话必须使用工作区写入及风险审批'), { protocolCode: 'forbidden' });
+        if ((command.type === 'session.create' || command.type === 'session.model.set') &&
+            !this.#availableModels().some(m => m.authenticated && m.model.provider === command.model.provider && m.model.id === command.model.id))
+          throw Object.assign(new Error('只能选择电脑已配置且可用的模型'), { protocolCode: 'forbidden' });
+      }
       let result = await this.#dispatch(connection, idempotencyKey, command);
       const operationTracked =
         command.type === 'turn.prompt' ||
@@ -2393,7 +2446,7 @@ export class GatewayServer implements AsyncDisposable {
           });
         }
         return this.#approvals.respond({
-          principalId: connection.principal.id,
+          principalId: connection.principal.remoteDeviceId ? `${connection.principal.id}:phone:${connection.principal.remoteDeviceId}` : connection.principal.id,
           idempotencyKey,
           sessionId: command.sessionId,
           approvalId: command.approvalId,
@@ -2570,6 +2623,7 @@ export class GatewayServer implements AsyncDisposable {
   }
 
   async close(): Promise<void> {
+    await this.#phone?.close();
     this.beginShutdown();
     await this.#officialAccounts?.dispose();
     this.#unsubscribeStore();

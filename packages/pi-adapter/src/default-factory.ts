@@ -16,6 +16,7 @@ import { buildWumingSystemPrompt, refreshWumingSystemDate } from "./system-promp
 import { ToolRecoveryMonitor } from "./tool-recovery.js";
 import { stableToolDefinitions } from "./prompt-cache.js";
 import { guardedModelStream } from "./model-stream.js";
+import { installLoopCompaction } from "./loop-compaction.js";
 import { PromptCacheObserver } from "./cache-diagnostics.js";
 import { CacheUsageObserver } from "./cache-usage-evidence.js";
 import { pendingReferenceMessage } from "./reference-context.js";
@@ -222,6 +223,7 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		session.setAutoRetryEnabled(options.autoRetry ?? false);
 		pendingReference = () => pendingReferenceMessage(activeReferenceContext, session.agent.state.messages);
 		session.setAutoCompactionEnabled(options.autoCompaction ?? true);
+		installLoopCompaction(session);
 		let initialToolChoicePending =
 			options.initialToolChoice === "required" && session.agent.state.messages.length === 0;
 		const cacheObserver = new PromptCacheObserver();

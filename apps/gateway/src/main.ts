@@ -1465,6 +1465,14 @@ async function main(): Promise<void> {
 	}
 	const server = new GatewayServer({
 		auth,
+		...(localUserCapabilities
+			? {
+					phoneAccess: {
+						storePath: join(dataDir, "phone-devices.json"),
+						webRoot: join(projectRoot, "apps", "web", "dist"),
+					},
+				}
+			: {}),
 		teams,
 		...(desktop ? { allowedOrigins: ["wuming://app"], strictLoopbackHost: true } : {}),
 		orchestrator,

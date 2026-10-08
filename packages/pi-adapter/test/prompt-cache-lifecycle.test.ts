@@ -36,6 +36,14 @@ async function fixture(
 		threshold?: boolean;
 		crossMidnightInTool?: boolean;
 		customPrompt?: "builder" | "project";
+		loop?: {
+			inputTokens?: number;
+			resultSize?: number;
+			disabled?: boolean;
+			failSummary?: boolean;
+			cancelSummary?: AbortController;
+			queued?: boolean;
+		};
 	} = {}
 ) {
 	const root = await mkdtemp(join(tmpdir(), "wuming-cache-lifecycle-"));
@@ -51,6 +59,9 @@ async function fixture(
 	const requests: WireRequest[] = [];
 	const errors: unknown[] = [];
 	let summaries = 0;
+	let toolExecutions = 0;
+	const sequence: string[] = [];
+	const progress: string[] = [];
 	const server = createServer(async (request, response) => {
 		try {
 			const chunks: Buffer[] = [];
@@ -59,6 +70,16 @@ async function fixture(
 			const summary = JSON.stringify(system(body)).includes("You are a context summarization assistant.");
 			if (summary) summaries++;
 			else requests.push(body);
+			sequence.push(summary ? "summary" : "inference");
+			if (summary && options.loop?.cancelSummary) {
+				options.loop.cancelSummary.abort(new Error("test cancellation"));
+				return;
+			}
+			if (summary && options.loop?.failSummary) {
+				response.writeHead(400, { "Content-Type": "application/json" });
+				response.end(JSON.stringify({ error: { message: "summary fixture rejected", type: "invalid_request_error" } }));
+				return;
+			}
 			if (!summary && requests.length === options.overflowAt) {
 				response.writeHead(400, { "Content-Type": "application/json" });
 				response.end(
@@ -72,8 +93,9 @@ async function fixture(
 				);
 				return;
 			}
-			const callTool = !summary && options.crossMidnightInTool && requests.length === 1;
-			const input = !summary && options.threshold && requests.length === 1 ? 127001 : 1000;
+			const callTool = !summary && (options.crossMidnightInTool || options.loop) && requests.length === 1;
+			const input =
+				!summary && requests.length === 1 ? (options.loop?.inputTokens ?? (options.threshold ? 127001 : 1000)) : 1000;
 			const frame = {
 				id: `response-${requests.length}-${summaries}`,
 				object: "chat.completion.chunk",
@@ -85,14 +107,12 @@ async function fixture(
 						delta: callTool
 							? {
 									role: "assistant",
-									tool_calls: [
-										{
-											index: 0,
-											id: "cross-midnight",
-											type: "function",
-											function: { name: "check_clock", arguments: "{}" },
-										},
-									],
+									tool_calls: Array.from({ length: options.loop ? 2 : 1 }, (_, index) => ({
+										index,
+										id: `check-${index}`,
+										type: "function",
+										function: { name: "check_clock", arguments: "{}" },
+									})),
 								}
 							: {
 									role: "assistant",
@@ -139,9 +159,9 @@ async function fixture(
 		sessionDataDir: join(root, "sessions"),
 		resolveWorkspace: () => workspace,
 		autoRetry: false,
-		autoCompaction: Boolean(options.overflowAt || options.threshold),
+		autoCompaction: !options.loop?.disabled && Boolean(options.overflowAt || options.threshold || options.loop),
 		...(options.customPrompt === "builder" ? { buildSystemPrompt: () => customPrompt } : {}),
-		...(options.crossMidnightInTool
+		...(options.crossMidnightInTool || options.loop
 			? {
 					createCustomTools: () => [
 						{
@@ -150,8 +170,18 @@ async function fixture(
 							description: "Advance the test clock",
 							parameters: Type.Object({}),
 							execute: async () => {
-								vi.setSystemTime(new Date("2026-09-24T16:01:00Z"));
-								return { content: [{ type: "text" as const, text: "Clock advanced" }], details: {} };
+								toolExecutions++;
+								await new Promise((resolve) => setTimeout(resolve, 5));
+								sequence.push("tool-complete");
+								if (options.crossMidnightInTool) vi.setSystemTime(new Date("2026-09-24T16:01:00Z"));
+								if (options.loop?.queued && toolExecutions === 2 && activeSession!.getSteeringMessages().length === 0)
+									await activeSession!.steer("QUEUED_CONSTRAINT_KEEP");
+								return {
+									content: [
+										{ type: "text" as const, text: "Clock advanced" + "x".repeat(options.loop?.resultSize ?? 0) },
+									],
+									details: {},
+								};
 							},
 						},
 					],
@@ -206,7 +236,7 @@ async function fixture(
 			created++;
 			const session = await createSession(input);
 			activeSession = session as AgentSession;
-			if (options.overflowAt || options.threshold) {
+			if (options.overflowAt || options.threshold || (options.loop && !options.loop.disabled)) {
 				// Exercise real SDK compaction with a small deterministic retained suffix.
 				vi.spyOn(activeSession.settingsManager, "getCompactionSettings").mockReturnValue({
 					enabled: true,
@@ -220,6 +250,9 @@ async function fixture(
 	let turn = 0;
 	return {
 		requests,
+		sequence,
+		progress,
+		toolExecutions: () => toolExecutions,
 		created: () => created,
 		summaryCount: () => summaries,
 		setReference: (content: string | undefined) => {
@@ -245,7 +278,14 @@ async function fixture(
 					content: [{ type: "text", text: `Continue task ${turn}` }],
 				},
 			};
-			return runtime.executeTurn({ operation, snapshot, onProgress: () => {}, signal: AbortSignal.timeout(15000) });
+			return runtime.executeTurn({
+				operation,
+				snapshot,
+				onProgress: (event) => {
+					if (event.type === "context.compaction") progress.push(event.status);
+				},
+				signal: options.loop?.cancelSummary?.signal ?? AbortSignal.timeout(15000),
+			});
 		},
 		async close() {
 			await runtime[Symbol.asyncDispose]();
@@ -394,6 +434,90 @@ it("restores data after completed-turn compaction without triggering another mod
 		expect((await test.run()).failure).toBeUndefined();
 		expect(test.requests).toHaveLength(2);
 		expect(snapshotMessages(test.requests.at(-1)!)).toHaveLength(1);
+	} finally {
+		await test.close();
+	}
+}, 30000);
+
+it.each([{ inputTokens: 123000 }, { inputTokens: 110000, resultSize: 40000 }, { inputTokens: 123000, queued: true }])(
+	"compacts within a parallel tool loop before the next inference (%j)",
+	async (loop) => {
+		const test = await fixture({ loop });
+		try {
+			const result = await test.run();
+			expect(result.failure).toBeUndefined();
+			expect(test.toolExecutions()).toBe(2);
+			expect(test.sequence.slice(0, 3)).toEqual(["inference", "tool-complete", "tool-complete"]);
+			expect(test.sequence.indexOf("summary")).toBe(3);
+			expect(test.sequence.at(-1)).toBe("inference");
+			expect(test.requests).toHaveLength(2);
+			const retained = JSON.stringify(test.requests[1]);
+			expect(retained).toContain("check-0");
+			expect(retained).toContain("check-1");
+			expect(test.requests[1]!.messages.filter((message) => message.role === "tool")).toHaveLength(2);
+			expect(result.compactions).toEqual([expect.objectContaining({ reason: "threshold" })]);
+			expect(test.progress).toEqual(["running", "complete"]);
+			expect(snapshotMessages(test.requests[1]!)).toHaveLength(1);
+			expect(JSON.stringify(system(test.requests[1]!))).toContain("ACTIVE_POLICY_MUST_REMAIN");
+			if ("queued" in loop) expect(JSON.stringify(test.requests[1])).toContain("QUEUED_CONSTRAINT_KEEP");
+		} finally {
+			await test.close();
+		}
+	},
+	30000
+);
+
+it.each([{ inputTokens: 1000 }, { inputTokens: 123000, disabled: true }])(
+	"does not compact low-budget or explicitly disabled tool loops (%j)",
+	async (loop) => {
+		const test = await fixture({ loop });
+		try {
+			expect((await test.run()).failure).toBeUndefined();
+			expect(test.summaryCount()).toBe(0);
+			expect(test.requests).toHaveLength(2);
+			expect(test.toolExecutions()).toBe(2);
+		} finally {
+			await test.close();
+		}
+	},
+	30000
+);
+
+it("pauses on summary failure without sending another inference or retrying compaction", async () => {
+	const test = await fixture({ loop: { inputTokens: 123000, failSummary: true } });
+	try {
+		expect((await test.run()).failure).toBeDefined();
+		expect(test.summaryCount()).toBe(1);
+		expect(test.requests).toHaveLength(1);
+		expect(test.toolExecutions()).toBe(2);
+		expect(test.progress).toEqual(["running", "failed"]);
+	} finally {
+		await test.close();
+	}
+}, 30000);
+
+it("stops when a retained tool batch is still over budget instead of compacting forever", async () => {
+	const test = await fixture({ loop: { inputTokens: 110000, resultSize: 300000 } });
+	try {
+		const result = await test.run();
+		expect(result.failure?.message).toContain("remains over budget");
+		expect(test.requests).toHaveLength(1);
+		expect(result.compactions).toHaveLength(1);
+		expect(test.summaryCount()).toBeLessThanOrEqual(2);
+		expect(test.toolExecutions()).toBe(2);
+	} finally {
+		await test.close();
+	}
+}, 30000);
+
+it("cancels an in-loop summary without deadlock or a resumed inference", async () => {
+	const test = await fixture({ loop: { inputTokens: 123000, cancelSummary: new AbortController() } });
+	try {
+		await test.run().catch((error: unknown) => expect(error).toBeDefined());
+		expect(test.summaryCount()).toBe(1);
+		expect(test.requests).toHaveLength(1);
+		expect(test.toolExecutions()).toBe(2);
+		expect(test.progress).toEqual(["running", "cancelled"]);
 	} finally {
 		await test.close();
 	}

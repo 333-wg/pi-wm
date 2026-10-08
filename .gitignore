@@ -15,3 +15,15 @@ test-results/
 release/
 .desktop-stage/
 .wuming/queue-preview/
+
+# Local previews, credentials and release verification evidence (keep shared skills).
+/.wuming/*
+!/.wuming/skills/
+/apps/gateway/.wuming/
+/apps/web/src/components/*.backup
+/apps/web/src/components/*.tmp
+/apps/web/src/components/keyboard-nav-workbench.patch
+/ENHANCEMENT_SUMMARY.md
+/PHASE1_OPTIMIZATION_SUMMARY.md
+/document.querySelector(.project-row.selected))
+/new
