@@ -94,6 +94,7 @@ declare global {
 				onState(callback: (state: BrowserState) => void): () => void;
 			};
 			connect(): Promise<DesktopConnection>;
+			pathForFile?(file: File): string;
 			windowChrome?: boolean;
 			openMenu?(): Promise<void>;
 			setWindowTheme?(theme: "light" | "dark"): Promise<void>;

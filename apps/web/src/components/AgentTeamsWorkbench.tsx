@@ -528,7 +528,8 @@ export function AgentTeamsWorkbench(props: Props) {
 						</div>
 					) : view === "lanes" ? (
 						<AgentTeamsCanvas
-							tasks={visible}
+							tasks={frame.tasks}
+							visibleIds={new Set(visible.map((value) => value.id))}
 							members={frame.members}
 							selected={selectedTask}
 							onSelect={selectTask}

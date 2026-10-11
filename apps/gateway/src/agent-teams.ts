@@ -20,6 +20,9 @@ export interface AgentMemberOptions {
 	thinkingLevel?: ThinkingLevel;
 }
 
+const MAX_TEAM_MEMBERS = 5;
+const MEMBER_LIMIT_MESSAGE = `A team supports at most ${MAX_TEAM_MEMBERS} members including the lead`;
+
 const fail = (message: string): never => {
 	throw new OrchestratorError("conflict", message);
 };
@@ -261,7 +264,7 @@ export class AgentTeamService {
 	}
 	async #addMember(sessionId: string, name: string, role: string, actionId: string, options: AgentMemberOptions) {
 		const { team } = this.#lead(sessionId);
-		if (team.members.length >= 8) return fail("A team supports at most 8 members including the lead");
+		if (team.members.length >= MAX_TEAM_MEMBERS) return fail(MEMBER_LIMIT_MESSAGE);
 		if (team.members.some((member) => member.name.toLowerCase() === name.toLowerCase()))
 			return fail("Member names must be unique");
 		const parent = this.runner.store.loadSnapshot(sessionId)!;
@@ -292,11 +295,9 @@ export class AgentTeamService {
 		return this.store.change(
 			team.id,
 			(current) => {
-				if (
-					current.members.length >= 8 ||
-					current.members.some((member) => member.name.toLowerCase() === name.toLowerCase())
-				)
-					return fail("Member limit or duplicate member name");
+				if (current.members.length >= MAX_TEAM_MEMBERS) return fail(MEMBER_LIMIT_MESSAGE);
+				if (current.members.some((member) => member.name.toLowerCase() === name.toLowerCase()))
+					return fail("Member names must be unique");
 				const member: AgentTeamMember = {
 					id: randomUUID(),
 					name,
@@ -866,7 +867,7 @@ export class AgentTeamService {
 						"Explicit user assignments override automatic suitability selection: use the named member/template for the specified responsibility even if another seems preferable. A user saying only these members forbids adding others; assigning one member a role does not forbid filling other roles. Preserve requested models and settings. If a named template is missing, unavailable or cannot perform the assigned work with its permitted tools, report the blocker and request a user decision; never silently substitute a different member, fabricate a same-named template, or bypass restrictions. Reuse existing team members before adding duplicates.",
 						"Startup requires actions, not promises: after bounded project inspection, call Agent and TaskCreate/TaskUpdate to give each new teammate a concrete first task with an owner, scope, dependencies and acceptance criteria. Make at least one teammate task executable now; do not leave only a lead, unassigned tasks, or an entire roster waiting on unfinished lead work. Do not implement the whole project yourself and call it teamwork. If truly blocked, explain the specific blocker rather than claiming the team is working.",
 						"Continuous delegation policy: lead owns decomposition, coordination, integration and final acceptance, not all implementation. Before substantial local implementation and after each result, failure or phase change, compare the objective with delivered work and refresh TaskList. Delegate meaningful implementation, tests, fixes and verification throughout execution; do not use teammates only for preliminary research and then implement everything yourself. For build/change objectives, assign concrete artifact-producing work as soon as its inputs are available. For research-only objectives, research outputs are valid deliverables; do not invent coding tasks.",
-						"Keep staffing active throughout the project: reuse a suitable retained member for follow-up work with TaskCreate/TaskUpdate, including moving from research to implementation when their role and tools permit it. Proactively call Agent when an independent workstream needs additional capacity or expertise, even after startup; do not wait for the user to ask you to add members. Respect explicit roster/model constraints, frozen tool permissions and the 8-member limit including lead. A busy suitable member is not a reason to absorb all remaining work: queue its next owned task or add a useful non-duplicate member within those limits. Give every added member an executable assignment as soon as dependencies permit.",
+						"Keep staffing active throughout the project: reuse a suitable retained member for follow-up work with TaskCreate/TaskUpdate, including moving from research to implementation when their role and tools permit it. Proactively call Agent when an independent workstream needs additional capacity or expertise, even after startup; do not wait for the user to ask you to add members. Respect explicit roster/model constraints, frozen tool permissions and the 5-member limit including lead. A busy suitable member is not a reason to absorb all remaining work: queue its next owned task or add a useful non-duplicate member within those limits. Give every added member an executable assignment as soon as dependencies permit.",
 						"Before coding locally, dispatch available independent work with explicit owners, concrete outputs, acceptance checks, dependencies and disjoint writePaths. For coding tasks, require members to edit files directly and return changed paths plus verification evidence, not just advice for the lead. Keep tightly coupled decisions, small integration edits and truly serial urgent blockers local when delegation would delay progress; explain that choice briefly. Do not duplicate active member work, silently take over owned scopes, or do long implementation while suitable members sit idle. When review finds defects, assign repairs back to the owner and verification to a suitable member where useful. End the turn only when waiting on real work, a specific blocker, or after acceptance; do not stop with actionable unassigned work.",
 						"When all currently recorded tasks are completed, check the original objective for missing deliverables: a research-only board does not satisfy a build request. Delegate remaining deliverables, or perform final acceptance if the objective is genuinely satisfied.",
 					]

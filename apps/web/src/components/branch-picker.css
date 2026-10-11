@@ -1,0 +1,161 @@
+.composer-branch-context {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	padding: 4px 4px 8px;
+}
+.branch-picker {
+	min-width: 0;
+}
+.composer-project-context > span {
+	max-width: 50%;
+}
+.composer-project-context > .branch-picker {
+	flex: 0 1 auto;
+}
+.composer-project-context .branch-picker-trigger {
+	max-width: min(240px, 100%);
+}
+.branch-picker-trigger {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 240px;
+	padding: 5px 9px;
+	border: 0;
+	border-radius: 16px;
+	background: var(--surface-sunken);
+	color: var(--muted);
+	font-size: 12px;
+}
+.branch-picker-trigger span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.branch-picker-trigger svg {
+	flex-shrink: 0;
+}
+.branch-picker-trigger:hover {
+	background: var(--surface-hover);
+}
+.branch-picker-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 160;
+}
+.branch-picker-menu {
+	position: fixed;
+	width: min(360px, calc(100vw - 24px));
+	max-height: calc(100dvh - 24px);
+	overflow-y: auto;
+	padding: 14px;
+	border: 1px solid var(--line);
+	border-radius: 18px;
+	background: var(--surface);
+	color: var(--text);
+	box-shadow: 0 12px 40px #0002;
+	font-size: 13px;
+}
+.branch-picker-menu header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 8px;
+}
+.branch-picker-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--muted);
+}
+.branch-picker-menu input {
+	width: 100%;
+	min-width: 0;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface-sunken);
+	color: var(--text);
+	padding: 9px;
+	font: inherit;
+}
+.branch-picker-list {
+	min-height: 130px;
+	max-height: min(260px, 35dvh);
+	overflow-y: auto;
+	margin: 10px 0;
+}
+.branch-picker-list button,
+.branch-picker-create {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	padding: 10px 8px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: inherit;
+	text-align: left;
+	font: inherit;
+}
+.branch-picker-list button span {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.branch-picker-list button svg {
+	flex-shrink: 0;
+}
+.branch-picker-list button:hover:not(:disabled),
+.branch-picker-create:hover:not(:disabled) {
+	background: var(--surface-hover);
+}
+.branch-picker-list button[aria-current="true"] {
+	opacity: 1;
+	background: var(--surface-sunken);
+}
+.branch-picker-create {
+	border-top: 1px solid var(--line);
+	border-radius: 0;
+	padding-top: 14px;
+}
+.branch-picker-hint,
+.branch-picker-menu form p {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.6;
+	margin: 10px 0 0;
+}
+.branch-picker-error {
+	color: var(--red);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	margin-top: 10px;
+	max-height: 140px;
+	overflow-y: auto;
+}
+.branch-picker-menu form label {
+	display: block;
+	margin-bottom: 8px;
+}
+.branch-picker-form-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
+}
+.branch-picker-form-actions button {
+	padding: 7px 12px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface-sunken);
+	color: var(--text);
+}
+@media (max-width: 600px) {
+	.branch-picker-trigger {
+		max-width: 180px;
+	}
+}

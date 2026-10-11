@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { GoalSummary, SessionSnapshot, SubagentSummary } from "@wuming/protocol";
 import { buildTeamFrame, layoutTeamTasks, teamTaskState, type TeamTask } from "../src/lib/agent-teams";
 import { AgentTeamsWorkbench } from "../src/components/AgentTeamsWorkbench";
+import { AgentTeamsCanvas } from "../src/components/AgentTeamsCanvas";
+import { teamText } from "../src/components/agent-teams-messages";
 import { renderLocalized } from "./render-localized";
 
 const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 };
@@ -118,6 +120,84 @@ describe("team execution projection", () => {
 		const frame = buildTeamFrame(snapshot, [{ ...child(), result: "" }], []);
 		expect(frame.messages[0]).toMatchObject({ timestamp: 30, text: "", kind: "result" });
 		expect(buildTeamFrame(snapshot, [{ ...child(), result: "" }], [])).toEqual(frame);
+	});
+	it("preserves all stages and coordinates when searching a downstream task", () => {
+		const first = buildTeamFrame(snapshot, [child()], []).tasks[0]!;
+		const tasks = [
+			{ ...first, id: "a", dependsOn: [] },
+			{ ...first, id: "b", dependsOn: ["a"] },
+			{ ...first, id: "c", dependsOn: ["b"] },
+		];
+		const full = layoutTeamTasks(tasks);
+		const filtered = layoutTeamTasks(tasks, new Set(["c"]));
+		expect(filtered.columns).toBe(3);
+		expect(filtered.positions).toEqual([full.positions[2]]);
+		expect(filtered.links).toEqual([]);
+		expect(layoutTeamTasks(tasks, new Set()).positions).toEqual([]);
+	});
+	it("shows later recorded member handoffs without inventing dependencies or serialising parallel tasks", () => {
+		const first = buildTeamFrame(snapshot, [child()], []).tasks[0]!;
+		const pending = { ...first };
+		delete pending.finishedAt;
+		const tasks: TeamTask[] = [
+			{ ...first, id: "a", createdAt: 10, finishedAt: 30 },
+			{ ...first, id: "parallel", createdAt: 20, finishedAt: 35 },
+			{ ...first, id: "b", createdAt: 40, finishedAt: 50 },
+			{ ...pending, id: "c", createdAt: 60, status: "running" },
+			{ ...first, id: "other-member", memberId: "other", createdAt: 60 },
+			{ ...first, id: "other-group", group: "another", createdAt: 60 },
+		];
+		const layout = layoutTeamTasks(tasks);
+		expect(layout.positions.map((entry) => entry.column)).toEqual([0, 0, 1, 2, 0, 0]);
+		expect(layout.links).toEqual([
+			{ source: "parallel", target: "b", kind: "continuation" },
+			{ source: "b", target: "c", kind: "continuation" },
+		]);
+		expect(tasks.every((task) => task.dependsOn.length === 0)).toBe(true);
+		expect(layoutTeamTasks([...tasks].reverse()).links).toEqual([...layout.links].reverse());
+	});
+	it("requires terminal evidence for handoffs and prioritises explicit dependencies", () => {
+		const first = buildTeamFrame(snapshot, [child()], []).tasks[0]!;
+		const pending = { ...first };
+		delete pending.finishedAt;
+		const unfinished = { ...first, id: "a", status: "running" as const, createdAt: 10, finishedAt: 20 };
+		expect(layoutTeamTasks([unfinished, { ...first, id: "b", createdAt: 40 }]).columns).toBe(1);
+		expect(
+			layoutTeamTasks([
+				{ ...pending, id: "a" },
+				{ ...first, id: "b", createdAt: 40 },
+			]).columns
+		).toBe(1);
+		const layout = layoutTeamTasks([
+			{ ...first, id: "a" },
+			{ ...first, id: "b", createdAt: 40, dependsOn: ["a"] },
+		]);
+		expect(layout.links).toEqual([{ source: "a", target: "b", kind: "dependency" }]);
+	});
+	it("renders stage navigation, distinct handoffs and active flow without altering task state", () => {
+		const first = buildTeamFrame(snapshot, [child()], []).tasks[0]!;
+		const pending = { ...first };
+		delete pending.finishedAt;
+		const tasks: TeamTask[] = [
+			{ ...first, id: "a", createdAt: 10, finishedAt: 30 },
+			{ ...pending, id: "b", createdAt: 40, status: "running" },
+		];
+		const html = renderLocalized(
+			createElement(AgentTeamsCanvas, {
+				tasks,
+				members: [],
+				selected: "b",
+				onSelect: () => {},
+				zoom: 1,
+				t: teamText("zh"),
+			})
+		);
+		expect(html).toContain('aria-label="阶段导航"');
+		expect(html).toContain('data-stage="2"');
+		expect(html).toContain('data-link-kind="continuation"');
+		expect(html).not.toContain("data-dependency");
+		expect(html).toContain('class="teams-link-pulse"');
+		expect(html).toContain("highlighted");
 	});
 	it("lays out fan-in deterministically and tolerates missing references and corrupt cycles", () => {
 		const first = buildTeamFrame(snapshot, [child()], []).tasks[0]!;

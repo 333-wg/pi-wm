@@ -1053,6 +1053,10 @@ export const GitDiffSchema = StrictObject({
 export type GitDiff = Static<typeof GitDiffSchema>;
 
 export const GitActionSchema = Type.Union([
+	StrictObject({
+		type: Type.Union([Type.Literal("branch.switch"), Type.Literal("branch.create")]),
+		branch: Type.String({ minLength: 1, maxLength: 1000 }),
+	}),
 	StrictObject({ type: Type.Literal("init") }),
 	StrictObject({ type: Type.Literal("trust"), path: Type.String({ minLength: 1, maxLength: 4000 }) }),
 	StrictObject({
@@ -1075,6 +1079,8 @@ export const GitActionSchema = Type.Union([
 export type GitAction = Static<typeof GitActionSchema>;
 
 export interface GitDetails {
+	/** Local branches only; includes the current unborn branch before its first commit. */
+	branches?: string[];
 	writable: boolean;
 	isRepository: boolean;
 	workspaceRoot?: string;

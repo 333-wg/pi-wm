@@ -47,6 +47,14 @@ export class WorkspaceGit {
 		const writable = await this.isRoot(top.output.trim());
 		const branch = (await this.run(["symbolic-ref", "--quiet", "--short", "HEAD"], true)).output.trim();
 		const hasCommits = (await this.run(["rev-parse", "--verify", "HEAD"], true)).code === 0;
+		const branches = (
+			await this.run(["for-each-ref", "--format=%(refname:strip=2)", "--sort=refname", "refs/heads/"])
+		).output
+			.trim()
+			.split("\n")
+			.map((name) => name.trim())
+			.filter(Boolean);
+		if (branch && !branches.includes(branch)) branches.unshift(branch);
 		const upstreamResult = await this.run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], true);
 		const upstream = upstreamResult.code === 0 ? upstreamResult.output.trim() : "";
 		const tracking = upstream
@@ -76,6 +84,7 @@ export class WorkspaceGit {
 			isRepository: true,
 			workspaceRoot,
 			repositoryRoot,
+			branches,
 			hasCommits,
 			...(branch ? { branch } : {}),
 			...(upstream ? { upstream } : {}),
@@ -124,6 +133,28 @@ export class WorkspaceGit {
 			return { message: "已初始化本地 Git 仓库。" };
 		}
 		if (!info.isRepository) throw fail("请先初始化 Git 仓库。", 409);
+		if (action.type === "branch.switch" || action.type === "branch.create") {
+			if (
+				action.branch.startsWith("-") ||
+				action.branch === "HEAD" ||
+				action.branch.includes("\0") ||
+				(await this.run(["check-ref-format", "refs/heads/" + action.branch], true)).code !== 0
+			)
+				throw fail("分支名称无效，请使用有效的 Git 分支名。");
+			if (action.type === "branch.switch" && action.branch === info.branch) return { message: "已经位于该分支。" };
+			if (!info.hasCommits) throw fail("请先创建首次提交，再创建或切换分支。", 409);
+			if (info.conflicts) throw fail("存在未解决的冲突，请先处理后再操作分支。", 409);
+			if (action.type === "branch.create") {
+				if (info.branches?.includes(action.branch)) throw fail("该分支已经存在，请选择其他名称。", 409);
+				await this.run(["switch", "--no-guess", "-c", action.branch]);
+				return { message: "已创建并切换到分支 " + action.branch + "。" };
+			}
+			if (!info.branches?.includes(action.branch)) throw fail("本地分支不存在，请刷新后重试。", 409);
+			if ((await this.run(["status", "--porcelain", "--untracked-files=all"])).output.trim())
+				throw fail("工作区有未提交更改，请先提交或在终端妥善保存后再切换分支。", 409);
+			await this.run(["switch", "--no-guess", action.branch]);
+			return { message: "已切换到分支 " + action.branch + "。" };
+		}
 		if (action.type === "stage" || action.type === "unstage") {
 			const status = await (await WorkspaceInspector.create(this.root)).gitStatus();
 			if (status.truncated) throw fail("更改列表过大，暂存操作请在终端完成。");

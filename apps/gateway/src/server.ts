@@ -219,6 +219,8 @@ export interface GatewayServerOptions {
   workspacePath?: (workspaceId: string) => string;
   terminal?: TerminalManager;
   maxArtifactBytes?: number;
+  maxFileAttachmentBytes?: number;
+  directoryAttachments?: { attach(workspaceId: string, ownerId: string, path?: string): Promise<import('@wuming/protocol').ArtifactRef> };
   models?: ModelMetadata[];
   customModels?: GatewayCustomModelService;
   officialAccounts?: OfficialAccountManager;
@@ -332,6 +334,8 @@ export class GatewayServer implements AsyncDisposable {
   readonly #workspacePath: ((workspaceId: string) => string) | undefined;
   readonly #terminal: TerminalManager | undefined;
   readonly #maxArtifactBytes: number;
+  readonly #maxFileAttachmentBytes: number;
+  readonly #directoryAttachments: GatewayServerOptions['directoryAttachments'];
   readonly #models: ModelMetadata[];
   readonly #customModels: GatewayCustomModelService | undefined;
   readonly #officialAccounts: OfficialAccountManager | undefined;
@@ -376,6 +380,8 @@ export class GatewayServer implements AsyncDisposable {
     this.#workspacePath = options.workspacePath;
     this.#terminal = options.terminal;
     this.#maxArtifactBytes = options.maxArtifactBytes ?? 10 * 1024 * 1024;
+    this.#maxFileAttachmentBytes = options.maxFileAttachmentBytes ?? this.#maxArtifactBytes;
+    this.#directoryAttachments = options.directoryAttachments;
     this.#models = options.models ?? [];
     this.#customModels = options.customModels;
     this.#officialAccounts = options.officialAccounts;
@@ -486,6 +492,7 @@ export class GatewayServer implements AsyncDisposable {
         this.#json(response, 200, await this.#phone.control(action, input as Record<string, unknown>, principal));
         return;
       }
+      const directoryAttachment = /^\/api\/workspaces\/([^/]+)\/directory-attachments$/.exec(url.pathname);
       const upload = /^\/api\/workspaces\/([^/]+)\/artifacts$/.exec(url.pathname);
       const download = /^\/api\/artifacts\/([^/]+)$/.exec(url.pathname);
       const projectCreate = url.pathname === '/api/projects';
@@ -503,6 +510,7 @@ export class GatewayServer implements AsyncDisposable {
       const gitAction = /^\/api\/workspaces\/([^/]+)\/git\/action$/.exec(url.pathname);
       const computerPath = /^\/api\/computer-use(?:\/(enable|install|stop))?$/.exec(url.pathname);
       if (
+        !directoryAttachment &&
         !upload &&
         !download &&
         !projectCreate &&
@@ -527,6 +535,24 @@ export class GatewayServer implements AsyncDisposable {
       if (!principal) {
         response.setHeader('WWW-Authenticate', 'Bearer');
         this.#json(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (directoryAttachment) {
+        if (request.method !== 'POST') throw Object.assign(new Error('Method not allowed'), { httpStatus: 405 });
+        if (principal.remoteDeviceId || this.#executionEnvironment.placement !== 'local_device' || !this.#directoryAttachments ||
+            !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? ''))
+          throw Object.assign(new Error('目录引用仅限本机使用'), { httpStatus: 403 });
+        const workspaceId = this.#decodePathSegment(directoryAttachment[1] ?? '');
+        this.#requirePrincipalWorkspace(principal, workspaceId);
+        this.#requirePrincipalPermission(principal, 'workspace.write');
+        let value: unknown;
+        try { value = JSON.parse((await this.#readRequestBody(request, 16384)).toString('utf8')); }
+        catch { throw Object.assign(new Error('Invalid directory request'), { httpStatus: 400 }); }
+        if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => key !== 'path') ||
+            ('path' in value && (typeof value.path !== 'string' || !value.path.trim() || value.path.includes('\0'))))
+          throw Object.assign(new Error('Invalid directory path'), { httpStatus: 400 });
+        const path = (value as { path?: string }).path;
+        this.#json(response, 201, { artifact: await this.#directoryAttachments.attach(workspaceId, principal.id, path) });
         return;
       }
       if (computerPath) {
@@ -717,7 +743,7 @@ export class GatewayServer implements AsyncDisposable {
         } catch {
           throw Object.assign(new Error('X-Wuming-File-Name is invalid'), { httpStatus: 400 });
         }
-        const content = await this.#readRequestBody(request, phonePrincipal ? Math.min(this.#maxArtifactBytes, 10 * 1024 * 1024) : this.#maxArtifactBytes);
+        const content = await this.#readRequestBody(request, phonePrincipal ? Math.min(this.#maxFileAttachmentBytes, this.#maxArtifactBytes, 10 * 1024 * 1024) : this.#maxFileAttachmentBytes);
         if (phonePrincipal?.remoteDeviceId && !this.#phone?.isActive(phonePrincipal.remoteDeviceId))
           throw Object.assign(new Error('Device authorization expired or revoked'), { httpStatus: 403 });
         const created = await this.#artifacts.create({

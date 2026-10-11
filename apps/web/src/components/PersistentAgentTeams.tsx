@@ -212,7 +212,7 @@ export function PersistentAgentTeams({ workspaceId, connected, available, listTe
 	const tasks = (team?.tasks ?? []).filter((value) =>
 		`${value.title} ${value.description} ${memberName(value.owner)}`.toLowerCase().includes(query.toLowerCase())
 	);
-	const canvasTasks: TeamTask[] = tasks.map((value) => ({
+	const canvasTasks: TeamTask[] = (team?.tasks ?? []).map((value) => ({
 		id: value.id,
 		title: value.title,
 		objective: value.description,
@@ -228,6 +228,7 @@ export function PersistentAgentTeams({ workspaceId, connected, available, listTe
 		...(value.owner ? { memberId: value.owner } : {}),
 		group: team?.name ?? "",
 		createdAt: value.createdAt,
+		...(["completed", "failed", "cancelled"].includes(value.status) ? { finishedAt: value.updatedAt } : {}),
 		usage: emptyUsage,
 		pendingApprovals: [],
 		...(value.result ? { result: value.result } : {}),
@@ -514,7 +515,9 @@ export function PersistentAgentTeams({ workspaceId, connected, available, listTe
 									<div className="teams-empty">{label("暂无任务", "No tasks")}</div>
 								) : view === "lanes" ? (
 									<AgentTeamsCanvas
+										key={team.id}
 										tasks={canvasTasks}
+										visibleIds={new Set(tasks.map((value) => value.id))}
 										members={team.members.map(({ model, ...value }) => ({
 											...value,
 											status: value.state,

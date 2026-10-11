@@ -57,7 +57,7 @@ try {
 			return popup.call(this, options);
 		};
 	});
-	await page.evaluate((url) => {
+	await page.evaluate(async (url) => {
 		const fixture = document.createElement("section");
 		fixture.id = "context-fixture";
 		fixture.style.cssText = "position:fixed;inset:50px 20px;background:white;z-index:99999;padding:24px;color:black";
@@ -65,6 +65,24 @@ try {
 			'<p id="answer">Generated answer text</p><a id="link">Local preview</a><p><textarea id="editor">Original input</textarea></p><input id="readonly" readonly value="Read only"><input id="password" type="password" value="secret"><div id="rich" contenteditable="true">Rich editor</div><p id="blank">Blank area</p>';
 		fixture.querySelector("#link").href = url;
 		document.body.append(fixture);
+		// Both uploaded attachments and generated artifacts render authenticated blobs.
+		for (const [id, width, height, color] of [["uploaded-image", 32, 24, "red"], ["generated-image", 24, 32, "blue"]]) {
+			const canvas = document.createElement("canvas");
+			canvas.width = width;
+			canvas.height = height;
+			const context = canvas.getContext("2d");
+			context.fillStyle = color;
+			context.fillRect(0, 0, width, height);
+			const blob = await new Promise((resolve) => canvas.toBlob(resolve));
+			const image = document.createElement("img");
+			image.id = id;
+			image.src = URL.createObjectURL(blob);
+			image.style.margin = "20px";
+			const button = document.createElement("button");
+			button.append(image);
+			fixture.append(button);
+			await image.decode();
+		}
 	}, url);
 	async function openMenu(selector, select = false) {
 		await desktop.evaluate(() => {
@@ -100,6 +118,23 @@ try {
 			menu.closePopup();
 			item.click(undefined, BrowserWindow.getAllWindows()[0], webContents.getFocusedWebContents());
 		}, label);
+	}
+	async function clipboardImageSize() {
+		return desktop.evaluate(async ({ clipboard, nativeImage }) => {
+			const item = (await clipboard.read()).find((item) => item.types.includes("image/png"));
+			if (!item) return undefined;
+			const blob = await item.getType("image/png");
+			const image = nativeImage.createFromBuffer(Buffer.from(await blob.arrayBuffer()));
+			if (image.isEmpty()) throw new Error("Copied image is empty");
+			return image.getSize();
+		});
+	}
+	for (const [selector, width, height] of [["#uploaded-image", 32, 24], ["#generated-image", 24, 32]]) {
+		await desktop.evaluate(({ clipboard }) => clipboard.writeText("Before image copy"));
+		const items = await openMenu(selector);
+		assert.ok(items.some((item) => item.label === "复制图片" && item.enabled));
+		await choose("复制图片");
+		await expect.poll(clipboardImageSize).toEqual({ width, height });
 	}
 	await openMenu("#answer", true);
 	await choose("复制");
@@ -142,7 +177,11 @@ try {
 	});
 	await page.locator("#blank").click({ button: "right" });
 	assert.equal(await desktop.evaluate(() => Boolean(globalThis.contextTestMenu)), false);
-	await page.evaluate(() => document.querySelector("#context-fixture").remove());
+	await page.evaluate(() => {
+		const fixture = document.querySelector("#context-fixture");
+		for (const image of fixture.querySelectorAll("img")) URL.revokeObjectURL(image.src);
+		fixture.remove();
+	});
 	const owner = { workspaceId: "context-menu-test", sessionId: "test" };
 	const state = await page.evaluate(
 		({ owner, url }) => window.wumingDesktop.browser.invoke({ ...owner, action: "open", url }),
@@ -170,8 +209,30 @@ try {
 	await expect.poll(() => desktop.evaluate(() => Boolean(globalThis.contextTestMenu))).toBe(true);
 	await choose("复制");
 	await expect.poll(() => desktop.evaluate(({ clipboard }) => clipboard.readText())).toBe("Preview selected text");
+	await desktop.evaluate(async ({ BrowserWindow, clipboard }) => {
+		await clipboard.writeText("Before preview image copy");
+		globalThis.contextTestMenu = undefined;
+		const wc = BrowserWindow.getAllWindows()[0].contentView.children.find((view) => view.webContents)?.webContents;
+		await wc.executeJavaScript(`(async () => {
+			getSelection().removeAllRanges();
+			const canvas = document.createElement("canvas");
+			canvas.width = 40; canvas.height = 30;
+			const context = canvas.getContext("2d");
+			context.fillStyle = "green"; context.fillRect(0, 0, 40, 30);
+			const image = document.createElement("img");
+			image.src = canvas.toDataURL();
+			image.style.cssText = "position:fixed;left:10px;top:10px";
+			document.body.replaceChildren(image);
+			await image.decode();
+		})()`);
+		wc.sendInputEvent({ type: "mouseDown", x: 20, y: 20, button: "right", clickCount: 1 });
+		wc.sendInputEvent({ type: "mouseUp", x: 20, y: 20, button: "right", clickCount: 1 });
+	});
+	await expect.poll(() => desktop.evaluate(() => Boolean(globalThis.contextTestMenu))).toBe(true);
+	await choose("复制图片");
+	await expect.poll(clipboardImageSize).toEqual({ width: 40, height: 30 });
 	console.log(
-		"Context menus passed: native right-click, selected-text copy, link copy/external dispatch, paste/cut/undo, read-only/password protection, plain-text paste, blank area, preview copy."
+		"Context menus passed: uploaded/generated blob image copy (decoded clipboard pixels), native right-click, selected-text copy, link copy/external dispatch, paste/cut/undo, read-only/password protection, plain-text paste, blank area, preview text/image copy."
 	);
 } finally {
 	if (desktop) {

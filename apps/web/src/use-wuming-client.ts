@@ -48,6 +48,7 @@ import type {
 	ToolStatus,
 } from "@wuming/protocol";
 import { workspaceApi } from "./workspace-api.js";
+import { readUploadedArtifact } from "./lib/attachment-upload.js";
 import { readStoredPermission, writeStoredPermission } from "./lib/permission-preference.js";
 import { readStoredThinking, thinkingLevelForModel, writeStoredThinking } from "./lib/thinking-preference.js";
 import { isImplicitWorkspace } from "./lib/workspaces.js";
@@ -1999,6 +2000,16 @@ export function useWumingClient() {
 		[]
 	);
 
+	const attachDirectory = useCallback(async (path?: string): Promise<ArtifactRef> => {
+		const workspaceId = snapshotRef.current?.session.workspaceId ?? state.selectedWorkspaceId ?? state.workspaces[0]?.id;
+		if (!workspaceId) throw new Error("未选择工作区");
+		const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/directory-attachments`, {
+			method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+			body: JSON.stringify(path ? { path } : {}),
+		});
+		return readUploadedArtifact(response);
+	}, [token, state.selectedWorkspaceId, state.workspaces]);
+
 	const uploadArtifact = useCallback(
 		async (file: File): Promise<ArtifactRef> => {
 			const workspaceId =
@@ -2013,9 +2024,7 @@ export function useWumingClient() {
 				},
 				body: file,
 			});
-			const value = (await response.json()) as { artifact?: ArtifactRef; error?: string };
-			if (!response.ok || !value.artifact) throw new Error(value.error ?? `上传失败，状态码 ${response.status}`);
-			return value.artifact;
+			return readUploadedArtifact(response);
 		},
 		[state.selectedWorkspaceId, state.workspaces, token]
 	);
@@ -2639,6 +2648,7 @@ export function useWumingClient() {
 		listAutomationRuns,
 		abortTurn,
 		uploadArtifact,
+		attachDirectory,
 		loadArtifact,
 		downloadArtifact,
 	};

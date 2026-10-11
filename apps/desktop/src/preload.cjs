@@ -1,6 +1,7 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 contextBridge.exposeInMainWorld("wumingDesktop", {
 	connect: () => ipcRenderer.invoke("desktop:connect"),
+	pathForFile: (file) => webUtils.getPathForFile(file),
 	browser: {
 		invoke: (request) => ipcRenderer.invoke("desktop:browser", request),
 		onFocusAddress: (callback) => {

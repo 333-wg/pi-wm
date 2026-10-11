@@ -2076,6 +2076,33 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		expect(rejected.error.code).toBe("invalid_request");
 	});
 
+	it("guards local directory references by authentication, placement, workspace and input", async () => {
+		for (const placement of ["local_device", "server"] as const) {
+			const store = new SqliteOrchestratorStore(":memory:"); cleanup.push(() => store.close());
+			let calls = 0;
+			const server = new GatewayServer({
+				auth: new StaticTokenAuth("secret", { id: "user-1", workspaces: [workspace] }),
+				orchestrator: new SessionOrchestrator(store, new GatewayRuntime()), store,
+				executionEnvironment: { placement, processMode: "disabled", terminalMode: "disabled", previewEnabled: false, platform: process.platform, shell: "test" },
+				directoryAttachments: { attach: async (workspaceId, ownerId, path) => {
+					calls++; expect(workspaceId).toBe(workspace.id); expect(ownerId).toBe("user-1");
+					expect(path === undefined || path === "D:/folder").toBe(true);
+					return { id: "reference", name: "folder.directory.json", mimeType: "application/json", size: 10, sha256: "a".repeat(64) };
+				} },
+			});
+			const address = await server.listen(); cleanup.push(() => server.close());
+			const base = `http://127.0.0.1:${address.port}/api/workspaces`;
+			const post = (id: string, body: string, authenticated = true) => fetch(`${base}/${id}/directory-attachments`, { method: "POST", headers: authenticated ? { Authorization: "Bearer secret", "Content-Type": "application/json" } : {}, body });
+			expect((await post(workspace.id, "{}", false)).status).toBe(401);
+			expect((await post("other", "{}")).status).toBe(403);
+			for (const body of ["null", "[]", "{\"path\":3}", "{\"path\":\"\"}", "{\"extra\":true}"]) expect((await post(workspace.id, body)).status).toBe(placement === "server" ? 403 : 400);
+			expect(calls).toBe(0);
+			expect((await post(workspace.id, JSON.stringify({ path: "D:/folder" }))).status).toBe(placement === "server" ? 403 : 201);
+			expect((await post(workspace.id, "{}")).status).toBe(placement === "server" ? 403 : 201);
+			expect(calls).toBe(placement === "server" ? 0 : 2);
+		}
+	});
+
 	it("authenticates workspace browsing and rejects escaping paths", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "wuming-gateway-workspace-"));
 		await mkdir(join(directory, "src"));

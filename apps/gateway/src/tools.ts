@@ -138,6 +138,17 @@ export function createBuiltinToolCatalog(options: BuiltinToolCatalogOptions): Ga
 			...reason(localUserCapabilities, "仅 local_device 模式可停用用户 MCP"),
 		},
 		{
+			name: "directory_read",
+			label: "读取引用目录",
+			description: "按需列出、搜索和读取用户附加的本机目录，只读且隔离于其他工作区",
+			category: "filesystem",
+			status: status(localUserCapabilities),
+			backend: "DirectoryAttachments",
+			risk: "low",
+			sandboxModes: [...allModes],
+			...reason(localUserCapabilities, "目录引用仅限本机使用"),
+		},
+		{
 			name: "read_file",
 			label: "读取文件",
 			description: "读取工作区内的文本文件",

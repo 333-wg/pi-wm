@@ -8,7 +8,7 @@ export function externalLink(value) {
 	return undefined;
 }
 
-export function contextMenuTemplate(params, { clipboard, openExternal, onCopyError = console.error }) {
+export function contextMenuTemplate(params, { clipboard, openExternal, copyImageAt, onCopyError = console.error }) {
 	const items = [];
 	const flags = params.editFlags ?? {};
 	const group = (entries) => {
@@ -25,6 +25,23 @@ export function contextMenuTemplate(params, { clipboard, openExternal, onCopyErr
 				click: async () => {
 					try {
 						await clipboard.writeText(params.linkURL);
+					} catch (error) {
+						onCopyError(error);
+					}
+				},
+			},
+		]);
+	}
+	if (params.mediaType === "image") {
+		group([
+			{
+				label: "复制图片",
+				enabled: Boolean(params.hasImageContents && copyImageAt),
+				click: async () => {
+					if (!params.hasImageContents || !copyImageAt) return;
+					try {
+						// Copy rendered pixels, including authenticated blob URLs, not the image address.
+						await copyImageAt(params.x, params.y);
 					} catch (error) {
 						onCopyError(error);
 					}
@@ -51,7 +68,13 @@ export function contextMenuTemplate(params, { clipboard, openExternal, onCopyErr
 export function installContextMenu(webContents, { window, Menu, clipboard, openExternal, onCopyError }) {
 	webContents.on("context-menu", (_event, params) => {
 		if (window.isDestroyed() || webContents.isDestroyed()) return;
-		const template = contextMenuTemplate(params, { clipboard, openExternal, onCopyError });
+		const template = contextMenuTemplate(params, {
+			clipboard, openExternal, onCopyError,
+			copyImageAt: (x, y) => {
+				if (window.isDestroyed() || webContents.isDestroyed()) throw new Error("Image source was closed");
+				return webContents.copyImageAt(x, y);
+			},
+		});
 		if (!template.length) return;
 		// Native edit roles must target the originating preview, not the workbench.
 		webContents.focus();

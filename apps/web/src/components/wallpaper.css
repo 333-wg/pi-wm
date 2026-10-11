@@ -569,10 +569,15 @@ html[data-wallpaper="true"]
 	--term-line: var(--line);
 	background: var(--wallpaper-reading);
 }
-/* Teams and Subtasks share the window wallpaper. Only individual content
-   cards get a reading surface; never blur or paint the full board. */
+/* Teams and Subtasks share the wallpaper without permanent dark slabs.
+   Reveal a light reading tint locally; keep status rails and focus outlines. */
 .app-shell[data-wallpaper="true"] .teams-workbench {
-	--team-card: var(--wallpaper-reading);
+	--team-card: transparent;
+	--team-card-reading: color-mix(
+		in srgb,
+		var(--wallpaper-solid-panel) calc(var(--wallpaper-panel) * 0.32),
+		transparent
+	);
 }
 .app-shell[data-wallpaper="true"]
 	:is(
@@ -584,6 +589,7 @@ html[data-wallpaper="true"]
 		.persistent-team-mailbox,
 		.teams-main,
 		.teams-inspector,
+		.teams-inspector-scroll,
 		.teams-formation,
 		.teams-timeline,
 		.teams-toolbar,
@@ -607,10 +613,48 @@ html[data-wallpaper="true"]
 		.teams-feed li,
 		.persistent-team-detail,
 		.persistent-member-detail,
-		.teams-inspector-scroll
+		.persistent-team-task-list button
 	) {
 	--surface: var(--team-card);
 	background: var(--team-card);
+	box-shadow: none;
+	text-shadow: 0 1px 3px color-mix(in srgb, var(--wallpaper-base) 65%, transparent);
+}
+.app-shell[data-wallpaper="true"] .teams-workbench
+	:is(
+		.persistent-team-member,
+		.persistent-team-messages article,
+		.teams-task-enhanced,
+		.teams-member,
+		.teams-member-enhanced,
+		.teams-feed li,
+		.persistent-team-detail,
+		.persistent-member-detail,
+		.persistent-team-task-list button
+	):focus-within {
+	--team-card: var(--team-card-reading);
+}
+@media (hover: hover) and (pointer: fine) {
+	.app-shell[data-wallpaper="true"] .teams-workbench
+		:is(
+			.persistent-team-member,
+			.persistent-team-messages article,
+			.teams-task-enhanced,
+			.teams-member,
+			.teams-member-enhanced,
+			.teams-feed li,
+			.persistent-team-detail,
+			.persistent-member-detail,
+			.persistent-team-task-list button
+		):hover {
+		--team-card: var(--team-card-reading);
+	}
+}
+/* Touch has no approach state; use the same low-opacity tint without shadows. */
+@media (hover: none), (pointer: coarse) {
+	.app-shell[data-wallpaper="true"] .teams-workbench {
+		--team-card: var(--team-card-reading);
+	}
 }
 .app-shell[data-wallpaper="true"] :is(.teams-lane-owner, .teams-lane-title, .teams-stage) {
 	text-shadow: 0 1px 3px var(--wallpaper-base);

@@ -31,6 +31,44 @@ async function commit(service: WorkspaceGit, root: string, content: string) {
 }
 
 describe("WorkspaceGit", () => {
+	it("lists, creates and switches local branches while preserving dirty files", async () => {
+		const { root, service } = await repository();
+		// Keep checkout bytes independent of the developer's global Windows line-ending settings.
+		await git(root, "config", "core.autocrlf", "false");
+		expect(await service.details()).toMatchObject({ branch: "main", branches: ["main"], hasCommits: false });
+		await expect(service.action({ type: "branch.create", branch: "feature/new" })).rejects.toThrow("首次提交");
+		await commit(service, root, "base\n");
+		await writeFile(join(root, "note.txt"), "unsaved\n");
+		await service.action({ type: "branch.create", branch: "feature/new" });
+		expect(await service.details()).toMatchObject({ branch: "feature/new", branches: ["feature/new", "main"] });
+		await expect(service.action({ type: "branch.switch", branch: "main" })).rejects.toThrow("未提交更改");
+		expect(await readFile(join(root, "note.txt"), "utf8")).toBe("unsaved\n");
+		await service.action({ type: "branch.switch", branch: "feature/new" });
+		await commit(service, root, "feature\n");
+		await service.action({ type: "branch.switch", branch: "main" });
+		expect(await readFile(join(root, "note.txt"), "utf8")).toBe("base\n");
+		await writeFile(join(root, "untracked.txt"), "keep");
+		await expect(service.action({ type: "branch.switch", branch: "feature/new" })).rejects.toThrow("未提交更改");
+		expect(await readFile(join(root, "untracked.txt"), "utf8")).toBe("keep");
+	}, 30000);
+
+	it("rejects invalid, duplicate and missing branches and supports detached HEAD recovery", async () => {
+		const { root, service } = await repository();
+		await commit(service, root, "base\n");
+		for (const branch of ["-force", "HEAD", "bad name", "../escape", "@{-1}", "bad\0name"])
+			await expect(service.action({ type: "branch.create", branch })).rejects.toThrow("分支名称无效");
+		await expect(service.action({ type: "branch.create", branch: "main" })).rejects.toThrow("已经存在");
+		await expect(service.action({ type: "branch.switch", branch: "missing" })).rejects.toThrow("不存在");
+		await git(root, "checkout", "--detach");
+		expect((await service.details()).branch).toBeUndefined();
+		await service.action({ type: "branch.create", branch: "recovered" });
+		expect((await service.details()).branch).toBe("recovered");
+		await mkdir(join(root, "nested"));
+		await expect(
+			new WorkspaceGit(join(root, "nested")).action({ type: "branch.switch", branch: "main" })
+		).rejects.toThrow("仓库根目录");
+	}, 30000);
+
 	it("discovers external initialization, push and clone without rewriting repository configuration", async () => {
 		const root = await mkdtemp(join(tmpdir(), "wuming-external-git-"));
 		roots.push(root);
@@ -119,6 +157,8 @@ describe("WorkspaceGit", () => {
 		await commit(service, root, "main\n");
 		await expect(git(root, "merge", "other")).rejects.toThrow();
 		expect(await service.details()).toMatchObject({ conflicts: 1 });
+		await expect(service.action({ type: "branch.create", branch: "conflicted" })).rejects.toThrow("未解决的冲突");
+		await expect(service.action({ type: "branch.switch", branch: "other" })).rejects.toThrow("未解决的冲突");
 		await expect(service.action({ type: "commit", message: "Unresolved" })).rejects.toThrow("未解决的冲突");
 		await writeFile(join(root, "note.txt"), "resolved\n");
 		await service.action({ type: "stage", paths: ["note.txt"] });

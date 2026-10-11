@@ -129,6 +129,16 @@ test("shows pending and failed uploads and allows retry", async ({ page }) => {
 	await expect(page.locator(".uploading-label")).toHaveCount(0);
 	await expect(page.locator(".attachment-chip")).toHaveCount(0);
 	await page.unroute("**/api/workspaces/*/artifacts");
+	await page.route("**/api/workspaces/*/artifacts", (route) => route.fulfill({
+		status: 502,
+		contentType: "text/plain",
+		body: "Local service unavailable",
+	}));
+	await pasteFiles(page, ["proxy-error.png"]);
+	await expect(page.getByRole("alert")).toContainText("本地服务暂时不可用");
+	await expect(page.getByRole("alert")).not.toContainText("Unexpected token");
+	await expect(page.locator(".uploading-label")).toHaveCount(0);
+	await page.unroute("**/api/workspaces/*/artifacts");
 	await pasteFiles(page, ["retry.png"]);
 	await expect(page.locator(".attachment-chip")).toHaveCount(1);
 	await expect(page.locator(".attachment-error")).toHaveCount(0);

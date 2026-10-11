@@ -1,6 +1,7 @@
 import { GoalPlanEditor, GoalPlanView, newGoalPlan } from "./components/GoalPlan";
 import clover from "./assets/wuming-clover.png";
 import { findToolSubagent } from "./lib/subagent-navigation.js";
+import { directoryAttachmentName, droppedAttachments, type AttachmentInput } from "./lib/attachment-upload.js";
 import { redactDiagnostic } from "./lib/redact.js";
 import {
 	activeRecovery,
@@ -113,6 +114,7 @@ import {
 import { validateCalendarSchedule, type CalendarSchedule } from "@wuming/protocol";
 import { CalendarScheduleEditor, SchedulePreview, scheduleLabel } from "./components/AutomationScheduleEditor";
 import { ScheduledTasks } from "./components/ScheduledTasks";
+import { BranchPicker } from "./components/BranchPicker";
 import type {
 	ArtifactRef,
 	AutomationRunSummary,
@@ -196,6 +198,9 @@ import { completedTurnProcesses } from "./lib/turn-process.js";
 import { isNearBottom } from "./lib/scroll.js";
 import { themeLabel } from "./lib/theme.js";
 import { ThemeSettings } from "./components/ThemeSettings.js";
+import { ChatAppearanceSettings } from "./components/ChatAppearanceSettings.js";
+import { useChatAppearance } from "./use-chat-appearance.js";
+import { chatAppearanceStyle } from "./lib/chat-appearance.js";
 import { createTranslator, localeLabel, useLocale, useT, type LocaleKey, type Translate } from "./lib/locale.js";
 import {
 	isImplicitWorkspace,
@@ -1478,7 +1483,8 @@ function Content({
 						)}
 						{!(onLoadArtifact && isPreviewableImageArtifact(part.artifact)) && (
 							<div className="artifact-line">
-								<FileCode2 size={15} /> <span>{part.artifact.name}</span>
+								{directoryAttachmentName(part.artifact) !== undefined ? <Folder size={15} /> : <FileCode2 size={15} />}
+								<span title={part.artifact.name}>{directoryAttachmentName(part.artifact) ?? part.artifact.name}</span>
 								{onDownload && (
 									<button
 										type="button"
@@ -1938,6 +1944,7 @@ function Composer({
 	onSend,
 	onAbort,
 	onUpload,
+	onAttachDirectory,
 	onLoadArtifact,
 	draftProjectName,
 	onDetachDraftProject,
@@ -1969,6 +1976,7 @@ function Composer({
 	onSend: (text: string, artifacts: ArtifactRef[], queueMode: "steer" | "follow_up") => Promise<void>;
 	onAbort: () => Promise<void>;
 	onUpload: (file: File) => Promise<ArtifactRef>;
+	onAttachDirectory: (path?: string) => Promise<ArtifactRef>;
 	onLoadArtifact: (artifact: ArtifactRef) => Promise<Blob>;
 	draftProjectName?: string;
 	onDetachDraftProject?: () => void;
@@ -1989,6 +1997,7 @@ function Composer({
 	const [sending, setSending] = useState(false);
 	const [selectingSkill, setSelectingSkill] = useState(false);
 	const [stopping, setStopping] = useState(false);
+	const [branchBusy, setBranchBusy] = useState(false);
 	const [trigger, setTrigger] = useState<Trigger>();
 	const [dismissed, setDismissed] = useState(false);
 	const [activeIndex, setActiveIndex] = useState(0);
@@ -2136,7 +2145,7 @@ function Composer({
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
 		const value = text.trim();
-		if ((!value && attachments.length === 0) || disabled || sending || uploading || selectingSkill) return;
+		if ((!value && attachments.length === 0) || disabled || branchBusy || sending || uploading || selectingSkill) return;
 		// A prompt that is nothing but a local command runs here instead of being
 		// sent to the runtime; anything after the name is passed as its argument.
 		const command = /^\/([A-Za-z0-9:._-]+)(?:\s+([\S\s]*))?$/.exec(value);
@@ -2173,7 +2182,7 @@ function Composer({
 		}
 	};
 
-	const uploadFiles = async (incoming: File[]) => {
+	const uploadFiles = async (incoming: AttachmentInput[]) => {
 		if (disabled || incoming.length === 0) return;
 		if (uploadInFlight.current || sending) {
 			setUploadError(t("waitForUpload"));
@@ -2192,7 +2201,11 @@ function Composer({
 			const results = await Promise.all(
 				selected.map(async (file) => {
 					try {
-						return { ok: true as const, artifact: await onUpload(file) };
+						if ("kind" in file && file.kind === "directory") {
+							if (!file.path) throw new Error(t("directoryDropUnavailable"));
+							return { ok: true as const, artifact: await onAttachDirectory(file.path) };
+						}
+						return { ok: true as const, artifact: await onUpload(file as File) };
 					} catch (error) {
 						return {
 							ok: false as const,
@@ -2234,12 +2247,12 @@ function Composer({
 				if (dragDepth.current === 0) setDraggingFiles(false);
 			}}
 			onDrop={(event) => {
-				const droppedFiles = [...event.dataTransfer.files];
-				if (droppedFiles.length === 0 && !Array.from(event.dataTransfer.types).includes("Files")) return;
+				const dropped = droppedAttachments(event.dataTransfer, window.wumingDesktop?.pathForFile);
+				if (dropped.length === 0 && !Array.from(event.dataTransfer.types).includes("Files")) return;
 				event.preventDefault();
 				dragDepth.current = 0;
 				setDraggingFiles(false);
-				void uploadFiles(droppedFiles);
+				void uploadFiles(dropped);
 			}}
 		>
 			{draggingFiles && (
@@ -2272,47 +2285,66 @@ function Composer({
 					void uploadFiles(files);
 				}}
 			/>
-			{draftProjectName && onDetachDraftProject && (
-				<div className="composer-project-context">
-					<button
-						type="button"
-						className="composer-project-remove"
-						aria-label={t("detachProject")}
-						data-tooltip={t("detachProject")}
-						onClick={onDetachDraftProject}
-					>
-						<Folder className="composer-project-folder" size={15} />
-						<X className="composer-project-x" size={13} />
-					</button>
-					<span title={draftProjectName}>{draftProjectName}</span>
+			{(workspaceId || (draftProjectName && onDetachDraftProject)) && (
+				<div className={draftProjectName && onDetachDraftProject ? "composer-project-context" : "composer-branch-context"}>
+					{draftProjectName && onDetachDraftProject && (
+						<>
+							<button
+								type="button"
+								className="composer-project-remove"
+								aria-label={t("detachProject")}
+								data-tooltip={t("detachProject")}
+								onClick={onDetachDraftProject}
+							>
+								<Folder className="composer-project-folder" size={15} />
+								<X className="composer-project-x" size={13} />
+							</button>
+							<span title={draftProjectName}>{draftProjectName}</span>
+						</>
+					)}
+					{workspaceId && (
+						<BranchPicker key={workspaceId} token={token} workspaceId={workspaceId}
+							disabled={disabled || active || sending} onBusyChange={setBranchBusy} />
+					)}
 				</div>
 			)}
 			{(attachments.length > 0 || uploadError || sendError) && (
 				<div className="composer-attachments">
-					{attachments.map((artifact) => (
+					{attachments.map((artifact) => {
+						const directoryName = directoryAttachmentName(artifact);
+						const displayName = directoryName ?? artifact.name;
+						return (
 						<div
-							className={`attachment-chip ${isPreviewableImageArtifact(artifact) ? "attachment-image" : ""}`}
+							className={`attachment-chip ${directoryName !== undefined ? "attachment-directory" : isPreviewableImageArtifact(artifact) ? "attachment-image" : ""}`}
 							key={artifact.id}
 						>
-							{isPreviewableImageArtifact(artifact) ? (
+							{directoryName !== undefined ? (
+								<div className="attachment-directory-icon" aria-hidden="true"><Folder size={26} /></div>
+							) : isPreviewableImageArtifact(artifact) ? (
 								<div className="attachment-image-preview">
 									<ArtifactMediaPreview artifact={artifact} onLoad={onLoadArtifact} />
 								</div>
 							) : (
 								<FileCode2 size={14} />
 							)}
-							<span title={artifact.name}>{artifact.name}</span>
+							{directoryName !== undefined ? (
+								<div className="attachment-directory-label" title={t("folderReferenceHint")}>
+									<span title={displayName}>{displayName}</span>
+									<small>{t("folderReferenceLabel")}</small>
+								</div>
+							) : <span title={artifact.name}>{artifact.name}</span>}
 							<button
 								type="button"
 								className="attachment-remove"
-								aria-label={t("removeArtifact", { name: artifact.name })}
-								title={t("removeArtifact", { name: artifact.name })}
+								aria-label={t("removeArtifact", { name: displayName })}
+								title={t("removeArtifact", { name: displayName })}
 								onClick={() => setAttachments((current) => current.filter((item) => item.id !== artifact.id))}
 							>
 								<X size={13} />
 							</button>
 						</div>
-					))}
+						);
+					})}
 					{uploadError && (
 						<div className="attachment-error" role="alert">
 							<CircleAlert size={13} />
@@ -2470,6 +2502,7 @@ function Composer({
 						title={sendDisabled && !localActionDraft ? (sendDisabledReason ?? "Model unavailable") : t("send")}
 						disabled={
 							disabled ||
+							branchBusy ||
 							(sendDisabled && !localActionDraft) ||
 							sending ||
 							uploading ||
@@ -5055,6 +5088,7 @@ export function App() {
 	const [shortcutsOpen, setShortcutsOpen] = useState(false);
 	const [evaluationRun, setEvaluationRun] = useState<RunSummary>();
 	const theme = useTheme();
+	const chatAppearance = useChatAppearance();
 	const wallpaper = useWallpaper();
 	const { locale, setLocale, t } = useLocale();
 	const [collapsedProjectIds, setCollapsedProjectIds] = useState(() => new Set<string>());
@@ -6018,7 +6052,12 @@ export function App() {
 		toggleSidebar,
 	]);
 
-	const themeSetting = <ThemeSettings theme={theme} locale={locale} wallpaper={wallpaper} />;
+	const themeSetting = (
+		<>
+			<ThemeSettings theme={theme} locale={locale} wallpaper={wallpaper} />
+			<ChatAppearanceSettings appearance={chatAppearance} locale={locale} />
+		</>
+	);
 	const languageSetting = (
 		<div className="language-setting">
 			<div>
@@ -6211,6 +6250,7 @@ export function App() {
 			style={
 				{
 					"--sidebar-width": `${sidebarWidth}px`,
+					...chatAppearanceStyle(chatAppearance.settings),
 					...wallpaperStyle(wallpaper.settings, wallpaper.imageUrl),
 				} as CSSProperties
 			}
@@ -7010,6 +7050,7 @@ export function App() {
 								}}
 								onAbort={client.abortTurn}
 								onUpload={client.uploadArtifact}
+								onAttachDirectory={client.attachDirectory}
 								onLoadArtifact={client.loadArtifact}
 								{...(!client.snapshot && selectedProject && implicitWorkspace
 									? {

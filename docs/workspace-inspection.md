@@ -8,6 +8,18 @@ workspace realpath.
 
 ## Git Workflow
 
+### 对话中的分支选择器
+
+对话输入框上方显示当前 Git 分支。点击后可搜索本地分支、切换已有分支，或选择「创建并切换新分支」。列表会定期刷新，也会在重新打开选择器或窗口恢复焦点时刷新。
+
+- 切换影响同一工作区的所有对话，不创建独立 worktree；当前对话执行任务时不可操作。
+- 切换已有分支要求工作区没有未提交或未跟踪的改动，不自动 stash、丢弃文件或强制覆盖。
+- 创建分支以当前 HEAD 为起点，保留未提交改动；首次提交前和冲突未解决时不可操作。
+- 仅本地设备模式且具备工作区写权限时可修改；非仓库目录不显示入口，仓库子目录保持只读。
+- 不自动获取远程分支。远程管理仍在「更改」视图或终端完成。
+
+API 通过现有 `git/action` 接收 `{"type":"branch.switch","branch":"main"}` 或 `{"type":"branch.create","branch":"feature/task"}`；`git/details` 的 `branches` 返回本地分支名称。
+
 The Changes view supports repository initialization, staging/unstaging the
 current file or all changes in the active scope, committing staged changes,
 remote address management, fetch, push, and fast-forward-only pull.

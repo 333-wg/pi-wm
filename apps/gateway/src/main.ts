@@ -4,6 +4,8 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ArtifactStore } from "@wuming/artifacts";
+import { fileAttachmentLimit } from "./attachment-limits.js";
+import { DirectoryAttachments } from "./directory-attachments.js";
 import { OfficialAccountManager, OfficialCredentialStore } from "@wuming/pi-adapter";
 import { HookPipeline, type CapabilityManifest } from "@wuming/capability-kernel";
 import type { ContextFragment } from "@wuming/context-engine";
@@ -848,11 +850,13 @@ async function main(): Promise<void> {
 	};
 
 	const store = new SqliteOrchestratorStore(join(dataDir, "wuming.db"));
+	const directoryAttachments = localUserCapabilities ? new DirectoryAttachments(join(dataDir, "directory-attachments")) : undefined;
 	const maxArtifactBytes = envPositiveNumber("WUMING_MAX_ARTIFACT_BYTES", 10 * 1024 * 1024);
+	const maxFileAttachmentBytes = fileAttachmentLimit(localUserCapabilities, maxArtifactBytes, process.env.WUMING_MAX_FILE_ATTACHMENT_BYTES);
 	const maxTextArtifactBytes = envPositiveNumber("WUMING_MAX_TEXT_ARTIFACT_BYTES", 2 * 1024 * 1024);
 	const maxVideoArtifactBytes = envPositiveNumber("WUMING_MAX_VIDEO_ARTIFACT_BYTES", 100 * 1024 * 1024);
 	const artifacts = await ArtifactStore.open(join(dataDir, "artifacts.db"), join(dataDir, "artifacts"), {
-		maxFileBytes: maxArtifactBytes,
+		maxFileBytes: maxFileAttachmentBytes,
 		maxImageBytes: maxArtifactBytes,
 		maxVideoBytes: maxVideoArtifactBytes,
 		maxTextBytes: maxTextArtifactBytes,
@@ -1099,7 +1103,7 @@ async function main(): Promise<void> {
 			...(localUserCapabilities
 				? {
 						resolveSessionConfigurationKey: async (snapshot) =>
-							`${await mcpCatalog.configurationKey(snapshot.session.workspaceId, workspacePathFor(snapshot.session.workspaceId))}:computer-v4=${Boolean(computer?.status().enabled)}`,
+							`${await mcpCatalog.configurationKey(snapshot.session.workspaceId, workspacePathFor(snapshot.session.workspaceId))}:computer-v4=${Boolean(computer?.status().enabled)}:directory-read-v1`,
 					}
 				: {}),
 			resolveArtifact: (artifact, snapshot) => artifacts.resolve(artifact, snapshot),
@@ -1276,6 +1280,7 @@ async function main(): Promise<void> {
 						: [];
 					const tools = [
 						...sandboxTools.map(markSkillSourceReads),
+						...(directoryAttachments?.tools(snapshot.session.workspaceId) ?? []),
 						...agencyTools,
 						...(agency.teams ? createAgentTeamTools(snapshot.session.id, agency.teams) : []),
 						...(computer?.status().enabled
@@ -1542,6 +1547,14 @@ async function main(): Promise<void> {
 		workspacePath: workspacePathFor,
 		...(terminal ? { terminal } : {}),
 		maxArtifactBytes,
+		maxFileAttachmentBytes,
+		...(directoryAttachments ? { directoryAttachments: {
+			attach: async (workspaceId: string, ownerId: string, path?: string) => {
+				const selected = path ?? (desktop ? await desktop.pickProject("directory") : await showLocalProjectPicker("directory")).path;
+				const reference = await directoryAttachments.add(workspaceId, selected);
+				return (await artifacts.create({ workspaceId, ownerId, name: `${reference.name.slice(0, 220)}.directory.json`, suppliedMimeType: "text/x-wuming-directory", content: Buffer.from(JSON.stringify({ type: "local_directory_reference", ...reference, access: "read_only", tool: "directory_read", notice: "Local directory reference, not a ZIP. Use directory_read with directoryId equal to id to list/search/read on demand. No files have been uploaded. References do not grant write or shell permissions." })) })).ref;
+			},
+		} } : {}),
 		models,
 		...(customModels ? { customModels } : {}),
 		...(officialAccounts ? { officialAccounts } : {}),

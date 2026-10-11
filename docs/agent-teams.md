@@ -86,7 +86,7 @@ For build requests, teammates should own actual implementation, repairs and
 verification, not just preliminary research. Suitable retained sessions receive
 owned follow-up tasks; the lead proactively creates members when useful parallel
 work needs capacity or expertise, subject to user roster constraints, tool policies
-and the existing eight-member limit. Small integration edits and genuinely serial
+and the five-member limit (including the lead). Small integration edits and genuinely serial
 blockers may remain with the lead. Research-only objectives need no invented code.
 Worker completion/failure notifications include a follow-up delegation checkpoint
 in the existing durable result message. This adds no polling turns or extra wakeups.
@@ -140,7 +140,9 @@ Members share the working directory. Overlapping declared file/directory write
 scopes serialize task claims. This is coordination, not filesystem isolation or
 an automatic Git merge system. Undeclared edits remain the model's responsibility.
 
-Limits: 8 members including the lead, 100 tasks, 5,000 messages, and 100 automatic
+团队人数上限为 **5 人（包含 Lead，即最多 4 名队友）**，创建入口和事务提交时均执行校验，禁止并发请求突破上限。已有超过上限的历史团队不裁剪成员或删除记录，但不能继续新增成员；重复调用已成功的创建操作仍返回原成员。
+
+Limits: 5 members including the lead, 100 tasks, 5,000 messages, and 100 automatic
 mail deliveries per member. Each member has its own inherited session budget;
 there is **no shared atomic team-wide spending cap**. The displayed cost sums
 member execution usage, excluding the launching chat's unrelated usage. Write

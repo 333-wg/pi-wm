@@ -44,16 +44,27 @@ export async function createAppProtocol({ webRoot, connection, fetchGateway = fe
 			headers.delete("cookie");
 			headers.set("origin", "wuming://app");
 			headers.set("authorization", `Bearer ${connection.token}`);
+			let body;
+			if (!["GET", "HEAD"].includes(request.method)) {
+				try {
+					body = await request.arrayBuffer();
+				} catch {
+					return Response.json(
+						{ error: "无法读取上传内容，请确认选择的是可读取的文件，而不是文件夹" },
+						{ status: 400 }
+					);
+				}
+			}
 			try {
 				return await fetchGateway(`${connection.baseUrl}${url.pathname}${url.search}`, {
 					method: request.method,
 					headers,
 					redirect: "error",
 					signal: request.signal,
-					...(["GET", "HEAD"].includes(request.method) ? {} : { body: await request.arrayBuffer() }),
+					...(body === undefined ? {} : { body }),
 				});
 			} catch {
-				return new Response("Local service unavailable", { status: 502 });
+				return Response.json({ error: "本地服务暂时不可用，请确认服务运行后重试" }, { status: 502 });
 			}
 		}
 		if (!["GET", "HEAD"].includes(request.method)) return new Response("Method not allowed", { status: 405 });

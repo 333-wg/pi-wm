@@ -91,6 +91,69 @@ test("clipboard write rejection is handled and reported", async () => {
 	assert.deepEqual(errors, [error]);
 });
 
+test("images copy rendered pixels at the clicked position, not blob addresses", async () => {
+	for (const srcURL of ["blob:wuming://app/uploaded", "blob:wuming://app/generated", "https://example.com/image.png"]) {
+		const copied = [];
+		const { dependencies } = fixture({});
+		const items = contextMenuTemplate(
+			{ mediaType: "image", hasImageContents: true, srcURL, x: 42, y: 87 },
+			{ ...dependencies, copyImageAt: (x, y) => copied.push([x, y]) }
+		);
+		assert.equal(items.length, 1);
+		assert.equal(items[0].label, "复制图片");
+		assert.equal(items[0].enabled, true);
+		await items[0].click();
+		assert.deepEqual(copied, [[42, 87]]);
+	}
+});
+
+test("unloaded images disable copy and non-image media do not offer image copy", async () => {
+	const { dependencies } = fixture({});
+	let copied = false;
+	const deps = { ...dependencies, copyImageAt: () => { copied = true; } };
+	const items = contextMenuTemplate({ mediaType: "image", hasImageContents: false }, deps);
+	assert.equal(items[0].enabled, false);
+	await items[0].click();
+	assert.equal(copied, false);
+	assert.equal(contextMenuTemplate({ mediaType: "image", hasImageContents: true }, dependencies)[0].enabled, false);
+	assert.deepEqual(contextMenuTemplate({ mediaType: "video", hasImageContents: true }, deps), []);
+});
+
+test("image copy failures are reported and linked images retain link actions", async () => {
+	const error = new Error("Image copy failed");
+	const errors = [];
+	const { dependencies } = fixture({});
+	const items = contextMenuTemplate(
+		{ mediaType: "image", hasImageContents: true, linkURL: "https://example.com" },
+		{ ...dependencies, copyImageAt: () => { throw error; }, onCopyError: (error) => errors.push(error) }
+	);
+	assert.deepEqual(items.map((item) => item.label ?? item.type), ["在外部浏览器打开", "复制链接地址", "separator", "复制图片"]);
+	await items.at(-1).click();
+	assert.deepEqual(errors, [error]);
+});
+
+test("image copy targets its originating contents and handles closure while menu is open", async () => {
+	const contents = new EventEmitter();
+	let destroyed = false, menu;
+	const copied = [], errors = [];
+	contents.isDestroyed = () => destroyed;
+	contents.focus = () => {};
+	contents.copyImageAt = (x, y) => copied.push([x, y]);
+	installContextMenu(contents, {
+		window: { isDestroyed: () => false },
+		Menu: { buildFromTemplate: (items) => ({ popup: () => { menu = items; } }) },
+		...fixture({}).dependencies,
+		onCopyError: (error) => errors.push(error),
+	});
+	contents.emit("context-menu", {}, { mediaType: "image", hasImageContents: true, x: 20, y: 30 });
+	await menu[0].click();
+	assert.deepEqual(copied, [[20, 30]]);
+	destroyed = true;
+	await menu[0].click();
+	assert.equal(copied.length, 1);
+	assert.equal(errors[0].message, "Image source was closed");
+});
+
 test("popup focuses originating contents, carries frame and avoids empty or destroyed menus", () => {
 	const contents = new EventEmitter();
 	let focused = false,

@@ -6,6 +6,18 @@ for the WebSocket connection. An artifact reference submitted in a prompt is
 resolved again on the server and must belong to the session workspace; client
 supplied names, MIME types, hashes, and sizes are never trusted.
 
+## 文件与文件夹附件
+
+桌面端可点击输入框的附件按钮选择文件，也可直接将一个或多个文件拖入对话框；上传不会移动或删除原文件。不再提供独立文件夹按钮。本机文件夹可直接拖入，作为**只读目录引用**（支持与普通文件混合），不压缩成 ZIP、遍历全目录或上传内部文件，空目录也可引用。普通浏览器无法取得拖入目录的真实路径，可改用桌面端或上传目录中的文件。
+
+目录不再打包，因此不涉及 ZIP 大小限制。本机（`local_device`）普通文件/用户自行制作的 ZIP 上传默认不设应用层字节上限；可通过 `WUMING_MAX_FILE_ATTACHMENT_BYTES` 设置正整数上限，`0` 表示不设字节上限（仅本机模式允许）。远程部署默认沿用 `WUMING_MAX_ARTIFACT_BYTES`，手机上传仍最多 10 MiB。图片、视频及直接嵌入文本的独立限制不变。普通文件上传仍占用内存，实际容量受浏览器、Node.js 和电脑可用资源限制，不保证任意大小。
+
+目录引用没有原先的 2000 个条目、32 层打包限制，每条消息仍最多 8 个附件。聊天中保存一个小型 `目录名.directory.json` 引用清单，模型通过 `directory_read` 工具按需列目录、glob、grep、读取文本；读取结果反映磁盘当前内容，并有单次搜索/输出上限，截断时需要缩小查询。搜索沿用 `.gitignore` 和 `.git/node_modules` 排除规则；直接读取已知路径仍可读取隐藏文件，请勿引用敏感目录。
+
+引用授权持久化在本机数据目录的 `directory-attachments` 中，按工作区隔离。注册接口要求本机回环、桌面鉴权和工作区权限，拒绝手机及服务器部署。上传伪造 JSON 不会创建目录授权。文件读取沿用路径校验，拒绝 `..`、绝对路径及指向目录外的符号链接。引用不授予写入或 Shell 权限，不切换当前项目；要修改项目仍使用「打开项目」。移除输入框中的附件不会撤销已发送历史中的引用；本机目录被删除、移动或权限改变后读取会失败，需要重新附加。引用与路径不能移到另一台电脑直接使用。
+
+历史 ZIP 附件保持可下载，不自动转换成目录引用。使用新功能时需重新附加原目录。引用路径和实际读取的内容可能进入所配置模型的上下文，不代表数据永不离开电脑。
+
 ## HTTP API
 
 Upload a raw request body to:
@@ -44,7 +56,7 @@ content with an authenticated `GET /api/artifacts/:artifactId`. Downloads use
   instead of failing the turn.
 - Reads re-hash stored bytes so object corruption is detected before delivery.
 
-Defaults are 10 MiB per file, 2 MiB per directly embedded text file, 40 million
+Remote file and image defaults are 10 MiB (local file/ZIP uploads have no default byte cap), 2 MiB per directly embedded text file, 40 million
 image pixels, and 200,000 extracted document characters. They can be changed
 with `WUMING_MAX_TEXT_ARTIFACT_BYTES`, `WUMING_MAX_IMAGE_PIXELS`,
 `WUMING_MAX_EXTRACTED_TEXT_CHARS`, and `WUMING_MAX_ARTIFACT_BYTES`.

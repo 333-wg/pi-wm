@@ -336,14 +336,28 @@ describe("buildWumingSystemPrompt environment", () => {
 		expect(verification).toContain("retain final screenshots");
 	});
 
-	it("requires inspecting returned screenshots at desktop and mobile sizes", () => {
+	it("defaults frontend visual verification to desktop without requiring mobile coverage", () => {
 		const guidelines = section(build([tool("browser_screenshot"), tool("browser_open")]), "tool_guidelines");
+		expect(guidelines).toContain("For ordinary frontend web work, default to desktop-only verification");
 		expect(guidelines).toContain("1440x900");
-		expect(guidelines).toContain("390x844");
+		expect(guidelines).toContain("A frontend change or existing responsive CSS alone does not require mobile testing");
+		expect(guidelines).toContain("do not add mobile work or report missing mobile coverage as incomplete");
+		expect(guidelines).not.toContain("at desktop (1440x900) and mobile (390x844) viewport sizes");
 		expect(guidelines).toContain("Inspect the returned image content yourself");
 		expect(guidelines).toContain("fresh screenshots after the last edit");
 		expect(guidelines).toContain("visual verification as incomplete");
 		expect(section(build([]), "tool_guidelines")).not.toContain("complete a visual review loop");
+	});
+
+	it("limits mobile verification to mobile scope or an explicit user request", () => {
+		const guidelines = section(build([tool("browser_screenshot"), tool("browser_open")]), "tool_guidelines");
+		expect(guidelines).toContain(
+			"Test mobile adaptation only when the project or feature targets mobile devices, the task involves mobile adaptation, or the user explicitly requests mobile testing"
+		);
+		expect(guidelines).toContain("Respect explicit user limits on platforms and viewport sizes");
+		expect(guidelines).toContain("when mobile testing is required, use a relevant mobile size such as 390x844");
+		expect(guidelines).toContain("User-specified sizes take precedence");
+		expect(guidelines).toContain("For mobile-only tasks, desktop testing is not required unless requested");
 	});
 
 	it("states the session's sandbox mode and nothing else", () => {
@@ -517,7 +531,10 @@ describe("restricted tool guidance", () => {
 
 	it("reports limited screenshot coverage without inventing controls", () => {
 		const guidelines = section(build([tool("browser_screenshot")]), "tool_guidelines");
-		expect(guidelines).toContain("responsive coverage as incomplete");
+		expect(guidelines).toContain("report only required viewport coverage that cannot be verified as incomplete");
+		expect(guidelines).toContain("default to desktop-only verification");
+		expect(guidelines).toContain("when mobile testing is outside the task scope");
+		expect(guidelines).not.toContain("report responsive coverage as incomplete");
 		expect(guidelines).toContain("Inspect the returned image content yourself");
 		for (const unavailable of ["browser_open", "browser_action", "browser_diagnostics"])
 			expect(guidelines).not.toContain(unavailable);

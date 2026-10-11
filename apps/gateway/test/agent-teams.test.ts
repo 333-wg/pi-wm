@@ -111,6 +111,61 @@ const taskInput = (owner?: string) => ({
 });
 
 describe("persistent Agent Teams", () => {
+	it("caps teams at five including the lead and keeps creation retries idempotent at capacity", async () => {
+		const f = await fixture();
+		const members: AgentTeamMember[] = [];
+		for (let index = 0; index < 4; index++)
+			members.push(await f.service.addMember(f.lead, `worker-${index}`, "Implement", `member-${index}`));
+		const full = f.service.get(f.lead)!;
+		expect(full.members).toHaveLength(5);
+		await expect(f.service.addMember(f.lead, "overflow", "Implement", "overflow")).rejects.toThrow(
+			"at most 5 members including the lead"
+		);
+		expect(await f.service.addMember(f.lead, "worker-0", "Implement", "member-0")).toEqual(members[0]);
+		expect(f.service.get(f.lead)).toEqual(full);
+		const agent = createAgentTeamTools(f.lead, f.service).find((tool) => tool.name === "Agent")!;
+		expect(agent.description).toContain("5-member limit including lead");
+		await expect(
+			agent.execute(
+				"overflow-tool",
+				{ name: "overflow", role: "Implement" },
+				new AbortController().signal,
+				undefined,
+				undefined as never
+			)
+		).rejects.toThrow("at most 5 members including the lead");
+	});
+
+	it("enforces the five-member cap at commit when concurrent creations compete for the last slot", async () => {
+		const f = await fixture();
+		for (let index = 0; index < 3; index++)
+			await f.service.addMember(f.lead, `worker-${index}`, "Implement", `member-${index}`);
+		const results = await Promise.allSettled([
+			f.service.addMember(f.lead, "last-a", "Implement", "last-a"),
+			f.service.addMember(f.lead, "last-b", "Verify", "last-b"),
+		]);
+		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+		const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
+		expect(String(rejected.reason)).toContain("at most 5 members including the lead");
+		expect(f.service.get(f.lead)!.members).toHaveLength(5);
+	});
+
+	it("preserves legacy oversized teams after recovery but refuses additional members", async () => {
+		const f = await fixture();
+		const member = await f.service.addMember(f.lead, "worker", "Implement", "worker");
+		f.store.change(f.service.get(f.lead)!.id, (team) => {
+			for (let index = 0; index < 4; index++)
+				team.members.push({ ...member, id: `legacy-${index}`, name: `legacy-${index}` });
+		});
+		const legacy = f.service.get(f.lead)!;
+		const recovered = new AgentTeamService(f.store, f.runner);
+		await expect(recovered.addMember(f.lead, "extra", "Verify", "extra")).rejects.toThrow(
+			"at most 5 members including the lead"
+		);
+		expect(recovered.get(f.lead)).toEqual(legacy);
+		expect(recovered.get(f.lead)!.members).toHaveLength(6);
+	});
+
 	it("gives an empty launch one durable staffing reminder, then exposes a retryable lead error without polling", async () => {
 		const f = await fixture();
 		const team = await f.service.start(f.source, "Build a library manager", "Startup");

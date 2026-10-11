@@ -51,6 +51,30 @@ test("serves only built assets and forwards authenticated API traffic without re
 		assert.equal(forwarded[1].headers.get("origin"), "wuming://app");
 		assert.equal(forwarded[1].redirect, "error");
 		assert.equal(Buffer.from(forwarded[1].body).toString(), "hello");
+
+		forwarded = undefined;
+		const unreadable = new Request("wuming://app/api/workspaces/test/artifacts", { method: "POST", body: "" });
+		unreadable.arrayBuffer = async () => {
+			throw new Error("file read failed");
+		};
+		const failedRead = await handler(unreadable);
+		assert.equal(failedRead.status, 400);
+		assert.match(failedRead.headers.get("content-type"), /application\/json/);
+		assert.match((await failedRead.json()).error, /无法读取上传内容/);
+		assert.equal(forwarded, undefined);
+
+		const unavailable = await createAppProtocol({
+			webRoot,
+			connection: { token: "test-token", baseUrl: "http://127.0.0.1:1234", websocketUrl: "ws://127.0.0.1:1234/api/ws" },
+			fetchGateway: async () => {
+				throw new Error("connection refused");
+			},
+		});
+		const failedProxy = await unavailable(
+			new Request("wuming://app/api/workspaces/test/artifacts", { method: "POST", body: "hello" })
+		);
+		assert.equal(failedProxy.status, 502);
+		assert.match((await failedProxy.json()).error, /本地服务暂时不可用/);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

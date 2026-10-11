@@ -190,9 +190,10 @@ const conditionalGuidelines: Array<{
 		text: (tools) =>
 			[
 				"For frontend or visual changes, complete a visual review loop before reporting completion.",
+				"Choose viewport coverage from the user's request and the project's intended platform. For ordinary frontend web work, default to desktop-only verification. Test mobile adaptation only when the project or feature targets mobile devices, the task involves mobile adaptation, or the user explicitly requests mobile testing. A frontend change or existing responsive CSS alone does not require mobile testing. Respect explicit user limits on platforms and viewport sizes; do not add mobile work or report missing mobile coverage as incomplete when mobile testing is outside the task scope.",
 				tools.has("browser_open")
-					? "Open the actual implemented page at desktop (1440x900) and mobile (390x844) viewport sizes using browser_open width and height."
-					: "Inspect only the currently available page; without navigation or viewport controls, report responsive coverage as incomplete.",
+					? "Open the actual implemented page using browser_open width and height for the in-scope viewports: desktop defaults to 1440x900; when mobile testing is required, use a relevant mobile size such as 390x844. User-specified sizes take precedence. For mobile-only tasks, desktop testing is not required unless requested or relevant to the affected behavior."
+					: "Inspect only the currently available page; without navigation or viewport controls, report only required viewport coverage that cannot be verified as incomplete.",
 				"Do not claim interaction coverage without an available interaction tool and observed results.",
 				"Capture browser_screenshot at each relevant state. Inspect the returned image content yourself: check clipping, overlap, text fit, scrolling, responsive controls, missing assets, and blank or incorrectly framed canvas/3D content. A screenshot file or DOM snapshot alone is not visual inspection. State concrete observations, fix defects, and capture and inspect fresh screenshots after the last edit.",
 				"Do not claim console or network checks without an available diagnostics tool.",
