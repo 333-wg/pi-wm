@@ -60,7 +60,17 @@ test.beforeAll(async () => {
 					model: snapshot.model,
 					attempt: 1,
 					usage,
-					tools: [],
+					tools:
+						workspaceId === "local-workspace"
+							? [
+									{
+										toolName: "read_file",
+										callCount: 2,
+										durationMs: 1200,
+										usage: { ...usage, inputTokens: 0, totalTokens: 0 },
+									},
+								]
+							: [],
 					requests: [{ requestId: `request-${workspaceId}`, model: snapshot.model, usage }],
 				};
 				store.commitMutation({
@@ -69,12 +79,14 @@ test.beforeAll(async () => {
 					events: [event],
 					snapshot: reduceSessionEvent(snapshot, event),
 				});
-				await orchestrator.archiveSession({
-					principalId: "local-user",
-					idempotencyKey: `archive-${workspaceId}`,
-					sessionId: snapshot.session.id,
-					archived: true,
-				});
+				if (workspaceId !== "local-workspace") {
+					await orchestrator.archiveSession({
+						principalId: "local-user",
+						idempotencyKey: `archive-${workspaceId}`,
+						sessionId: snapshot.session.id,
+						archived: true,
+					});
+				}
 			}
 		} finally {
 			store.close();
@@ -97,19 +109,44 @@ test("defaults to all historical usage and preserves totals after hiding project
 }, testInfo) => {
 	await page.setViewportSize({ width: 1440, height: 1000 });
 	await openApp(page, webUrl);
+	const sparkline = page.getByRole("group", { name: "最近 7 天 Token 用量", exact: true });
+	await expect(sparkline.locator(".usage-sparkline-line")).toHaveAttribute("d", / C /);
+	await expect(sparkline.getByRole("button")).toHaveCount(7);
+	await expect(sparkline.locator(".usage-sparkline-dates span").last()).toHaveText("今天");
+	const firstPoint = sparkline.getByRole("button").first();
+	await firstPoint.hover();
+	await expect(firstPoint).toHaveAttribute("title", /0 Token/);
+	await firstPoint.focus();
+	await expect(firstPoint).toBeFocused();
+	await page.screenshot({ path: testInfo.outputPath("usage-sparkline-desktop.png") });
 	const panel = await openUsage(page);
 	const scope = panel.getByRole("combobox", { name: "统计范围" });
 	const total = panel.locator(".usage-metric-card").last();
 	await expect(scope).toHaveValue("");
 	await expect(total).toContainText("6.0k");
 	await expect(total).toContainText("3 次请求");
+	await expect(panel.locator(".usage-metric-card > strong small")).toHaveText(["Token", "Token", "Token", "Token"]);
+	await expect(panel.locator(".usage-composition-value small")).toHaveText(["100.0%", "0.0%", "0.0%", "0.0%"]);
+	await expect(panel.locator(".usage-tool-header")).toContainText("总耗时");
+	await expect(panel.locator(".usage-tool-row").last()).toContainText("2 次调用");
 	await expect(scope.locator('option[value="project-hidden"]')).toHaveCount(0);
+	const chart = panel.getByRole("group", { name: "最近 7 天 Token 用量趋势" });
+	await expect(chart.locator(".usage-trend-line")).toHaveAttribute("d", / C /);
+	await expect(chart.locator(".usage-trend-point")).toHaveCount(7);
+	await expect(chart.getByRole("status")).toContainText("6,000");
+	await chart.locator(".usage-trend-point").first().hover();
+	await expect(chart.locator(".usage-trend-point").first()).toHaveAttribute("aria-pressed", "true");
+	await expect(chart.getByRole("status")).toContainText("0 Token");
+	await chart.locator(".usage-trend-point").last().focus();
+	await expect(chart.getByRole("status")).toContainText("6,000");
 	await page.screenshot({ path: testInfo.outputPath("all-workspaces-desktop.png") });
 	await scope.selectOption("local-workspace");
 	await expect(total).toContainText("工作区累计");
 	await expect(total).toContainText("1.0k");
 	await scope.selectOption("project-visible");
 	await expect(total).toContainText("2.0k");
+	await expect(panel.getByText("当前会话还没有模型用量。", { exact: true })).toBeVisible();
+	await expect(panel.getByText("当前会话还没有工具调用。", { exact: true })).toBeVisible();
 	await scope.selectOption("");
 	await expect(total).toContainText("6.0k");
 	await panel.getByRole("button", { name: "近 14 天", exact: true }).click();
@@ -123,6 +160,9 @@ test("defaults to all historical usage and preserves totals after hiding project
 	expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 	expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 	await page.screenshot({ path: testInfo.outputPath("all-workspaces-mobile.png") });
+	await panel.locator(".usage-tools-section").scrollIntoViewIfNeeded();
+	expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+	await page.screenshot({ path: testInfo.outputPath("usage-details-mobile.png") });
 	await page.evaluate(() => localStorage.setItem("wuming.workspaceId", "project-visible"));
 	await page.setViewportSize({ width: 1440, height: 1000 });
 	await page.reload();

@@ -13,7 +13,7 @@ The desktop toolbar's globe button opens a browser next to the conversation. Thi
 - Developer tools and opening the current page in an external browser.
 - Ctrl/Cmd+L, Ctrl/Cmd+R, Ctrl/Cmd+W and Alt+Left/Right while a page is focused.
 - Ctrl/Cmd+Plus/Minus/0 and native zoom requests use the preview zoom controls, bounded to 50%-200%. The toolbar also displays non-preset native factors.
-- Successful preview_start calls open the local page. Tool results provide a reopen button; ordinary localhost links in the conversation open inside the app.
+- Successful preview_start calls prepare the local URL without automatically opening the browser panel or replacing the current side panel. Click the toolbar globe or the tool result's open-preview button to show it; ordinary localhost links in the conversation also open inside the app. Closing the panel keeps it hidden during later tool activity.
 - Closing the panel hides pages without discarding them. App dialogs temporarily hide native pages so approvals and settings remain accessible.
 
 ## Session And Security Boundaries

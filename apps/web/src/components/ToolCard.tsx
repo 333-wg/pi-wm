@@ -53,6 +53,7 @@ const extensionLanguages: Record<string, string> = {
 	ts: "ts",
 	tsx: "tsx",
 	mts: "ts",
+	cts: "ts",
 	js: "js",
 	jsx: "jsx",
 	mjs: "js",
@@ -92,7 +93,10 @@ const extensionLanguages: Record<string, string> = {
 };
 
 export function languageFromPath(path: string): string {
-	const extension = /\.([A-Za-z0-9+]+)$/.exec(path)?.[1]?.toLowerCase() ?? "";
+	const name = path.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+	if (/^dockerfile(?:\.|$)/.test(name)) return "dockerfile";
+	if (/^(?:gnu)?makefile$/.test(name)) return "makefile";
+	const extension = /\.([A-Za-z0-9+]+)$/.exec(name)?.[1] ?? "";
 	return extensionLanguages[extension] ?? "";
 }
 

@@ -155,8 +155,12 @@ import { workspaceApi } from "./workspace-api.js";
 import { desktopConnection } from "./lib/desktop.js";
 import { RunDiagnostics } from "./components/RunDiagnostics";
 import { SessionSearch, type SearchSessions } from "./components/SessionSearch";
+import { UsageTrend } from "./components/UsageTrend.js";
+import { UsageSparkline } from "./components/UsageSparkline.js";
 import { TaskNotificationSettings } from "./components/TaskNotificationSettings";
 import { Markdown } from "./components/Markdown.js";
+import { CodeBlock } from "./components/CodeBlock.js";
+import { languageFromPath } from "./components/ToolCard.js";
 import { ChangesView as WorkspaceChangesView } from "./components/ChangesView.js";
 import {
 	ToolCard,
@@ -2145,7 +2149,8 @@ function Composer({
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
 		const value = text.trim();
-		if ((!value && attachments.length === 0) || disabled || branchBusy || sending || uploading || selectingSkill) return;
+		if ((!value && attachments.length === 0) || disabled || branchBusy || sending || uploading || selectingSkill)
+			return;
 		// A prompt that is nothing but a local command runs here instead of being
 		// sent to the runtime; anything after the name is passed as its argument.
 		const command = /^\/([A-Za-z0-9:._-]+)(?:\s+([\S\s]*))?$/.exec(value);
@@ -2286,7 +2291,9 @@ function Composer({
 				}}
 			/>
 			{(workspaceId || (draftProjectName && onDetachDraftProject)) && (
-				<div className={draftProjectName && onDetachDraftProject ? "composer-project-context" : "composer-branch-context"}>
+				<div
+					className={draftProjectName && onDetachDraftProject ? "composer-project-context" : "composer-branch-context"}
+				>
 					{draftProjectName && onDetachDraftProject && (
 						<>
 							<button
@@ -2303,8 +2310,13 @@ function Composer({
 						</>
 					)}
 					{workspaceId && (
-						<BranchPicker key={workspaceId} token={token} workspaceId={workspaceId}
-							disabled={disabled || active || sending} onBusyChange={setBranchBusy} />
+						<BranchPicker
+							key={workspaceId}
+							token={token}
+							workspaceId={workspaceId}
+							disabled={disabled || active || sending}
+							onBusyChange={setBranchBusy}
+						/>
 					)}
 				</div>
 			)}
@@ -2314,35 +2326,39 @@ function Composer({
 						const directoryName = directoryAttachmentName(artifact);
 						const displayName = directoryName ?? artifact.name;
 						return (
-						<div
-							className={`attachment-chip ${directoryName !== undefined ? "attachment-directory" : isPreviewableImageArtifact(artifact) ? "attachment-image" : ""}`}
-							key={artifact.id}
-						>
-							{directoryName !== undefined ? (
-								<div className="attachment-directory-icon" aria-hidden="true"><Folder size={26} /></div>
-							) : isPreviewableImageArtifact(artifact) ? (
-								<div className="attachment-image-preview">
-									<ArtifactMediaPreview artifact={artifact} onLoad={onLoadArtifact} />
-								</div>
-							) : (
-								<FileCode2 size={14} />
-							)}
-							{directoryName !== undefined ? (
-								<div className="attachment-directory-label" title={t("folderReferenceHint")}>
-									<span title={displayName}>{displayName}</span>
-									<small>{t("folderReferenceLabel")}</small>
-								</div>
-							) : <span title={artifact.name}>{artifact.name}</span>}
-							<button
-								type="button"
-								className="attachment-remove"
-								aria-label={t("removeArtifact", { name: displayName })}
-								title={t("removeArtifact", { name: displayName })}
-								onClick={() => setAttachments((current) => current.filter((item) => item.id !== artifact.id))}
+							<div
+								className={`attachment-chip ${directoryName !== undefined ? "attachment-directory" : isPreviewableImageArtifact(artifact) ? "attachment-image" : ""}`}
+								key={artifact.id}
 							>
-								<X size={13} />
-							</button>
-						</div>
+								{directoryName !== undefined ? (
+									<div className="attachment-directory-icon" aria-hidden="true">
+										<Folder size={26} />
+									</div>
+								) : isPreviewableImageArtifact(artifact) ? (
+									<div className="attachment-image-preview">
+										<ArtifactMediaPreview artifact={artifact} onLoad={onLoadArtifact} />
+									</div>
+								) : (
+									<FileCode2 size={14} />
+								)}
+								{directoryName !== undefined ? (
+									<div className="attachment-directory-label" title={t("folderReferenceHint")}>
+										<span title={displayName}>{displayName}</span>
+										<small>{t("folderReferenceLabel")}</small>
+									</div>
+								) : (
+									<span title={artifact.name}>{artifact.name}</span>
+								)}
+								<button
+									type="button"
+									className="attachment-remove"
+									aria-label={t("removeArtifact", { name: displayName })}
+									title={t("removeArtifact", { name: displayName })}
+									onClick={() => setAttachments((current) => current.filter((item) => item.id !== artifact.id))}
+								>
+									<X size={13} />
+								</button>
+							</div>
 						);
 					})}
 					{uploadError && (
@@ -2646,9 +2662,7 @@ function WorkspaceFilesView({ token, workspaceId }: { token: string; workspaceId
 				)}
 				{file && !file.binary && (
 					<div className="code-scroll">
-						<pre className="code-preview">
-							<code>{file.content}</code>
-						</pre>
+						<CodeBlock key={file.path} code={file.content ?? ""} lang={languageFromPath(file.path)} variant="file" />
 						{file.truncated && (
 							<div className="preview-truncated">预览已限制为 {file.bytesRead.toLocaleString()} 字节</div>
 						)}
@@ -3739,7 +3753,6 @@ function UsageSettings({
 		setRange(nextRange);
 	};
 	const period = useMemo(() => aggregateDailyUsage(data?.daily ?? []), [data?.daily]);
-	const maxDailyTokens = Math.max(1, ...(data?.daily.map((entry) => entry.usage.totalTokens) ?? []));
 	const tokenParts = [
 		{ key: "input", label: t("usageInput"), value: period.usage.inputTokens },
 		{ key: "output", label: t("usageOutput"), value: period.usage.outputTokens },
@@ -3794,7 +3807,7 @@ function UsageSettings({
 	];
 
 	return (
-		<div className="usage-settings">
+		<div className="usage-settings" aria-busy={loading}>
 			<div className="usage-settings-toolbar">
 				<div>
 					<label htmlFor="usage-workspace-scope">{t("usageWorkspace")}</label>
@@ -3839,9 +3852,12 @@ function UsageSettings({
 				{metrics.map((metric) => (
 					<div className="usage-metric-card" key={metric.label}>
 						<span>{metric.label}</span>
-						<strong>{metric.usage ? formatTokens(metric.usage.totalTokens) : "--"}</strong>
+						<strong title={metric.usage?.totalTokens.toLocaleString()}>
+							{metric.usage ? formatTokens(metric.usage.totalTokens) : "--"}
+							<small>Token</small>
+						</strong>
 						<div>
-							<b>{metric.usage ? formatMoney(metric.usage.costUsd) : t("usageLoading")}</b>
+							<b>{metric.usage ? formatMoney(metric.usage.costUsd) : t(error ? "usageLoadFailed" : "usageLoading")}</b>
 							<small>{metric.meta}</small>
 						</div>
 					</div>
@@ -3859,39 +3875,9 @@ function UsageSettings({
 					)}
 				</div>
 				{data ? (
-					<div
-						className="usage-settings-chart"
-						role="img"
-						aria-label={t("usageTrendAria", { days: range })}
-						style={{ "--usage-day-count": data.daily.length } as CSSProperties}
-					>
-						{data.daily.map((entry, index) => {
-							const tickStep = range === 7 ? 1 : range === 14 ? 2 : 5;
-							const showTick = index === 0 || index === data.daily.length - 1 || index % tickStep === 0;
-							return (
-								<div
-									className="usage-settings-day"
-									key={entry.date}
-									title={`${entry.date} · ${formatTokens(entry.usage.totalTokens)} Token · ${formatMoney(entry.usage.costUsd)}`}
-								>
-									<div className="usage-settings-bar-track">
-										<span
-											style={
-												{
-													"--usage-bar-height": `${Math.max(entry.usage.totalTokens > 0 ? 5 : 2, Math.round((entry.usage.totalTokens / maxDailyTokens) * 100))}%`,
-												} as CSSProperties
-											}
-										/>
-									</div>
-									<small className={showTick ? "" : "usage-tick-hidden"}>
-										{index === data.daily.length - 1 ? t("usageToday") : entry.date.slice(5).replace("-", "/")}
-									</small>
-								</div>
-							);
-						})}
-					</div>
+					<UsageTrend key={`${scope}:${range}`} daily={data.daily} />
 				) : (
-					<div className="usage-settings-placeholder">{t("usageLoading")}</div>
+					<div className="usage-settings-placeholder">{t(error ? "usageLoadFailed" : "usageLoading")}</div>
 				)}
 			</section>
 
@@ -3899,29 +3885,42 @@ function UsageSettings({
 				<section className="usage-settings-section">
 					<div className="usage-settings-section-heading">
 						<div>
-							<h4>{t("usageComposition")}</h4>
+							<h4>
+								<BarChart3 size={15} aria-hidden="true" />
+								{t("usageComposition")}
+							</h4>
 							<p>{t("usageCompositionHint", { days: range })}</p>
 						</div>
 					</div>
-					<div className="usage-composition-list">
-						{tokenParts.map((part) => (
-							<div className={`usage-composition-row usage-composition-${part.key}`} key={part.key}>
-								<div>
-									<span>{part.label}</span>
-									<strong>{formatTokens(part.value)}</strong>
+					{data ? (
+						<div className="usage-composition-list">
+							{tokenParts.map((part) => (
+								<div className={`usage-composition-row usage-composition-${part.key}`} key={part.key}>
+									<div>
+										<span>{part.label}</span>
+										<span className="usage-composition-value">
+											<strong>{formatTokens(part.value)}</strong>
+											<small>{((part.value / tokenPartTotal) * 100).toFixed(1)}%</small>
+										</span>
+									</div>
+									<div className="usage-composition-track">
+										<span style={{ "--usage-share": `${(part.value / tokenPartTotal) * 100}%` } as CSSProperties} />
+									</div>
 								</div>
-								<div className="usage-composition-track">
-									<span style={{ "--usage-share": `${(part.value / tokenPartTotal) * 100}%` } as CSSProperties} />
-								</div>
-							</div>
-						))}
-					</div>
+							))}
+						</div>
+					) : (
+						<div className="usage-settings-placeholder compact">{t(error ? "usageLoadFailed" : "usageLoading")}</div>
+					)}
 				</section>
 
 				<section className="usage-settings-section">
 					<div className="usage-settings-section-heading">
 						<div>
-							<h4>{t("usageSessionModels")}</h4>
+							<h4>
+								<BrainCircuit size={15} aria-hidden="true" />
+								{t("usageSessionModels")}
+							</h4>
 							<p>
 								{session
 									? t("usageCurrentSessionSummary", {
@@ -3961,12 +3960,21 @@ function UsageSettings({
 			<section className="usage-settings-section usage-tools-section">
 				<div className="usage-settings-section-heading">
 					<div>
-						<h4>{t("usageSessionTools")}</h4>
+						<h4>
+							<Wrench size={15} aria-hidden="true" />
+							{t("usageSessionTools")}
+						</h4>
 						<p>{t("usageSessionToolsHint")}</p>
 					</div>
 				</div>
 				{toolRows.length > 0 ? (
 					<div className="usage-tool-list">
+						<div className="usage-tool-row usage-tool-header">
+							<div>{t("usageToolName")}</div>
+							<span>{t("usageCalls")}</span>
+							<span>{t("usageDuration")}</span>
+							<span>{t("usageCost")}</span>
+						</div>
 						{toolRows.map((tool) => (
 							<div className="usage-tool-row" key={`${tool.mcpServerId ?? "builtin"}:${tool.toolName}`}>
 								<div>
@@ -4041,7 +4049,6 @@ function BudgetEditor({
 	};
 
 	const canEdit = snapshot.session.phase === "idle" && snapshot.session.archivedAt === undefined;
-	const maxDailyTokens = Math.max(1, ...(overview?.daily.map((entry) => entry.usage.totalTokens) ?? []));
 	return (
 		<>
 			<div className="rail-section-heading">
@@ -4079,28 +4086,7 @@ function BudgetEditor({
 						<span>{t("usageWeek")}</span>
 						<span>Token</span>
 					</div>
-					<div className="usage-chart" role="img" aria-label={t("usageWeekAria")}>
-						{overview.daily.map((entry, index) => (
-							<div
-								className="usage-day"
-								key={entry.date}
-								title={`${entry.date} · ${formatTokens(entry.usage.totalTokens)} Token · ${formatMoney(entry.usage.costUsd)}`}
-							>
-								<div className="usage-bar-track">
-									<span
-										style={
-											{
-												"--usage-bar": `${Math.max(entry.usage.totalTokens > 0 ? 5 : 2, Math.round((entry.usage.totalTokens / maxDailyTokens) * 100))}%`,
-											} as CSSProperties
-										}
-									/>
-								</div>
-								<small>
-									{index === overview.daily.length - 1 ? t("usageToday") : entry.date.slice(5).replace("-", "/")}
-								</small>
-							</div>
-						))}
-					</div>
+					<UsageSparkline daily={overview.daily} />
 				</div>
 			)}
 			<div className="usage-session">
@@ -5284,8 +5270,7 @@ export function App() {
 			const url = tool.status === "complete" ? previewUrl(tool.toolName, tool.input) : undefined;
 			if (!url || previewSeen.current.has(key)) continue;
 			previewSeen.current.add(key);
-			setBrowserOwner(browserKey);
-			setShowRight(false);
+			// Tool activity may prepare a preview, but only a user action opens the panel.
 			setBrowserTarget({ owner: browserKey, url, sequence: Date.now() });
 		}
 	}, [client.liveTools, client.snapshot?.transcript, browserKey]);
@@ -6619,7 +6604,7 @@ export function App() {
 								aria-pressed={browserOpen}
 								onClick={() => {
 									setBrowserOwner(browserOpen ? undefined : browserKey);
-									setBrowserTarget(undefined);
+									if (browserOpen) setBrowserTarget(undefined);
 									setShowRight(false);
 								}}
 							>
