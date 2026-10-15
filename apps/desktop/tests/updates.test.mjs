@@ -262,7 +262,7 @@ test("busy tasks, cancelled confirmation and unavailable service never install",
 		const host = {
 			updateStatus: async (prepare) => {
 				if (mode === "unavailable") throw new Error("disconnected");
-				return { busy: mode === "busy" || (prepare && mode === "became-busy") };
+				return { busy: mode === "busy" || (prepare && mode === "became-busy"), activity: { terminals: 1 } };
 			},
 			stop: async () => {
 				stopped = true;
@@ -279,6 +279,7 @@ test("busy tasks, cancelled confirmation and unavailable service never install",
 		assert.equal(stopped, false, mode);
 		assert.equal(installed, false, mode);
 		assert.equal(updates.state.status, "ready");
+		if (mode === "busy" || mode === "became-busy") assert.deepEqual(updates.state.activity, { terminals: 1 });
 	}
 });
 

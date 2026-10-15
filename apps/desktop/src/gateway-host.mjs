@@ -2,6 +2,7 @@ import { fork, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomBytes, randomUUID } from "node:crypto";
 import { join, dirname, delimiter } from "node:path";
+import { waitForUpdateIdle } from "./update-idle.mjs";
 
 export function gatewayEnvironment(parent, options) {
 	const env = Object.fromEntries(
@@ -114,6 +115,10 @@ export class GatewayHost extends EventEmitter {
 	}
 
 	updateStatus(prepare = false) {
+		return waitForUpdateIdle(() => this.#requestUpdateStatus(prepare));
+	}
+
+	#requestUpdateStatus(prepare) {
 		if (!this.child?.connected || this.stopping) return Promise.reject(new Error("Local service unavailable"));
 		const id = randomUUID();
 		return new Promise((resolve, reject) => {
@@ -129,7 +134,21 @@ export class GatewayHost extends EventEmitter {
 				if (value?.type !== "desktop.update-status.result" || value.id !== id) return;
 				if (typeof value.busy !== "boolean") return finish(new Error("Invalid service status"));
 				if (prepare && !value.busy) this.stopping = true;
-				finish(undefined, { busy: value.busy });
+				const activity = {};
+				for (const key of [
+					"shuttingDown",
+					"recovering",
+					"requests",
+					"automation",
+					"terminals",
+					"running",
+					"queued",
+					"goals",
+				]) {
+					const count = value.activity?.[key];
+					if (Number.isSafeInteger(count) && count >= 0) activity[key] = count;
+				}
+				finish(undefined, { busy: value.busy, activity });
 			};
 			const exit = () => finish(new Error("Local service stopped"));
 			const timer = setTimeout(() => finish(new Error("Local service status timed out")), 5_000);

@@ -66,6 +66,12 @@ export interface DesktopUpdateState {
 	bytesPerSecond?: number;
 	busy?: boolean;
 	activityUnknown?: boolean;
+	activity?: Partial<
+		Record<
+			"shuttingDown" | "recovering" | "requests" | "automation" | "terminals" | "running" | "queued" | "goals",
+			number
+		>
+	>;
 	error?:
 		| "network"
 		| "timeout"

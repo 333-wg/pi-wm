@@ -5,13 +5,13 @@ export async function installDesktopUpdate({ updates, host, confirm, install }) 
 	try {
 		const status = await host.updateStatus();
 		if (status.busy) {
-			updates.patch({ busy: true, error: "busy" });
+			updates.patch({ ...status, activityUnknown: false, error: "busy" });
 			return updates.snapshot();
 		}
 		if (!(await confirm())) return updates.snapshot();
 		const prepared = await host.updateStatus(true);
 		if (prepared.busy) {
-			updates.patch({ busy: true, error: "busy" });
+			updates.patch({ ...prepared, activityUnknown: false, error: "busy" });
 			return updates.snapshot();
 		}
 		updates.patch({ status: "installing", busy: false, error: undefined });

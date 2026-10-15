@@ -7,7 +7,7 @@ export function createDesktopBridge() {
 	if (!process.send || !process.connected) throw new Error("Desktop host requires a parent IPC channel");
 	let stopping = false;
 	let shutdown: (() => void) | undefined;
-	let updateStatus: ((prepare: boolean) => boolean) | undefined;
+	let updateStatus: ((prepare: boolean) => { busy: boolean; activity: Record<string, number> }) | undefined;
 	const pending = new Map<string, (selection?: LocalProjectSelection) => void>();
 	const stop = () => {
 		if (stopping) return;
@@ -23,12 +23,13 @@ export function createDesktopBridge() {
 		const message = value as { type?: string; id?: string; selection?: LocalProjectSelection; prepare?: boolean };
 		if (message.type === "desktop.update-status" && typeof message.id === "string") {
 			let busy = true;
+			let activity: Record<string, number> | undefined;
 			try {
-				busy = stopping || !updateStatus || updateStatus(message.prepare === true);
+				if (!stopping && updateStatus) ({ busy, activity } = updateStatus(message.prepare === true));
 			} catch {
 				/* Fail closed. */
 			}
-			process.send?.({ type: "desktop.update-status.result", id: message.id, busy }, () => {
+			process.send?.({ type: "desktop.update-status.result", id: message.id, busy, activity }, () => {
 				if (message.prepare === true && !busy) stop();
 			});
 		}
@@ -43,7 +44,7 @@ export function createDesktopBridge() {
 		}
 	});
 	return {
-		onUpdateStatus(callback: (prepare: boolean) => boolean) {
+		onUpdateStatus(callback: (prepare: boolean) => { busy: boolean; activity: Record<string, number> }) {
 			updateStatus = callback;
 		},
 		onShutdown(callback: () => void) {

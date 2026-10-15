@@ -850,9 +850,15 @@ async function main(): Promise<void> {
 	};
 
 	const store = new SqliteOrchestratorStore(join(dataDir, "wuming.db"));
-	const directoryAttachments = localUserCapabilities ? new DirectoryAttachments(join(dataDir, "directory-attachments")) : undefined;
+	const directoryAttachments = localUserCapabilities
+		? new DirectoryAttachments(join(dataDir, "directory-attachments"))
+		: undefined;
 	const maxArtifactBytes = envPositiveNumber("WUMING_MAX_ARTIFACT_BYTES", 10 * 1024 * 1024);
-	const maxFileAttachmentBytes = fileAttachmentLimit(localUserCapabilities, maxArtifactBytes, process.env.WUMING_MAX_FILE_ATTACHMENT_BYTES);
+	const maxFileAttachmentBytes = fileAttachmentLimit(
+		localUserCapabilities,
+		maxArtifactBytes,
+		process.env.WUMING_MAX_FILE_ATTACHMENT_BYTES
+	);
 	const maxTextArtifactBytes = envPositiveNumber("WUMING_MAX_TEXT_ARTIFACT_BYTES", 2 * 1024 * 1024);
 	const maxVideoArtifactBytes = envPositiveNumber("WUMING_MAX_VIDEO_ARTIFACT_BYTES", 100 * 1024 * 1024);
 	const artifacts = await ArtifactStore.open(join(dataDir, "artifacts.db"), join(dataDir, "artifacts"), {
@@ -1548,13 +1554,36 @@ async function main(): Promise<void> {
 		...(terminal ? { terminal } : {}),
 		maxArtifactBytes,
 		maxFileAttachmentBytes,
-		...(directoryAttachments ? { directoryAttachments: {
-			attach: async (workspaceId: string, ownerId: string, path?: string) => {
-				const selected = path ?? (desktop ? await desktop.pickProject("directory") : await showLocalProjectPicker("directory")).path;
-				const reference = await directoryAttachments.add(workspaceId, selected);
-				return (await artifacts.create({ workspaceId, ownerId, name: `${reference.name.slice(0, 220)}.directory.json`, suppliedMimeType: "text/x-wuming-directory", content: Buffer.from(JSON.stringify({ type: "local_directory_reference", ...reference, access: "read_only", tool: "directory_read", notice: "Local directory reference, not a ZIP. Use directory_read with directoryId equal to id to list/search/read on demand. No files have been uploaded. References do not grant write or shell permissions." })) })).ref;
-			},
-		} } : {}),
+		...(directoryAttachments
+			? {
+					directoryAttachments: {
+						attach: async (workspaceId: string, ownerId: string, path?: string) => {
+							const selected =
+								path ??
+								(desktop ? await desktop.pickProject("directory") : await showLocalProjectPicker("directory")).path;
+							const reference = await directoryAttachments.add(workspaceId, selected);
+							return (
+								await artifacts.create({
+									workspaceId,
+									ownerId,
+									name: `${reference.name.slice(0, 220)}.directory.json`,
+									suppliedMimeType: "text/x-wuming-directory",
+									content: Buffer.from(
+										JSON.stringify({
+											type: "local_directory_reference",
+											...reference,
+											access: "read_only",
+											tool: "directory_read",
+											notice:
+												"Local directory reference, not a ZIP. Use directory_read with directoryId equal to id to list/search/read on demand. No files have been uploaded. References do not grant write or shell permissions.",
+										})
+									),
+								})
+							).ref;
+						},
+					},
+				}
+			: {}),
 		models,
 		...(customModels ? { customModels } : {}),
 		...(officialAccounts ? { officialAccounts } : {}),
@@ -1651,25 +1680,27 @@ async function main(): Promise<void> {
 	process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
 	desktop?.onShutdown(() => void shutdown().finally(() => process.exit(0)));
 	desktop?.onUpdateStatus((prepare) => {
-		const busy =
-			shuttingDown ||
-			recovering ||
-			server.activeRequestCount > 0 ||
-			Boolean(automationTickPromise) ||
-			orchestrator.hasAutomationDispatches ||
-			(terminal?.activeCount ?? 0) > 0 ||
-			store.listOperationsByStatus("running").length > 0 ||
-			store.listOperationsByStatus("queued").length > 0 ||
-			store.listPlanGoals().some((goal) => !goal.pausedAt && goal.plan?.phase === "running") ||
-			store
-				.listReviewGoals()
-				.some((goal) => !goal.pausedAt && ["executing", "reviewing"].includes(goal.review?.phase ?? ""));
+		const activity = {
+			shuttingDown: Number(shuttingDown),
+			recovering: Number(recovering),
+			requests: server.activeRequestCount,
+			automation: Number(Boolean(automationTickPromise) || orchestrator.hasAutomationDispatches),
+			terminals: terminal?.activeCount ?? 0,
+			running: store.listOperationsByStatus("running").length,
+			queued: store.listOperationsByStatus("queued").length,
+			goals:
+				store.listPlanGoals().filter((goal) => !goal.pausedAt && goal.plan?.phase === "running").length +
+				store
+					.listReviewGoals()
+					.filter((goal) => !goal.pausedAt && ["executing", "reviewing"].includes(goal.review?.phase ?? "")).length,
+		};
+		const busy = Object.values(activity).some((count) => count > 0);
 		if (prepare && !busy) {
 			shuttingDown = true;
 			clearInterval(automationTimer);
 			server.beginShutdown();
 		}
-		return busy;
+		return { busy, activity };
 	});
 	desktop?.ready(address.port);
 }

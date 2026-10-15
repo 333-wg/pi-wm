@@ -1,4 +1,18 @@
-import { app, BrowserWindow, WebContentsView, session, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, protocol, shell, Tray } from "electron";
+import {
+	app,
+	BrowserWindow,
+	WebContentsView,
+	session,
+	clipboard,
+	dialog,
+	globalShortcut,
+	ipcMain,
+	Menu,
+	Notification,
+	protocol,
+	shell,
+	Tray,
+} from "electron";
 import { appendFileSync, mkdirSync, renameSync, statSync, existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,9 +62,11 @@ function focusWindow() {
 
 function openExternal(value) {
 	const url = externalLink(value);
-	if (url) void shell.openExternal(url).catch(() => {
-		if (window && !window.isDestroyed()) dialog.showErrorBox("无法打开链接", "请复制链接地址后，在外部浏览器中打开。");
-	});
+	if (url)
+		void shell.openExternal(url).catch(() => {
+			if (window && !window.isDestroyed())
+				dialog.showErrorBox("无法打开链接", "请复制链接地址后，在外部浏览器中打开。");
+		});
 }
 
 async function fail(error) {
@@ -105,9 +121,13 @@ async function boot() {
 	if (quitting) return;
 	const stopShortcut = globalShortcut.register("CommandOrControl+Alt+F12", () => {
 		void fetch(`${connection.baseUrl}/api/computer-use/stop`, {
-			method: "POST", headers: { Authorization: `Bearer ${connection.token}` },
+			method: "POST",
+			headers: { Authorization: `Bearer ${connection.token}` },
 			signal: AbortSignal.timeout(3000),
-		}).then((response) => { if (!response.ok) log(`Computer Use stop failed: ${response.status}\n`); })
+		})
+			.then((response) => {
+				if (!response.ok) log(`Computer Use stop failed: ${response.status}\n`);
+			})
 			.catch((error) => log(`Computer Use stop failed: ${error.message}\n`));
 	});
 	if (!stopShortcut) log("Computer Use: Ctrl+Alt+F12 could not be registered; use the stop button.\n");
@@ -152,7 +172,10 @@ async function boot() {
 	if (process.platform === "win32") {
 		try {
 			desktopTray = installTray({
-				app, window, Tray, Menu,
+				app,
+				window,
+				Tray,
+				Menu,
 				icon: join(here, "../resources/icon.ico"),
 				focusWindow,
 				isQuitting: () => quitting || allowQuit,
@@ -161,14 +184,23 @@ async function boot() {
 			log(`System tray unavailable; closing the window will exit: ${error.message}\n`);
 		}
 	}
-	const contextMenu = (contents) => installContextMenu(contents, {
-		window, Menu, clipboard, openExternal,
-		onCopyError: () => dialog.showErrorBox("复制失败", "剪贴板暂时不可用，请稍后重试。"),
-	});
+	const contextMenu = (contents) =>
+		installContextMenu(contents, {
+			window,
+			Menu,
+			clipboard,
+			openExternal,
+			onCopyError: () => dialog.showErrorBox("复制失败", "剪贴板暂时不可用，请稍后重试。"),
+		});
 	contextMenu(window.webContents);
 	const browserPreview = new BrowserPreview({ window, WebContentsView, session, shell, contextMenu });
 	ipcMain.handle("desktop:browser", (event, request) => {
-		if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !isAppUrl(event.senderFrame.url))
+		if (
+			!window ||
+			event.sender !== window.webContents ||
+			event.senderFrame !== window.webContents.mainFrame ||
+			!isAppUrl(event.senderFrame.url)
+		)
 			throw new Error("Forbidden");
 		return browserPreview.dispatch(request);
 	});
@@ -207,12 +239,12 @@ async function boot() {
 		if (action === "activity") {
 			try {
 				updates.patch({
-					busy: (await host.updateStatus()).busy,
+					...(await host.updateStatus()),
 					activityUnknown: false,
 					...(updates.state.error === "service" || updates.state.error === "busy" ? { error: undefined } : {}),
 				});
 			} catch {
-				updates.patch({ busy: true, activityUnknown: true });
+				updates.patch({ busy: true, activity: undefined, activityUnknown: true });
 			}
 			return updates.snapshot();
 		}
@@ -275,7 +307,12 @@ async function boot() {
 		},
 	});
 	ipcMain.handle("desktop:notify-task", (event, value) => {
-		if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !isAppUrl(event.senderFrame.url))
+		if (
+			!window ||
+			event.sender !== window.webContents ||
+			event.senderFrame !== window.webContents.mainFrame ||
+			!isAppUrl(event.senderFrame.url)
+		)
 			throw new Error("Forbidden");
 		return notifications.show(value);
 	});

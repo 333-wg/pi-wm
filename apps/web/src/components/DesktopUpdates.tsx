@@ -41,6 +41,21 @@ const zh = {
 	restartHint: "安装需要关闭并重新启动 Pi-Wm。",
 	busy: "有任务正在运行或终端仍打开，请结束任务并关闭终端后再安装。",
 	unknown: "暂时无法确认任务状态，已暂停安装。",
+	activityTitle: "当前阻塞项（所有会话和项目）：",
+	terminals: "未关闭的终端",
+	running: "运行中的任务",
+	queued: "排队中的任务",
+	goals: "执行中的目标",
+	requests: "正在处理的请求",
+	automation: "自动任务调度",
+	recovering: "正在恢复任务",
+	shuttingDown: "服务正在关闭",
+	terminalHint:
+		"终端空闲或收起后仍会阻止安装。请切换到用过终端的项目，在终端内部工具栏点击“关闭终端”；面板右上角的 × 仅收起面板，不会结束终端。关闭前请保存工作。",
+	taskHint: "请等待其他会话的任务完成，或在对应会话中停止任务、处理排队项或暂停目标。此处不会自动终止任务。",
+	openTerminal: "前往终端",
+	refreshActivity: "重新检查状态",
+	refreshingActivity: "正在检查状态…",
 	network: "检查或下载失败，请确认网络后重试。",
 	timeout: "连接更新源超时，请检查网络或稍后重试。",
 	"no-release": "更新源尚无可用的正式版本，或发布仓库不可访问。请查看 GitHub 发布页；当前版本仍可继续使用。",
@@ -94,6 +109,22 @@ const en: Record<keyof typeof zh, string> = {
 	restartHint: "Installation closes and restarts Pi-Wm.",
 	busy: "Tasks are running or terminals are open. Finish tasks and close terminals before installing.",
 	unknown: "Unable to confirm task activity. Installation is paused.",
+	activityTitle: "Current blockers (all sessions and projects):",
+	terminals: "Open terminals",
+	running: "Running tasks",
+	queued: "Queued tasks",
+	goals: "Active goals",
+	requests: "Requests in progress",
+	automation: "Automation dispatch",
+	recovering: "Task recovery",
+	shuttingDown: "Service shutting down",
+	terminalHint:
+		"Idle or hidden terminals still block installation. Switch to projects where you opened terminals and choose Close terminal in the inner toolbar. The panel's top-right × only hides it. Save your work before closing.",
+	taskHint:
+		"Wait for tasks in other sessions to finish, or stop them, handle queued items or pause goals in those sessions. Tasks will not be stopped automatically here.",
+	openTerminal: "Go to terminal",
+	refreshActivity: "Recheck activity",
+	refreshingActivity: "Checking activity…",
 	network: "Check or download failed. Check your connection and try again.",
 	timeout: "The update server timed out. Check your connection or try again later.",
 	"no-release":
@@ -188,10 +219,19 @@ export function DesktopUpdateNotice({ model, onOpen }: { model: UpdateModel; onO
 	);
 }
 
-export function DesktopUpdateSettings({ model }: { model: UpdateModel }) {
+export function DesktopUpdateSettings({ model, onOpenTerminal }: { model: UpdateModel; onOpenTerminal: () => void }) {
 	const copy = useCopy();
 	const { locale } = useLocale();
 	const { state, pending, failed, invoke } = model;
+	const [refreshing, setRefreshing] = useState(false);
+	const refreshActivity = async () => {
+		setRefreshing(true);
+		try {
+			await invoke("activity");
+		} finally {
+			setRefreshing(false);
+		}
+	};
 	if (!state)
 		return (
 			<div className="desktop-update-settings">
@@ -337,6 +377,36 @@ export function DesktopUpdateSettings({ model }: { model: UpdateModel }) {
 					<p className="desktop-update-warning" role="status">
 						{state.activityUnknown || state.busy === undefined ? copy.unknown : copy.busy}
 					</p>
+				)}
+				{status === "ready" && state.busy !== false && (
+					<div>
+						{!state.activityUnknown && state.activity && Object.values(state.activity).some((count) => count > 0) && (
+							<>
+								<p>{copy.activityTitle}</p>
+								<ul>
+									{(Object.keys(state.activity) as Array<keyof NonNullable<DesktopUpdateState["activity"]>>).map(
+										(key) =>
+											(state.activity?.[key] ?? 0) > 0 ? (
+												<li key={key}>
+													{copy[key]}：{state.activity![key]}
+												</li>
+											) : null
+									)}
+								</ul>
+							</>
+						)}
+						<p>{copy.terminalHint}</p>
+						<p>{copy.taskHint}</p>
+						<div className="desktop-update-actions">
+							<button className="secondary-button" onClick={onOpenTerminal}>
+								{copy.openTerminal}
+							</button>
+							<button className="secondary-button" disabled={refreshing} onClick={() => void refreshActivity()}>
+								<RefreshCw size={15} />
+								{refreshing ? copy.refreshingActivity : copy.refreshActivity}
+							</button>
+						</div>
+					</div>
 				)}
 				{error && (
 					<p className="desktop-update-error" role="alert">

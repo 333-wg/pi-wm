@@ -101,10 +101,21 @@ for (const width of [1360, 800, 390]) {
 		await expect(page.locator(".desktop-update-notice")).toHaveCount(0);
 		await panel.getByRole("checkbox", { name: "自动检查更新" }).uncheck();
 		await expect(panel.getByRole("checkbox")).not.toBeChecked();
-		await patch(page, { status: "ready", busy: true, deferredUntil: 0 });
+		await patch(page, { status: "ready", busy: true, deferredUntil: 0, activity: { terminals: 2, running: 1 } });
 		await expect(panel.getByRole("button", { name: "重启并安装", exact: true })).toBeDisabled();
 		await expect(panel.getByText("有任务正在运行或终端仍打开", { exact: false })).toBeVisible();
-		await patch(page, { busy: false });
+		await expect(panel.getByText("未关闭的终端：2", { exact: true })).toBeVisible();
+		await expect(panel.getByText("运行中的任务：1", { exact: true })).toBeVisible();
+		await expect(panel.getByText("终端空闲或收起后仍会阻止安装。", { exact: false })).toBeVisible();
+		await panel.getByRole("button", { name: "重新检查状态", exact: true }).click();
+		await expect(panel.getByRole("button", { name: "重启并安装", exact: true })).toBeDisabled();
+		await panel.getByRole("button", { name: "前往终端", exact: true }).click();
+		await expect(page.locator("#terminal-dock")).toBeVisible();
+		await openUpdates(page);
+		await patch(page, { busy: true, activityUnknown: true });
+		await expect(panel.getByText("暂时无法确认任务状态，已暂停安装。", { exact: true })).toBeVisible();
+		await expect(panel.getByText("未关闭的终端：2", { exact: true })).toHaveCount(0);
+		await patch(page, { busy: false, activityUnknown: false, activity: { terminals: 0, running: 0 } });
 		await expect(panel.getByRole("button", { name: "重启并安装", exact: true })).toBeEnabled();
 		await page.screenshot({ path: testInfo.outputPath("updates-light-" + width + ".png"), fullPage: true });
 		await page.evaluate(() => {

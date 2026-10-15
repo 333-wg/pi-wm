@@ -20,7 +20,9 @@
 - After confirmation, Windows shows the native installer progress page, verifies the installed files, then automatically starts the new version. This is explicit consent, not unattended background installation.
 - A 24-hour reminder deferral and the automatic-check preference are stored in the user's existing profile.
 - The main process asks the local service about queued/running operations across all sessions, in-flight requests, recovery, automation ticks, and open terminals. Unknown/busy status blocks installation. It checks again after confirmation, gates new requests, then stops the service before invoking the installer.
+- 安装被占用阻止时，更新页显示各类阻塞数量（终端、运行/排队任务、执行中目标、请求及恢复/调度状态），并提供“前往终端”和“重新检查状态”。检查覆盖所有会话与项目；终端面板右上角 × 仅收起面板，需在终端内部工具栏关闭终端。不会自动终止任务或绕过安装保护。
 - Update failure does not remove the installed application or user data. The existing Wuming profile and application ID remain unchanged.
+- 后台请求或调度恰好与更新检查重叠时，每 100ms 重新检查一次，最多等待 1.5 秒，避免把短暂轮询显示成长期任务占用。真正的任务、目标、终端、恢复和关闭状态仍立即阻止安装；持续请求或检查失败也不会放行。安装确认后的最终检查同样保留服务端的原子关闭保护。
 - Development and unconfigured builds report their status explicitly and do not contact a release server.
 
 ## Windows 更新进度

@@ -7492,7 +7492,13 @@ export function App() {
 												className="settings-pane"
 												hidden={settingsSection !== "updates"}
 											>
-												<DesktopUpdateSettings model={desktopUpdates} />
+												<DesktopUpdateSettings
+													model={desktopUpdates}
+													onOpenTerminal={() => {
+														setSettingsOpen(false);
+														openTerminal();
+													}}
+												/>
 											</section>
 										)}
 										{settingsSection === "phone" && (
