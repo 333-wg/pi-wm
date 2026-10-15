@@ -1,7 +1,7 @@
 import { _electron as electron, expect } from "@playwright/test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,9 @@ try {
 		env,
 		timeout: 90_000,
 	});
+	desktop.process().on("exit", (code, signal) => {
+		if (!report.passed) report.unexpectedExit = { code, signal };
+	});
 	await desktop.evaluate(({ app, BrowserWindow, shell }, cachePath) => {
 		const require = process.getBuiltinModule("module").createRequire(app.getAppPath() + "/package.json");
 		const updater = require("electron-updater").autoUpdater;
@@ -58,6 +61,9 @@ try {
 		}
 	}, cache);
 	page = await desktop.firstWindow();
+	page.on("crash", () => {
+		report.rendererCrashed = true;
+	});
 	page.setDefaultTimeout(30_000);
 	await page.evaluate(() => {
 		localStorage.setItem("wuming.locale", "zh");
@@ -106,6 +112,10 @@ try {
 			.catch(() => undefined);
 	throw error;
 } finally {
+	await mkdir(output, { recursive: true });
+	if (!report.passed) {
+		await copyFile(join(profile, "logs", "gateway.log"), join(output, "failure-gateway.log")).catch(() => {});
+	}
 	await desktop?.close();
 	await release?.dispose();
 	await mkdir(output, { recursive: true });
