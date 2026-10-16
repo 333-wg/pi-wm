@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, ExternalLink, Loader2, LogIn, LogOut, X } from "lucide-react";
 import type { Command, OfficialAccount, OfficialProvider } from "@wuming/protocol";
 import { useLocale } from "../lib/locale.js";
+import {
+	OfficialLoginRiskDialog,
+	requiresLoginRiskConfirmation,
+	type RiskProvider,
+} from "./OfficialLoginRiskDialog.js";
 import "./official-accounts.css";
 
 type AccountCommand = Extract<Command, { type: `model.official.${string}` }>;
@@ -21,6 +26,9 @@ export function OfficialAccountSettings({
 	const [codes, setCodes] = useState<Partial<Record<OfficialProvider, string>>>({});
 	const [method, setMethod] = useState<"browser" | "device_code">("browser");
 	const [copied, setCopied] = useState("");
+	const [loginRequest, setLoginRequest] = useState<
+		Extract<AccountCommand, { type: "model.official.start" }> & { provider: RiskProvider }
+	>();
 	const revision = useRef(0);
 	const signature = useRef<string | undefined>(undefined);
 	const opening = useRef<OfficialProvider | undefined>(undefined);
@@ -72,6 +80,7 @@ export function OfficialAccountSettings({
 		};
 	}, [request, apply]);
 	const invoke = async (command: AccountCommand & { provider: OfficialProvider }) => {
+		if (writing.current) return;
 		writing.current = true;
 		revision.current++;
 		setBusy(command.provider);
@@ -90,6 +99,16 @@ export function OfficialAccountSettings({
 	};
 	return (
 		<section className="official-accounts" aria-label={en ? "Official accounts" : "官方账号"}>
+			{loginRequest && (
+				<OfficialLoginRiskDialog
+					provider={loginRequest.provider}
+					onCancel={() => setLoginRequest(undefined)}
+					onConfirm={() => {
+						setLoginRequest(undefined);
+						void invoke(loginRequest);
+					}}
+				/>
+			)}
 			{(error || pollError) && (
 				<p className="official-account-error" role="alert">
 					{error || pollError}
@@ -157,17 +176,19 @@ export function OfficialAccountSettings({
 										type="button"
 										className="secondary-button"
 										disabled={!!busy}
-										onClick={() =>
-											void invoke(
-												account.loggedIn
-													? { type: "model.official.logout", provider: account.provider }
-													: {
-															type: "model.official.start",
-															provider: account.provider,
-															method: account.provider === "official-chatgpt" ? method : "browser",
-														}
-											)
-										}
+										onClick={() => {
+											if (account.loggedIn) {
+												void invoke({ type: "model.official.logout", provider: account.provider });
+											} else if (requiresLoginRiskConfirmation(account.provider)) {
+												setLoginRequest({
+													type: "model.official.start",
+													provider: account.provider,
+													method: account.provider === "official-chatgpt" ? method : "browser",
+												});
+											} else {
+												void invoke({ type: "model.official.start", provider: account.provider, method: "browser" });
+											}
+										}}
 									>
 										{loading ? (
 											<Loader2 size={14} className="spinning" />
@@ -181,6 +202,13 @@ export function OfficialAccountSettings({
 								)}
 							</div>
 						</div>
+						{account.provider === "official-deepseek" && (
+							<p className="official-account-note">
+								{en
+									? "Sign in with your DeepSeek platform account in the browser. Uses your platform balance, not free web-chat access. No API key is needed. If authorization expires, sign out and sign in again."
+									: "使用 DeepSeek 开放平台账号在浏览器授权，无需填写 API Key；调用消耗平台账号余额，不是免费网页版聊天。授权失效时请退出后重新登录。"}
+							</p>
+						)}
 						{pending && (
 							<div className="official-account-authorization">
 								{account.login?.authorizeUrl ? (

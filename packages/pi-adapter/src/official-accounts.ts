@@ -16,11 +16,14 @@ import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-code
 import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import type { ModelMetadata, OfficialAccount, OfficialProvider } from "@wuming/protocol";
 
-const IDS: OfficialProvider[] = ["official-claude", "official-chatgpt", "official-grok"];
+import { deepSeekAccountProvider, revokeDeepSeek } from "./deepseek-account.js";
+
+const IDS: OfficialProvider[] = ["official-claude", "official-chatgpt", "official-grok", "official-deepseek"];
 const HOSTS: Record<OfficialProvider, string[]> = {
 	"official-claude": ["claude.ai", "claude.com", "platform.claude.com"],
 	"official-chatgpt": ["auth.openai.com"],
 	"official-grok": ["auth.x.ai", "accounts.x.ai", "grok.com", "x.ai"],
+	"official-deepseek": ["platform.deepseek.com"],
 };
 
 export function isOfficialProvider(id: string): id is OfficialProvider {
@@ -29,16 +32,19 @@ export function isOfficialProvider(id: string): id is OfficialProvider {
 
 /** Separate IDs prevent subscription credentials from ever reaching custom endpoints. */
 export function officialProviders(): Provider[] {
-	return [anthropicProvider(), openaiCodexProvider(), xaiProvider()].map((base, index) => {
-		const id = IDS[index]!;
-		return {
-			...base,
-			id,
-			name: ["Claude", "ChatGPT", "Grok"][index]!,
-			auth: { oauth: base.auth.oauth! },
-			getModels: () => base.getModels().map((model) => ({ ...model, provider: id })),
-		};
-	});
+	return [
+		...[anthropicProvider(), openaiCodexProvider(), xaiProvider()].map((base, index) => {
+			const id = IDS[index]!;
+			return {
+				...base,
+				id,
+				name: ["Claude", "ChatGPT", "Grok"][index]!,
+				auth: { oauth: base.auth.oauth! },
+				getModels: () => base.getModels().map((model) => ({ ...model, provider: id })),
+			};
+		}),
+		deepSeekAccountProvider(),
+	];
 }
 
 function validCredential(value: unknown): value is OAuthCredential {
@@ -187,7 +193,7 @@ export class OfficialAccountManager {
 				provider: id,
 				name: provider.name,
 				loggedIn: expiresAt !== undefined,
-				...(expiresAt === undefined ? {} : { expiresAt }),
+				...(expiresAt === undefined || id === "official-deepseek" ? {} : { expiresAt }),
 				modelCount: expiresAt === undefined ? 0 : provider.getModels().length,
 				...(this.#logins.has(id) ? { login: structuredClone(this.#logins.get(id)!.public) } : {}),
 			};
@@ -335,8 +341,10 @@ export class OfficialAccountManager {
 	logout(id: OfficialProvider): Promise<void> {
 		return this.#serialize(id, async () => {
 			await this.#cancel(id);
+			const previous = id === "official-deepseek" ? await this.credentials.read(id) : undefined;
 			await this.credentials.delete(id);
 			this.#logins.delete(id);
+			if (previous?.type === "oauth") void revokeDeepSeek(previous.access).catch(() => {});
 		});
 	}
 	async dispose(): Promise<void> {

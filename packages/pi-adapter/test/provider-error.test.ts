@@ -15,6 +15,17 @@ it("retains safe cause codes and request identifiers but not headers or nested b
 	expect(message).not.toMatch(/secret123456|private-header|private-response-body/);
 });
 
+it("redacts DeepSeek account headers including JSON and quoted values", () => {
+	for (const raw of [
+		"x-dsh-auth-token: opaque-grant-value",
+		'headers={"x-dsh-auth-token":"opaque-grant-value"}',
+		"X-DSH-AUTH-TOKEN='opaque-grant-value'",
+	]) {
+		expect(providerErrorMessage(new Error(raw))).not.toContain("opaque-grant-value");
+		expect(providerErrorMessage(new Error(raw))).toContain("[REDACTED]");
+	}
+});
+
 it("bounds cyclic causes and rejects arbitrary diagnostic identifiers", () => {
 	const error = Object.assign(new Error("failed"), {
 		cause: {} as unknown,

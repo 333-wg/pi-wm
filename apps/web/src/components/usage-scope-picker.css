@@ -1,0 +1,107 @@
+.usage-scope-picker {
+	position: relative;
+	width: 220px;
+	max-width: 100%;
+	min-width: 0;
+}
+.usage-scope-trigger {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	width: 100%;
+	min-width: 0;
+	height: 36px;
+	padding: 0 11px;
+	border: 1px solid var(--line-strong);
+	border-radius: 8px;
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	font-size: 12px;
+	text-align: left;
+	cursor: pointer;
+	transition:
+		border-color 120ms,
+		background 120ms;
+}
+.usage-scope-trigger > svg,
+.usage-scope-option > svg {
+	flex: 0 0 auto;
+	color: var(--muted);
+}
+.usage-scope-trigger > span,
+.usage-scope-option > span {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.usage-scope-trigger:hover {
+	background: var(--surface-hover);
+}
+.usage-scope-trigger[aria-expanded="true"],
+.usage-scope-trigger:focus-visible {
+	border-color: var(--green-border);
+	box-shadow: var(--focus-ring);
+	outline: none;
+}
+.usage-scope-trigger[aria-expanded="true"] .usage-scope-chevron {
+	transform: rotate(180deg);
+}
+.usage-scope-menu {
+	position: absolute;
+	z-index: 20;
+	top: calc(100% + 7px);
+	left: 0;
+	width: 100%;
+	max-height: 300px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: 5px;
+	border: 1px solid var(--line-strong);
+	border-radius: 11px;
+	background: var(--surface);
+	box-shadow: var(--shadow-lg);
+	scrollbar-width: thin;
+}
+.usage-scope-option {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	min-height: 36px;
+	padding: 8px;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	color: var(--text-soft);
+	font-size: 12px;
+	cursor: pointer;
+}
+.usage-scope-option.is-all {
+	margin-bottom: 5px;
+}
+.usage-scope-option.is-all + .usage-scope-option {
+	position: relative;
+	margin-top: 9px;
+}
+.usage-scope-option.is-all + .usage-scope-option::before {
+	position: absolute;
+	top: -5px;
+	left: 3px;
+	right: 3px;
+	height: 1px;
+	background: var(--line-soft);
+	content: "";
+}
+.usage-scope-option.is-active {
+	background: var(--surface-hover);
+	border-color: var(--line);
+	color: var(--text);
+}
+.usage-scope-option[aria-selected="true"] {
+	background: var(--green-soft);
+	color: var(--green-strong);
+}
+.usage-scope-option[aria-selected="true"] > svg {
+	color: var(--green-strong);
+}

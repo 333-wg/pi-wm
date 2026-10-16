@@ -175,6 +175,28 @@ describe("official authorization lifecycle", () => {
 });
 
 describe("official runtime integration", () => {
+	it("encrypts DeepSeek account grants and resolves only its dedicated header until logout", async () => {
+		const { root, key, store } = await setup();
+		const manager = new OfficialAccountManager(store);
+		managers.push(manager);
+		await store.modify("official-deepseek", async () => ({
+			...credential(Number.MAX_SAFE_INTEGER),
+			refresh: "not-applicable",
+		}));
+		const restored = new OfficialCredentialStore(join(root, "accounts.enc"), key);
+		await restored.load();
+		expect(await restored.read("official-deepseek")).toMatchObject({ access: "private-access" });
+		expect(await readFile(join(root, "accounts.enc"), "utf8")).not.toContain("private-access");
+		const runtime = await manager.createRuntime(root, "official-deepseek");
+		const model = runtime.getModels("official-deepseek")[0]!;
+		expect(model.api).toBe("anthropic-messages");
+		expect((await runtime.getAuth(model))?.auth).toEqual({ headers: { "x-dsh-auth-token": "private-access" } });
+		expect(JSON.stringify(manager.accounts())).not.toContain("private-access");
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ code: 0, data: { biz_code: 0, biz_data: {} } }));
+		await manager.logout("official-deepseek");
+		expect(await runtime.getAuth(model)).toBeUndefined();
+		expect(manager.list().some((item) => item.model.provider === "official-deepseek")).toBe(false);
+	});
 	it("shares rotation across runtimes, preserves it on disk and stops resolving after logout", async () => {
 		const { root, key, store, provider } = await setup();
 		const refresh = vi.fn(async () => {

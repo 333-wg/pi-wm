@@ -205,7 +205,10 @@ test(firstConnectionTitle, async ({ page }) => {
 
 test("subtasks use the heading network icon instead of the changes branch icon", async ({ page }) => {
 	await createSession(page);
-	for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+	for (const viewport of [
+		{ width: 1440, height: 900 },
+		{ width: 390, height: 844 },
+	]) {
 		await page.setViewportSize(viewport);
 		const subtasks = page.getByRole("tab", { name: "子任务", exact: true });
 		const changes = page.getByRole("tab", { name: "更改", exact: true });
@@ -643,7 +646,11 @@ test("immediate input interrupts active work and overtakes queued follow-ups", a
 	await sendMessage(page, "queued follow-up");
 	await expect(page.getByText(/Demo runtime received: queued follow-up/)).toHaveCount(0);
 	await sendMessage(page, "immediate correction");
-	await page.getByRole("region", { name: "后续任务队列" }).getByRole("button", { name: "立即发送（打断）" }).last().click();
+	await page
+		.getByRole("region", { name: "后续任务队列" })
+		.getByRole("button", { name: "立即发送（打断）" })
+		.last()
+		.click();
 	await expect(page.getByText(/Demo runtime received: immediate correction/)).toBeVisible();
 	await expect(page.getByText(/Demo runtime received: queued follow-up/)).toBeVisible();
 	await waitForIdle(page);
@@ -1071,7 +1078,7 @@ test("organizes settings into focused sections without mobile overflow", async (
 	const usagePanel = dialog.locator("#settings-panel-usage");
 	await expect(usagePanel).toBeVisible();
 	await expect(usagePanel.getByText("全部历史累计", { exact: true })).toBeVisible();
-	await expect(usagePanel.getByRole("combobox", { name: "统计范围" })).toHaveValue("");
+	await expect(usagePanel.getByRole("combobox", { name: "统计范围" })).toHaveText("全部工作区");
 	await expect(usagePanel.getByRole("heading", { name: "每日趋势" })).toBeVisible();
 	await expect(usagePanel.locator(".usage-settings-day")).toHaveCount(7);
 	await usagePanel.getByRole("button", { name: "近 30 天", exact: true }).click();

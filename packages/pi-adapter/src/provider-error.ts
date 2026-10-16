@@ -17,6 +17,7 @@ export function providerErrorMessage(error: unknown): string {
 		candidate = entry.cause;
 	}
 	return (raw.slice(0, 3000) + (details.length ? ` [${[...new Set(details)].join("; ")}]` : ""))
+		.replace(/(x-dsh-auth-token["']?\s*[=:]\s*)["']?[^\s,;"'}]+["']?/gi, "$1[REDACTED]")
 		.replace(/Bearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
 		.replace(/\b(sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/g, "$1-[REDACTED]")
 		.replace(/((?:api[_ -]?key|authorization)\s*[=:]\s*)[^\s,;]+/gi, "$1[REDACTED]")

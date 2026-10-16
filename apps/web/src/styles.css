@@ -6367,20 +6367,6 @@ button {
 	font-size: 11px;
 	white-space: nowrap;
 }
-.usage-settings-toolbar select {
-	width: 190px;
-	max-width: 100%;
-	min-width: 0;
-	height: 34px;
-	padding: 0 8px;
-	border: 1px solid var(--line);
-	border-radius: 6px;
-	background: var(--surface);
-	color: var(--text);
-	font-size: 12px;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
 .usage-settings-actions {
 	min-width: 0;
 	display: flex;

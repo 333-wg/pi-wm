@@ -115,6 +115,7 @@ import { validateCalendarSchedule, type CalendarSchedule } from "@wuming/protoco
 import { CalendarScheduleEditor, SchedulePreview, scheduleLabel } from "./components/AutomationScheduleEditor";
 import { ScheduledTasks } from "./components/ScheduledTasks";
 import { BranchPicker } from "./components/BranchPicker";
+import { UsageScopePicker } from "./components/UsageScopePicker";
 import type {
 	ArtifactRef,
 	AutomationRunSummary,
@@ -3811,14 +3812,15 @@ function UsageSettings({
 			<div className="usage-settings-toolbar">
 				<div>
 					<label htmlFor="usage-workspace-scope">{t("usageWorkspace")}</label>
-					<select id="usage-workspace-scope" value={scope} onChange={(event) => setScope(event.target.value)}>
-						<option value="">{t("usageAllWorkspaces")}</option>
-						{workspaces.map((workspace) => (
-							<option key={workspace.id} value={workspace.id}>
-								{workspaceName(workspace.name)}
-							</option>
-						))}
-					</select>
+					<UsageScopePicker
+						value={scope}
+						onChange={setScope}
+						label={t("usageWorkspace")}
+						options={[
+							{ value: "", label: t("usageAllWorkspaces") },
+							...workspaces.map((workspace) => ({ value: workspace.id, label: workspaceName(workspace.name) })),
+						]}
+					/>
 				</div>
 				<div className="usage-settings-actions">
 					<div className="usage-range-control" role="group" aria-label={t("usageRange")}>

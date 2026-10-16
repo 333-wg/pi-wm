@@ -111,6 +111,7 @@ export const OfficialProviderSchema = Type.Union([
 	Type.Literal("official-claude"),
 	Type.Literal("official-chatgpt"),
 	Type.Literal("official-grok"),
+	Type.Literal("official-deepseek"),
 ]);
 export type OfficialProvider = Static<typeof OfficialProviderSchema>;
 export const OfficialAccountSchema = StrictObject({
