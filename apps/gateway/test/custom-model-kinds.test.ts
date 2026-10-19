@@ -23,6 +23,28 @@ const config = {
 };
 
 describe("custom model classification", () => {
+	it("persists protocol overrides for imported Grok models without copying credentials", async () => {
+		const root = await mkdtemp(join(tmpdir(), "model-kinds-"));
+		roots.push(root);
+		const registry = new CustomModelRegistry({ filePath: join(root, "custom.enc"), encryptionKey: "test" });
+		await registry.set({ ...config, id: "grok-imagine-image" });
+		expect(registry.list()).toEqual([]);
+		const options = { filePath: join(root, "media.enc"), encryptionKey: "test", imageModels: registry };
+		const media = new MediaModelRegistry(options);
+		await media.set({
+			kind: "image",
+			provider: config.provider,
+			baseUrl: config.baseUrl,
+			model: "grok-imagine-image",
+			imageProtocol: "grok",
+		});
+		const loaded = new MediaModelRegistry(options);
+		await loaded.load();
+		expect(loaded.resolve("image")).toMatchObject({ imageProtocol: "grok", apiKey: config.apiKey });
+		expect(loaded.list()[0]?.availableModels?.[0]?.imageProtocol).toBe("grok");
+		await registry.set({ ...config, id: "grok-imagine-image", apiKey: "rotated-key" });
+		expect(loaded.resolve("image").apiKey).toBe("rotated-key");
+	});
 	it("routes legacy image/video entries out of chat after encrypted reload", async () => {
 		const root = await mkdtemp(join(tmpdir(), "model-kinds-"));
 		roots.push(root);

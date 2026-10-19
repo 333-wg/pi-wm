@@ -123,7 +123,11 @@ test.beforeAll(async ({ browser }) => {
 			}
 			const body = JSON.parse(Buffer.concat(chunks).toString());
 			const messages = body.messages as Array<{ role: string; content?: WireContent }>;
-			const lastUser = messages.findLastIndex((message) => message.role === "user");
+			// Host reference snapshots are serialized as user messages, not user task instructions.
+			const lastUser = messages.findLastIndex(
+				(message) =>
+					message.role === "user" && !wireText(message.content).startsWith("## Current host reference snapshot\n")
+			);
 			const results = messages.slice(lastUser + 1).filter((message) => message.role === "tool");
 			const implicitSkill = wireText(messages[lastUser]?.content).includes("FAVORITE_MEDIA_AUTO");
 			const imageRecovery = wireText(messages[lastUser]?.content).includes("IMAGE_RECOVERY_E2E");
@@ -146,8 +150,19 @@ test.beforeAll(async ({ browser }) => {
 							: wireText(results[0]?.content);
 						expect(instructions).toContain("Host integration reminder");
 						expect(instructions).toContain("FAVORITE_STYLE");
-						expect(instructions).toContain('"kind":"image","configured":true');
-						expect(instructions).toContain('"kind":"video","configured":true');
+						const reference = messages.findLast((message) =>
+							wireText(message.content).startsWith("## Current host reference snapshot\n")
+						);
+						const referenceLine = wireText(reference?.content).split("\n")[1];
+						const referenceRecords = referenceLine
+							? (JSON.parse(referenceLine) as Array<{ id: string; content: string }>)
+							: [];
+						const defaults = explicitSkill
+							? referenceRecords.find((record) => record.id === "media:status")?.content
+							: instructions;
+						expect(defaults).toContain('"kind":"image","configured":true');
+						expect(defaults).toContain('"kind":"video","configured":true');
+						expect(defaults).not.toContain("fixture-only-key");
 						skillEvidence.push(explicitSkill ? "manual" : "auto");
 					}
 				}
@@ -717,7 +732,7 @@ for (const mode of ["auto", "manual"] as const) {
 		const player = page.locator(".tool-row video");
 		await expect
 			.poll(async () => {
-				const errors = await page.locator(".failure-details pre").allTextContents();
+				const errors = [...providerErrors, ...(await page.locator(".failure-details pre").allTextContents())];
 				return errors.length ? errors.join("\n") : (await img.count()) ? "image" : "pending";
 			})
 			.toBe("image");
@@ -748,6 +763,7 @@ test("keeps returned images recoverable without another generation charge and la
 	await expect(page.getByText("图片结果已返回，但下载受阻，已保留结果，未重新生成。", { exact: true })).toBeVisible({
 		timeout: 20_000,
 	});
+	await page.locator('.turn-process-summary[aria-expanded="false"]').click();
 	const pending = page.locator(".tool-state").filter({ hasText: "结果已返回，待取回" });
 	await expect(pending).toHaveCount(2);
 	await expect(page.locator(".tool-verb").filter({ hasText: "取回图片" })).toBeVisible();
@@ -756,6 +772,7 @@ test("keeps returned images recoverable without another generation charge and la
 	await page.screenshot({ path: testInfo.outputPath("image-retrieval-pending-desktop.png") });
 	await page.reload();
 	await page.getByRole("button", { name: "IMAGE_RECOVERY_E2E 生成图片", exact: true }).click();
+	await page.locator('.turn-process-summary[aria-expanded="false"]').click();
 	await expect(pending).toHaveCount(2);
 	await page.setViewportSize({ width: 390, height: 844 });
 	const closeRail = page.locator(".rail-mobile-close");

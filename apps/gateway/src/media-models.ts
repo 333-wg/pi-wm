@@ -13,6 +13,7 @@ import {
 	type ImageModelOption,
 	type ModelRef,
 	type MediaModelOption,
+	type ImageProtocolPreference,
 } from "@wuming/protocol";
 import { parseMediaModelCatalog } from "./media-model-discovery.js";
 import { videoProtocol } from "./media-video.js";
@@ -52,6 +53,8 @@ function localProvider(baseUrl: string): string {
 }
 
 function selectedModels(config: MediaModelConfig): string[] {
+	if (config.kind !== "image" && config.imageProtocol !== undefined)
+		throw new Error("Image protocol applies only to image models");
 	if (config.kind !== "video" && config.apiSecret !== undefined)
 		throw new Error("Secret Key applies only to native video models");
 	if (config.kind !== "video" && (config.videoProtocol !== undefined || config.videoReferenceFormat !== undefined))
@@ -101,6 +104,7 @@ export class MediaModelRegistry {
 	#configs = new Map<MediaKind, MediaConnection>();
 	#imageServices = new Map<string, MediaConnection>();
 	#videoModels = new Map<string, VideoModelEntry>();
+	#imageProtocols = new Map<string, ImageProtocolPreference>();
 	readonly #imageModels: ImageModelSource | undefined;
 	#tail: Promise<unknown> = Promise.resolve();
 
@@ -139,7 +143,9 @@ export class MediaModelRegistry {
 				model: config.model,
 				apiKey: config.apiKey,
 				...(config.apiSecret ? { apiSecret: config.apiSecret } : {}),
-				...(config.kind === "image" ? { models } : {}),
+				...(config.kind === "image"
+					? { models, ...(config.imageProtocol ? { imageProtocol: config.imageProtocol } : {}) }
+					: {}),
 				...(config.kind === "video" && config.videoProtocol && config.videoProtocol !== "auto"
 					? { videoProtocol: config.videoProtocol }
 					: {}),
@@ -239,6 +245,21 @@ export class MediaModelRegistry {
 				next.set("video", config);
 			}
 		}
+		const protocols = new Map<string, ImageProtocolPreference>();
+		if (stored.imageProtocols !== undefined) {
+			if (!Array.isArray(stored.imageProtocols)) throw new Error("Image protocol configuration is corrupt");
+			for (const entry of stored.imageProtocols) {
+				if (
+					!Array.isArray(entry) ||
+					entry.length !== 2 ||
+					typeof entry[0] !== "string" ||
+					!["auto", "openai", "grok"].includes(entry[1])
+				)
+					throw new Error("Image protocol configuration is corrupt");
+				protocols.set(entry[0], entry[1]);
+			}
+		}
+		this.#imageProtocols = protocols;
 		this.#imageServices = services;
 		this.#videoModels = videos;
 		this.#configs = next;
@@ -285,7 +306,11 @@ export class MediaModelRegistry {
 		for (const [provider, config] of this.#imageServices)
 			for (const id of config.models ?? [config.model])
 				models.push({ provider, id, name: id, baseUrl: config.baseUrl, custom: false });
-		return models;
+		return models.map((item) => {
+			const protocol =
+				this.#imageProtocols.get(videoKey(item)) ?? this.#imageServices.get(item.provider)?.imageProtocol;
+			return { ...item, ...(protocol ? { imageProtocol: protocol } : {}) };
+		});
 	}
 
 	#defaultImage(models: ImageModelOption[]): ImageModelOption | undefined {
@@ -320,6 +345,7 @@ export class MediaModelRegistry {
 		if (image)
 			settings.unshift({
 				kind: "image",
+				...(image.imageProtocol ? { imageProtocol: image.imageProtocol } : {}),
 				provider: image.provider,
 				baseUrl: image.baseUrl,
 				model: image.id,
@@ -355,7 +381,11 @@ export class MediaModelRegistry {
 				});
 				mediaResourceUrl(config.baseUrl, "models");
 				if (!config.apiKey) throw new Error("Image service credentials are unavailable");
-				return { ...config, apiKey: config.apiKey };
+				return {
+					...config,
+					apiKey: config.apiKey,
+					...(selected.imageProtocol ? { imageProtocol: selected.imageProtocol } : {}),
+				};
 			}
 			const config = this.#imageServices.get(selected.provider)!;
 			return {
@@ -363,6 +393,7 @@ export class MediaModelRegistry {
 				provider: selected.provider,
 				model: selected.id,
 				models: [...(config.models ?? [config.model])],
+				...(selected.imageProtocol ? { imageProtocol: selected.imageProtocol } : {}),
 			};
 		}
 		const models = this.#availableVideos();
@@ -431,11 +462,19 @@ export class MediaModelRegistry {
 				(item) => item.provider === config.provider && item.id === model && item.baseUrl === baseUrl
 			);
 			if (!selected) throw new Error("生成模型与已保存的服务不匹配");
-			await this.setImageDefault(selected);
+			const resolved = this.resolve("image", model, selected.provider);
+			await this.#mutate((next, _images, _videos, protocols) => {
+				if (config.imageProtocol !== undefined) protocols.set(videoKey(selected), config.imageProtocol);
+				// Editing a model's protocol must not change the user's default model.
+				if (config.imageProtocol === undefined) next.set("image", resolved);
+			});
 			return;
 		}
-		await this.#mutate((next, images) => {
+		await this.#mutate((next, images, _videos, protocols) => {
 			const previous = images.get(localProvider(baseUrl));
+			if (config.imageProtocol !== undefined)
+				for (const id of models)
+					protocols.set(videoKey({ provider: localProvider(baseUrl), id }), config.imageProtocol);
 			const imageModels = [...new Set([...(previous?.models ?? (previous ? [previous.model] : [])), ...models])];
 			if (imageModels.length > 50) throw new Error("每个手动添加的生图服务最多保存 50 个模型");
 			const apiKey = config.apiKey?.trim() || (previous?.baseUrl === baseUrl ? previous.apiKey : undefined);
@@ -518,7 +557,8 @@ export class MediaModelRegistry {
 	}
 
 	async removeImage(model: ModelRef): Promise<void> {
-		await this.#mutate((next, images) => {
+		await this.#mutate((next, images, _videos, protocols) => {
+			protocols.delete(videoKey(model));
 			const service = images.get(model.provider);
 			if (!service) throw new Error("请从对应的已添加服务中删除此模型");
 			const models = (service.models ?? [service.model]).filter((id) => id !== model.id);
@@ -535,10 +575,12 @@ export class MediaModelRegistry {
 	}
 
 	async remove(kind: MediaKind): Promise<void> {
-		await this.#mutate((next, images, videos) => {
+		await this.#mutate((next, images, videos, protocols) => {
 			next.delete(kind);
-			if (kind === "image") images.clear();
-			else videos.clear();
+			if (kind === "image") {
+				images.clear();
+				protocols.clear();
+			} else videos.clear();
 		});
 	}
 
@@ -598,14 +640,16 @@ export class MediaModelRegistry {
 		change: (
 			next: Map<MediaKind, MediaConnection>,
 			images: Map<string, MediaConnection>,
-			videos: Map<string, VideoModelEntry>
+			videos: Map<string, VideoModelEntry>,
+			protocols: Map<string, ImageProtocolPreference>
 		) => void
 	): Promise<void> {
 		const pending = this.#tail.then(async () => {
 			const next = new Map(this.#configs);
 			const images = new Map(this.#imageServices);
 			const videos = new Map(this.#videoModels);
-			change(next, images, videos);
+			const protocols = new Map(this.#imageProtocols);
+			change(next, images, videos, protocols);
 			const iv = randomBytes(12);
 			const cipher = createCipheriv("aes-256-gcm", this.#key, iv);
 			const data = Buffer.concat([
@@ -615,6 +659,7 @@ export class MediaModelRegistry {
 						models: [...next.values()],
 						imageServices: [...images.values()],
 						videoModels: [...videos.values()],
+						imageProtocols: [...protocols],
 					})
 				),
 				cipher.final(),
@@ -632,6 +677,7 @@ export class MediaModelRegistry {
 					{ mode: 0o600 }
 				);
 				await rename(temporary, this.#filePath);
+				this.#imageProtocols = protocols;
 				this.#configs = next;
 				this.#imageServices = images;
 				this.#videoModels = videos;

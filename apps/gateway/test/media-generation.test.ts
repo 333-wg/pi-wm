@@ -885,6 +885,99 @@ describe("media model settings", () => {
 });
 
 describe("image generation via official and relay endpoints", () => {
+	it("persists per-model image protocols, allows reset and keeps the default unchanged", async () => {
+		const f = await fixture();
+		await f.models.set({
+			kind: "image",
+			baseUrl: "https://relay.example/v1",
+			model: "grok-imagine-image",
+			models: ["grok-imagine-image", "gpt-image-1"],
+			apiKey: "secret",
+			imageProtocol: "auto",
+		});
+		const provider = f.models.list()[0]!.provider!;
+		await f.models.set({
+			kind: "image",
+			provider,
+			baseUrl: "https://relay.example/v1",
+			model: "gpt-image-1",
+			imageProtocol: "grok",
+		});
+		const loaded = new MediaModelRegistry(f.options);
+		await loaded.load();
+		expect(loaded.list()[0]!.model).toBe("grok-imagine-image");
+		expect(loaded.resolve("image", "gpt-image-1").imageProtocol).toBe("grok");
+		expect(loaded.resolve("image", "grok-imagine-image").imageProtocol).toBe("auto");
+		await loaded.set({
+			kind: "image",
+			provider,
+			baseUrl: "https://relay.example/v1",
+			model: "gpt-image-1",
+			imageProtocol: "auto",
+		});
+		expect(loaded.resolve("image", "gpt-image-1").imageProtocol).toBe("auto");
+		await expect(
+			loaded.set({
+				kind: "video",
+				baseUrl: "https://relay.example/v1",
+				model: "video",
+				apiKey: "secret",
+				imageProtocol: "grok",
+			})
+		).rejects.toThrow("only to image");
+		expect(JSON.stringify(loaded.list())).not.toContain("secret");
+	});
+
+	for (const baseUrl of ["https://api.x.ai/v1", "https://relay.example/custom/v1"]) {
+		it(`uses Grok JSON editing, safe result recovery and capabilities at ${baseUrl}`, async () => {
+			const f = await fixture();
+			await f.models.set({
+				kind: "image",
+				baseUrl,
+				model: "grok-imagine-image",
+				apiKey: "private-media-key",
+				...(baseUrl.includes("relay") ? { imageProtocol: "grok" as const } : {}),
+			});
+			const ref = (
+				await f.artifacts.create({ workspaceId: "workspace", ownerId: "user", name: "ref.png", content: png })
+			).ref;
+			const params = { prompt: "edit", referenceArtifactId: ref.id, aspectRatio: "16:9", resolution: "2k" };
+			f.fetchMock.mockResolvedValueOnce(json({ data: [{ url: "https://cdn.example/image.png" }] }));
+			f.download.mockRejectedValueOnce(new Error("offline"));
+			expect((await f.invoke("generate_image", params)).details).toHaveProperty("status", "retrieval_pending");
+			const request = f.fetchMock.mock.calls[0]!;
+			expect(request[0]).toBe(`${baseUrl}/images/edits`);
+			expect(request[1]?.headers).toMatchObject({ "Content-Type": "application/json" });
+			expect(JSON.parse(String(request[1]?.body))).toEqual({
+				model: "grok-imagine-image",
+				prompt: "edit",
+				n: 1,
+				aspect_ratio: "16:9",
+				resolution: "2k",
+				image: { type: "image_url", url: `data:image/png;base64,${png.toString("base64")}` },
+			});
+			const completed = await f.invoke("generate_image", params);
+			expect(completed.details).toHaveProperty("artifact");
+			expect(f.fetchMock).toHaveBeenCalledTimes(1);
+			const status = JSON.stringify(await f.invoke("media_model_status", {}));
+			expect(status).toContain("imageCapabilities");
+			expect(status).toContain("data-url");
+			expect(status).not.toContain("private-media-key");
+		});
+	}
+
+	it("rejects Grok invalid parameters and cross-workspace references before submitting", async () => {
+		const f = await fixture();
+		await f.configure("image", "https://api.x.ai/v1", "grok-imagine-image");
+		await expect(f.invoke("generate_image", { prompt: "image", size: "1024x1024" })).rejects.toThrow("not size");
+		expect(f.approvals.authorize).not.toHaveBeenCalled();
+		const ref = (await f.artifacts.create({ workspaceId: "other", ownerId: "user", name: "ref.png", content: png }))
+			.ref;
+		await expect(f.invoke("generate_image", { prompt: "image", referenceArtifactId: ref.id })).rejects.toThrow(
+			"not accessible"
+		);
+		expect(f.fetchMock).not.toHaveBeenCalled();
+	});
 	for (const baseUrl of ["https://api.openai.com/v1", "https://relay.example/custom/v1"]) {
 		it(`uses the saved default and Base64 response at ${baseUrl}`, async () => {
 			const f = await fixture();

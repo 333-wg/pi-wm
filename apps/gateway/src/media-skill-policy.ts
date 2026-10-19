@@ -2,13 +2,21 @@ import { createHash } from "node:crypto";
 import type { ContextFragment } from "@wuming/context-engine";
 import type { MediaModelSettings } from "@wuming/protocol";
 import { videoCapabilities } from "./media-video.js";
+import { imageCapabilities } from "./media-image.js";
 
 export type MediaDefaults = ReadonlyArray<
 	Pick<MediaModelSettings, "kind"> &
 		Partial<
 			Pick<
 				MediaModelSettings,
-				"model" | "models" | "baseUrl" | "videoProtocol" | "videoReferenceFormat" | "provider" | "availableModels"
+				| "model"
+				| "models"
+				| "baseUrl"
+				| "imageProtocol"
+				| "videoProtocol"
+				| "videoReferenceFormat"
+				| "provider"
+				| "availableModels"
 			>
 		>
 >;
@@ -38,6 +46,7 @@ export function mediaSkillRoutingPolicy(tools: ReadonlySet<string> = allMediaToo
 		"Do not ask the user for another API key, endpoint, model or provider account. Do not configure environment variables, .env files, SDK credentials or skill-specific model settings. Do not run or rewrite a skill's provider API script merely to generate media. Never expose the host's secrets to a skill or subprocess.",
 		...(tools.has("generate_image")
 			? [
+					"Check imageCapabilities before generation: Grok uses aspectRatio/resolution and JSON reference images, OpenAI uses size and multipart references. Do not silently discard unsupported parameters or change protocols after a billable submission.",
 					`All added image models are available across services, not only the default service. Omit generate_image.model and provider to use the default; when the user requests another model, select its model ID and provider from ${tools.has("media_model_status") ? "media_model_status.availableModels" : "the current host defaults in context; if unavailable, report that model selection cannot be verified"}. IDs may repeat across services, so include provider to disambiguate. A skill's hard-coded model is not a user override. Never fan out to every available model or retry with another model automatically; each generation may incur charges.`,
 				]
 			: []),
@@ -91,6 +100,15 @@ export function mediaModelStatus(defaults: MediaDefaults, tools: ReadonlySet<str
 							model: item.id,
 							name: item.name,
 							service: new URL(item.baseUrl).host,
+							...(kind === "image"
+								? {
+										imageCapabilities: imageCapabilities({
+											baseUrl: item.baseUrl,
+											model: item.id,
+											...(item.imageProtocol ? { imageProtocol: item.imageProtocol } : {}),
+										}),
+									}
+								: {}),
 							...(kind === "video"
 								? {
 										videoCapabilities: videoCapabilities({
@@ -102,6 +120,15 @@ export function mediaModelStatus(defaults: MediaDefaults, tools: ReadonlySet<str
 									}
 								: {}),
 						})),
+					}
+				: {}),
+			...(kind === "image" && config?.model && config.baseUrl
+				? {
+						imageCapabilities: imageCapabilities({
+							baseUrl: config.baseUrl,
+							model: config.model,
+							...(config.imageProtocol ? { imageProtocol: config.imageProtocol } : {}),
+						}),
 					}
 				: {}),
 			...(kind === "video" && config?.model && config.baseUrl

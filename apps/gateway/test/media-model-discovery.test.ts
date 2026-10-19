@@ -23,6 +23,10 @@ describe("media catalog filtering", () => {
 		const images = [
 			"agnes-image-2.0-flash",
 			"agnes-image-2.1-flash",
+			"grok-imagine-image",
+			"grok-imagine-image-pro",
+			"grok-imagine-image-2.0",
+			"xai/grok-2-image-1212",
 			"gpt-image-1",
 			"gpt-image-2",
 			"dall-e-3",
@@ -47,6 +51,8 @@ describe("media catalog filtering", () => {
 		];
 		const others = [
 			"agnes-2.5-flash",
+			"grok-4",
+			"grok-imagine-imagery",
 			"agnes-videography",
 			"agnes-imagery",
 			"gpt-4o",
@@ -83,6 +89,7 @@ describe("media catalog filtering", () => {
 			{ id: "sora-disabled", capabilities: { video_generation: false } },
 			{ id: "agnes-video-v2.0", output_modalities: ["text"] },
 			{ id: "agnes-image-disabled", capabilities: { image_generation: false } },
+			{ id: "grok-imagine-image", output_modalities: ["text"] },
 			{ id: "vision", input: ["text", "image", "video"], name: "gpt-image-1" },
 			{ id: "gpt-image-caption", task: "image-to-text" },
 		];

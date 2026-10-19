@@ -56,13 +56,29 @@ check. They never call `GET <base>/models/<model>` or submit a paid generation
 request. Successful discovery or saving does not verify generation permissions,
 billing, or supported parameters; those are exercised by actual chat generation.
 
+## Grok 生图：官方与中转站
+
+生图协议支持 **自动识别 / OpenAI Images / Grok Images**。在「设置 → 模型 → 图片与视频生成」添加服务时选择协议；已添加模型右侧的协议选择器会立即保存，支持同一服务的不同模型分别配置。更改协议不会切换默认模型。旧配置无需迁移，保持自动模式。
+
+- **xAI 官方**：Base URL 为 `https://api.x.ai/v1`，自动模式识别为 Grok。填写账号实际可用的准确模型 ID，如 `grok-imagine-image`、`grok-imagine-image-pro` 或 `grok-imagine-image-2.0`。模型列表也识别 `grok-2-image` 系列；识别不代表模型仍在售或账号有权限。
+- **原生 Grok 协议中转**：填写中转地址（保留 `/api/v1` 等实际路径），手动选择 **Grok Images**。不会仅凭模型名称推断中转协议。
+- **OpenAI 格式中转**：如果中转站把 Grok 转换成 OpenAI Images API，选择 **OpenAI Images**，或保留自动模式。
+- 文生图均使用 JSON `POST <base>/images/generations`。Grok 参考图使用 JSON `POST <base>/images/edits`，`image: {type: "image_url", url: "data:...;base64,..."}`；OpenAI 参考图仍使用 multipart。参考图只能来自当前工作区，Base64 在宿主内编码，不写入模型上下文，也不上传到额外图床。
+- Grok 使用 `aspectRatio`（如 `16:9`）和 `resolution`（`1k` / `2k`），不接受 OpenAI 的像素 `size`。不支持的显式参数会在提交前报错，不静默转换或忽略。旧 `grok-2-image` 不启用参考图及新版尺寸参数；`quality` 仅对文档明确支持的 `grok-imagine-image-2.0` 开放 `auto` / `low` / `medium`，建议默认省略。
+- `media_model_status` 为默认及每个已添加生图模型提供无密钥的 `imageCapabilities`，包括协议、参考图传输方式和参数范围。
+- 结果继续接受 `data[0].url` / `data[0].b64_json`。下载失败仍保存恢复任务，不自动切换协议或重复提交收费请求。
+
+**边界**：这不是任意中转站私有 API 的通用兼容层。Gemini 原生、Responses 生图工具、异步生图任务、多参考图等未在本次加入。同步 Grok 文生图与单参考图路径已按官方文档适配并用模拟服务测试，未进行真实收费验收；具体中转站仍须符合所选协议。
+
+接口依据（2026-10-17 核对）：[xAI 生图](https://docs.x.ai/developers/model-capabilities/images/generation)、[xAI 编辑图片](https://docs.x.ai/developers/model-capabilities/images/editing)。后者明确要求 JSON，而不是 OpenAI SDK 的 multipart 编辑请求。
+
 ## Skill Contract
 
 Skills use these host tools instead of embedding credentials or provider scripts:
 
 ```text
 media_model_status({})
-generate_image({ prompt, model?, size?, quality?, referenceArtifactId? })
+generate_image({ prompt, model?, provider?, size?, quality?, aspectRatio?, resolution?, referenceArtifactId? })
 generate_video({ prompt, size?, seconds?, aspectRatio?, referenceArtifactId?, referenceImageUrl? })
 get_generated_video({ jobId })
 ```

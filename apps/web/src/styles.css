@@ -7174,6 +7174,11 @@ button {
 	background: var(--surface);
 	color: var(--text);
 }
+.settings-dialog .image-protocol-select {
+	flex-basis: 138px;
+	width: 138px;
+	min-width: 138px;
+}
 .custom-model-advanced {
 	padding: 8px 10px;
 	border: 1px solid var(--line);
@@ -9751,7 +9756,31 @@ button {
 .media-model-settings { margin-top: 24px; min-width: 0; }
 .media-model-settings h3 { font-size: 16px; margin: 0 0 16px; }
 .media-add-image-service { margin: 16px 0 24px; }
-.media-add-image-service > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.media-add-image-service > summary {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-height: 58px;
+	padding: 10px 16px;
+	list-style: none;
+	cursor: pointer;
+	border: 1px solid var(--green-border);
+	border-radius: 10px;
+	background: var(--green-soft);
+	color: var(--green-strong);
+	font-size: 13px;
+	font-weight: 600;
+	transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.media-add-image-service > summary::-webkit-details-marker { display: none; }
+.media-add-image-service > summary::marker { content: ""; }
+.media-add-image-service > summary:hover { border-color: var(--green); box-shadow: 0 2px 8px var(--accent-glow); }
+.media-add-image-service > summary:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+.media-add-service-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 32px; height: 32px; border-radius: 8px; background: var(--surface); }
+.media-add-service-label { flex: 1; min-width: 0; }
+.media-add-service-toggle { flex: 0 0 auto; }
+.media-add-image-service[open] > summary { border-color: var(--green); }
+.media-add-image-service[open] > .media-model-form { margin-top: 12px; }
 .media-model-form { border-top: 1px solid var(--line); padding: 18px 0; min-width: 0; }
 .media-model-heading { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
 .media-model-heading h4 { margin: 0; font-size: 14px; }

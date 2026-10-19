@@ -14,6 +14,7 @@ import {
 	type MediaConnection,
 } from "./media-models.js";
 import { mediaModelStatus } from "./media-skill-policy.js";
+import { imageRequest, imageProtocol, validateImageRequest, type ImageReference } from "./media-image.js";
 import {
 	validateVideoRequest,
 	videoRequest,
@@ -398,7 +399,24 @@ export class MediaGenerationService {
 									"Saved service ID from media_model_status.availableModels. Pair with model to choose a specific service; never pass an endpoint or API key.",
 							})
 						),
-						size: Type.Optional(Type.String({ pattern: "^(auto|[0-9]{2,4}x[0-9]{2,4})$" })),
+						size: Type.Optional(
+							Type.String({
+								pattern: "^(auto|[0-9]{2,4}x[0-9]{2,4})$",
+								description: "OpenAI-compatible pixel size only. For Grok use aspectRatio/resolution instead.",
+							})
+						),
+						aspectRatio: Type.Optional(
+							Type.String({
+								minLength: 1,
+								maxLength: 20,
+								description: "Grok image aspect ratio, e.g. 16:9. Check imageCapabilities; omit for OpenAI.",
+							})
+						),
+						resolution: Type.Optional(
+							Type.Union([Type.Literal("1k"), Type.Literal("2k")], {
+								description: "Grok image resolution tier; omit for provider default.",
+							})
+						),
 						quality: Type.Optional(
 							Type.Union(["auto", "low", "medium", "high", "standard", "hd"].map((value) => Type.Literal(value)))
 						),
@@ -408,6 +426,7 @@ export class MediaGenerationService {
 				),
 				execute: async (id, params, externalSignal): Promise<ImageToolResult> => {
 					const config = this.#models.resolve("image", params.model, params.provider);
+					validateImageRequest(config, params);
 					const permit = await authorize(id, config, externalSignal);
 					const signal = AbortSignal.any([
 						...(externalSignal ? [externalSignal] : []),
@@ -423,6 +442,9 @@ export class MediaGenerationService {
 									params.size ?? null,
 									params.quality ?? null,
 									params.referenceArtifactId ?? null,
+									...(imageProtocol(config) === "grok"
+										? ["grok", params.aspectRatio ?? null, params.resolution ?? null]
+										: []),
 								])
 							)
 							.digest("hex");
@@ -432,33 +454,18 @@ export class MediaGenerationService {
 							)
 							.get(snapshot.session.id, snapshot.session.workspaceId, requestHash) as unknown as ImageJob | undefined;
 						if (pending) return await this.#retrieveImage(snapshot, pending, signal, true);
-						let body: BodyInit;
-						let resource = "images/generations";
+						let reference: ImageReference | undefined;
 						if (params.referenceArtifactId) {
 							const record = this.#artifacts.get(params.referenceArtifactId);
 							if (!record || record.workspaceId !== snapshot.session.workspaceId || record.kind !== "image")
 								throw new Error("Reference image is not accessible in this workspace");
 							const { content } = await this.#artifacts.read(params.referenceArtifactId);
-							const form = new FormData();
-							form.set("model", config.model);
-							form.set("prompt", params.prompt);
-							form.set("n", "1");
-							form.set("image", new Blob([new Uint8Array(content)], { type: record.ref.mimeType }), record.ref.name);
-							if (params.size) form.set("size", params.size);
-							if (params.quality) form.set("quality", params.quality);
-							body = form;
-							resource = "images/edits";
-						} else {
-							body = JSON.stringify({
-								model: config.model,
-								prompt: params.prompt,
-								n: 1,
-								...(params.size ? { size: params.size } : {}),
-								...(params.quality ? { quality: params.quality } : {}),
-							});
+							if (content.length > this.#maxImageBytes) throw new Error("Reference image exceeds size limit");
+							reference = { content, mimeType: record.ref.mimeType, name: record.ref.name };
 						}
+						const request = imageRequest(config, params, reference);
 						const payload = await this.#json(
-							await this.#request(config, resource, signal, body, resource === "images/generations"),
+							await this.#request(config, request.resource, signal, request.body, request.json),
 							Math.ceil((this.#maxImageBytes * 4) / 3) + 65536
 						);
 						const image = object(Array.isArray(payload.data) ? payload.data[0] : undefined);

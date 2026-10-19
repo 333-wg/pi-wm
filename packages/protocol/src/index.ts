@@ -240,6 +240,12 @@ export type CustomModelSettings = Static<typeof CustomModelSettingsSchema>;
 
 export const MediaKindSchema = Type.Union([Type.Literal("image"), Type.Literal("video")]);
 export type MediaKind = Static<typeof MediaKindSchema>;
+export const ImageProtocolPreferenceSchema = Type.Union([
+	Type.Literal("auto"),
+	Type.Literal("openai"),
+	Type.Literal("grok"),
+]);
+export type ImageProtocolPreference = Static<typeof ImageProtocolPreferenceSchema>;
 export const VideoProtocolPreferenceSchema = Type.Union([
 	Type.Literal("auto"),
 	Type.Literal("openai"),
@@ -267,6 +273,7 @@ export const MediaModelDiscoveryConnectionSchema = StrictObject({
 });
 export type MediaModelDiscoveryConnection = Static<typeof MediaModelDiscoveryConnectionSchema>;
 export const MediaModelConfigSchema = StrictObject({
+	imageProtocol: Type.Optional(ImageProtocolPreferenceSchema),
 	provider: Type.Optional(Id),
 	kind: MediaKindSchema,
 	videoProtocol: Type.Optional(VideoProtocolPreferenceSchema),
@@ -281,6 +288,7 @@ export const MediaModelConfigSchema = StrictObject({
 });
 export type MediaModelConfig = Static<typeof MediaModelConfigSchema>;
 export const ImageModelOptionSchema = StrictObject({
+	imageProtocol: Type.Optional(ImageProtocolPreferenceSchema),
 	videoProtocol: Type.Optional(VideoProtocolPreferenceSchema),
 	videoReferenceFormat: Type.Optional(VideoReferenceFormatSchema),
 	provider: Id,
@@ -292,6 +300,7 @@ export const ImageModelOptionSchema = StrictObject({
 export type ImageModelOption = Static<typeof ImageModelOptionSchema>;
 export type MediaModelOption = ImageModelOption;
 export const MediaModelSettingsSchema = StrictObject({
+	imageProtocol: Type.Optional(ImageProtocolPreferenceSchema),
 	provider: Type.Optional(Id),
 	availableModels: Type.Optional(Type.Array(ImageModelOptionSchema)),
 	kind: MediaKindSchema,

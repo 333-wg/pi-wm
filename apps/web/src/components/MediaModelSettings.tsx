@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Image, Video, Save, Trash2, RefreshCw, ListFilter, Star, Pencil } from "lucide-react";
+import { Image, Video, Save, Trash2, RefreshCw, ListFilter, Star, Pencil, Plus, ChevronDown } from "lucide-react";
 import type {
 	CustomModelCandidate,
 	CustomModelConfig,
@@ -10,6 +10,7 @@ import type {
 	MediaModelDiscoveryConnection,
 	MediaModelSettings as SavedModel,
 	VideoProtocolPreference,
+	ImageProtocolPreference,
 } from "@wuming/protocol";
 
 interface Props {
@@ -99,6 +100,7 @@ function ModelForm({
 	const [model, setModel] = useState(saved?.model ?? "");
 	const [apiKey, setApiKey] = useState("");
 	const [apiSecret, setApiSecret] = useState("");
+	const [imageProtocol, setImageProtocol] = useState<ImageProtocolPreference>(saved?.imageProtocol ?? "auto");
 	const [videoProtocol, setVideoProtocol] = useState<VideoProtocolPreference>(saved?.videoProtocol ?? "auto");
 	const [base64Reference, setBase64Reference] = useState(saved?.videoReferenceFormat === "data-url");
 	const native = kind === "video" ? nativeProtocol(videoProtocol, baseUrl, model) : undefined;
@@ -140,12 +142,15 @@ function ModelForm({
 			(videoProtocol !== (saved?.videoProtocol ?? "auto") ||
 				base64Reference !== (saved?.videoReferenceFormat === "data-url"))) ||
 		(kind === "image" &&
-			JSON.stringify([...imageModels].sort()) !== JSON.stringify([...(JSON.parse(savedModelsKey) as string[])].sort()));
+			(imageProtocol !== (saved?.imageProtocol ?? "auto") ||
+				JSON.stringify([...imageModels].sort()) !==
+					JSON.stringify([...(JSON.parse(savedModelsKey) as string[])].sort())));
 	useEffect(() => {
 		setBaseUrl(saved?.baseUrl ?? "");
 		setModel(saved?.model ?? "");
 		setApiKey("");
 		setApiSecret("");
+		setImageProtocol(saved?.imageProtocol ?? "auto");
 		setVideoProtocol(saved?.videoProtocol ?? "auto");
 		setBase64Reference(saved?.videoReferenceFormat === "data-url");
 		setNotice("");
@@ -153,7 +158,14 @@ function ModelForm({
 		setCandidates([]);
 		setSelectedModels(JSON.parse(savedModelsKey) as string[]);
 		setSearch("");
-	}, [saved?.baseUrl, saved?.model, saved?.videoProtocol, saved?.videoReferenceFormat, savedModelsKey]);
+	}, [
+		saved?.baseUrl,
+		saved?.model,
+		saved?.imageProtocol,
+		saved?.videoProtocol,
+		saved?.videoReferenceFormat,
+		savedModelsKey,
+	]);
 	async function perform(action: () => Promise<void>) {
 		setBusy(true);
 		setNotice("");
@@ -177,7 +189,7 @@ function ModelForm({
 						...(kind === "video" && saved?.provider ? { provider: saved.provider } : {}),
 						baseUrl: baseUrl.trim(),
 						model: model.trim(),
-						...(kind === "image" ? { models: imageModels } : {}),
+						...(kind === "image" ? { models: imageModels, imageProtocol } : {}),
 						...(kind === "video"
 							? { videoProtocol, videoReferenceFormat: base64Reference ? ("data-url" as const) : ("auto" as const) }
 							: {}),
@@ -198,7 +210,14 @@ function ModelForm({
 				<label>
 					接口协议
 					{kind === "image" ? (
-						<input readOnly value="OpenAI Images（官方 / 兼容中转）" />
+						<select
+							value={imageProtocol}
+							onChange={(event) => setImageProtocol(event.target.value as ImageProtocolPreference)}
+						>
+							<option value="auto">自动识别（xAI 官方 / 其他 OpenAI 兼容）</option>
+							<option value="openai">OpenAI Images（官方 / 兼容中转）</option>
+							<option value="grok">Grok Images（xAI 官方 / 原生协议中转）</option>
+						</select>
 					) : (
 						<select
 							value={videoProtocol}
@@ -516,6 +535,30 @@ export function MediaModelSettings(props: Props) {
 								<small>{item.baseUrl}</small>
 							</span>
 							<div className="custom-model-row-actions">
+								<select
+									className="model-kind-select image-protocol-select"
+									aria-label={`生图协议：${item.id}`}
+									value={item.imageProtocol ?? "auto"}
+									disabled={catalogBusy || !props.connected || !loaded}
+									onChange={(event) => {
+										const imageProtocol = event.target.value as ImageProtocolPreference;
+										void catalogAction(async () =>
+											setSettings(
+												await props.onSave({
+													kind: "image",
+													provider: item.provider,
+													baseUrl: item.baseUrl,
+													model: item.id,
+													imageProtocol,
+												})
+											)
+										);
+									}}
+								>
+									<option value="auto">自动协议</option>
+									<option value="openai">OpenAI Images</option>
+									<option value="grok">Grok Images</option>
+								</select>
 								{original && (
 									<select
 										className="model-kind-select"
@@ -583,7 +626,17 @@ export function MediaModelSettings(props: Props) {
 				open={addImageOpen}
 				onToggle={(event) => setAddImageOpen(event.currentTarget.open)}
 			>
-				<summary>手动添加生图服务</summary>
+				<summary>
+					<span className="media-add-service-icon">
+						<Image size={20} aria-hidden="true" />
+					</span>
+					<span className="media-add-service-label">手动添加生图服务</span>
+					{addImageOpen ? (
+						<ChevronDown className="media-add-service-toggle" size={18} aria-hidden="true" />
+					) : (
+						<Plus className="media-add-service-toggle" size={18} aria-hidden="true" />
+					)}
+				</summary>
 				{addImageOpen && (
 					<ModelForm
 						kind="image"
@@ -752,7 +805,17 @@ export function MediaModelSettings(props: Props) {
 				open={addVideoOpen}
 				onToggle={(event) => setAddVideoOpen(event.currentTarget.open)}
 			>
-				<summary>手动添加视频服务</summary>
+				<summary>
+					<span className="media-add-service-icon">
+						<Video size={20} aria-hidden="true" />
+					</span>
+					<span className="media-add-service-label">手动添加视频服务</span>
+					{addVideoOpen ? (
+						<ChevronDown className="media-add-service-toggle" size={18} aria-hidden="true" />
+					) : (
+						<Plus className="media-add-service-toggle" size={18} aria-hidden="true" />
+					)}
+				</summary>
 				{addVideoOpen && (
 					<ModelForm
 						kind="video"
