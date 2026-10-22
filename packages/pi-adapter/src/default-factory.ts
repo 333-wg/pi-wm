@@ -14,6 +14,8 @@ import type { SessionSnapshot } from "@wuming/protocol";
 import { Value } from "typebox/value";
 import { buildWumingSystemPrompt, refreshWumingSystemDate } from "./system-prompt.js";
 import { ToolRecoveryMonitor } from "./tool-recovery.js";
+import { BackgroundTasks } from "./background-tasks.js";
+import { join } from "node:path";
 import { stableToolDefinitions } from "./prompt-cache.js";
 import { guardedModelStream } from "./model-stream.js";
 import { installLoopCompaction } from "./loop-compaction.js";
@@ -143,7 +145,13 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 		// that prompt from the resource loader the services own.
 		const definitions = stableToolDefinitions((await options.createCustomTools?.(snapshot)) ?? []);
 		const recovery = new ToolRecoveryMonitor(definitions.some((tool) => tool.name === "skill_load"));
-		const customTools = definitions.map((tool) => recovery.wrap(tool));
+		const backgroundTasks = new BackgroundTasks(snapshot.session.id, cwd, join(sessionDir, "background-tasks.json"));
+		await backgroundTasks.restore();
+		const recoveredTools = definitions.map((tool) => recovery.wrap(tool));
+		const customTools = [
+			...recoveredTools.map((tool) => backgroundTasks.guard(tool)),
+			...backgroundTasks.tools(recoveredTools),
+		];
 		const systemPrompt = (options.buildSystemPrompt ?? defaultSystemPrompt)({
 			snapshot,
 			tools: customTools,
@@ -336,7 +344,13 @@ export function createDefaultPiSessionFactory(options: DefaultPiSessionFactoryOp
 			return { message, input: parameters };
 		};
 		const prompt = session.prompt.bind(session);
+		const dispose = session.dispose.bind(session);
 		Object.assign(session, {
+			backgroundTasks,
+			dispose: () => {
+				backgroundTasks.dispose();
+				dispose();
+			},
 			prepareHistoryRewind: (
 				input: Parameters<typeof prepareHistoryRewind>[1],
 				operations: Parameters<typeof prepareHistoryRewind>[2]

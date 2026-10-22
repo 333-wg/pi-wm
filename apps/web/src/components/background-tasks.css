@@ -1,0 +1,75 @@
+.background-tasks {
+	margin: 0 0 8px;
+	max-height: 240px;
+	overflow: auto;
+	font-size: 12px;
+}
+.background-task {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	border-bottom: 1px solid var(--line);
+	padding: 5px 0;
+}
+.background-task details {
+	min-width: 0;
+	flex: 1;
+}
+.background-task summary {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	cursor: pointer;
+	min-height: 26px;
+}
+.background-task summary::marker {
+	content: "";
+}
+.background-task-label {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.background-task-status {
+	flex-shrink: 0;
+	font-size: 11px;
+}
+.background-task pre {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 140px;
+	overflow: auto;
+	margin: 6px 0;
+	font-size: 11px;
+}
+.background-task-stop {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border-radius: 4px;
+}
+.background-task-running summary > svg {
+	animation: background-task-spin 1.5s linear infinite;
+	flex-shrink: 0;
+}
+@keyframes background-task-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.background-task-running summary > svg {
+		animation: none;
+	}
+}
+@media (max-width: 480px) {
+	.background-task summary {
+		flex-wrap: wrap;
+	}
+	.background-task-status {
+		margin-left: 21px;
+	}
+}

@@ -16,6 +16,8 @@ import { diagnoseMissingExecutable } from "./environment.js";
 import type { BrowserAction, BrowserDiagnostics, BrowserSnapshot, BrowserTarget, SandboxExecutor } from "./types.js";
 import { validateWebUrl } from "./web.js";
 import { pageEvidence, searchEvidence } from "./web-evidence.js";
+import { browserWorkflowStep, validateBrowserWorkflow } from "./browser-workflow.js";
+import { withDeadline } from "./operation-deadline.js";
 
 export interface SandboxToolOptions {
 	protectSkillSources?: boolean;
@@ -30,6 +32,7 @@ export interface SandboxToolOptions {
 		name: string;
 		content: Buffer;
 		mimeType?: string;
+		signal?: AbortSignal;
 	}) => Promise<ArtifactRef>;
 }
 
@@ -40,7 +43,72 @@ function textResult(text: string, details?: Record<string, unknown>) {
 	};
 }
 
+async function screenshotResult(
+	options: SandboxToolOptions,
+	toolCallId: string,
+	result: { image: Buffer; url: string; title: string },
+	signal?: AbortSignal
+) {
+	signal?.throwIfAborted();
+	let artifact: ArtifactRef | undefined;
+	let artifactError: string | undefined;
+	if (options.artifactWriter) {
+		try {
+			artifact = await options.artifactWriter({
+				workspaceId: options.snapshot.session.workspaceId,
+				sessionId: options.snapshot.session.id,
+				name: `browser-${safeToolId(toolCallId)}.png`,
+				content: result.image,
+				mimeType: "image/png",
+				...(signal ? { signal } : {}),
+			});
+		} catch (error) {
+			signal?.throwIfAborted();
+			artifactError = error instanceof Error ? error.message : String(error);
+		}
+	}
+	signal?.throwIfAborted();
+	return {
+		content: [
+			{
+				type: "text" as const,
+				text: `Screenshot captured: ${result.title || "(untitled)"}\n${result.url}\nInspect the attached image for visual defects before reporting verification. Capture alone is not a visual review.`,
+			},
+			{ type: "image" as const, data: result.image.toString("base64"), mimeType: "image/png" },
+		],
+		details: {
+			url: result.url,
+			title: result.title,
+			bytes: result.image.length,
+			...(artifact ? { artifact } : {}),
+			...(artifactError ? { artifactError } : {}),
+		},
+	};
+}
+
 const isSkillSource = (path: string) => /(^|[\\/])SKILL\.md(?:[. ]*$|:)/i.test(path);
+
+function withPreviewLeases(tools: ToolDefinition[], executor: SandboxExecutor): ToolDefinition[] {
+	if (!executor.preview?.acquire || !executor.browser) return tools;
+	return tools.map((tool) => {
+		if (!tool.name.startsWith("browser_") || ["browser_search", "browser_tabs", "browser_close"].includes(tool.name))
+			return tool;
+		return {
+			...tool,
+			execute: async (...args: Parameters<ToolDefinition["execute"]>) => {
+				args[2]?.throwIfAborted();
+				const url =
+					tool.name === "browser_open" ? (args[1] as { url: string }).url : (await executor.browser!.diagnostics()).url;
+				const release = executor.preview!.acquire!(url);
+				try {
+					return await tool.execute(...args);
+				} finally {
+					release?.();
+				}
+			},
+		};
+	});
+}
 
 function browserPageResult(result: BrowserSnapshot) {
 	const evidence = result.webEvidence;
@@ -973,7 +1041,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 					"Capture the current Chromium viewport as a PNG so visual layout, clipping, overlap, responsive behavior, and canvas rendering can be verified.",
 				promptSnippet: "Capture visual evidence from the current browser page",
 				promptGuidelines: [
-					"Inspect the image content returned by browser_screenshot, not just its artifact path. Describe concrete layout observations, repair defects, and capture fresh screenshots after changes. Use desktop and mobile viewport sizes when viewport controls are available; otherwise report limited coverage. If images cannot be inspected by the current model, disclose that visual review is incomplete.",
+					"Inspect the image content returned by browser_screenshot, not just its artifact path. Capture only the affected states and in-scope viewports. Default ordinary web work to desktop; use mobile only when the task or product targets mobile. Do not repeat a screenshot already returned by a successful browser batch. Repair observed defects and recheck affected states. If images cannot be inspected by the current model, disclose that visual review is incomplete.",
 				],
 				parameters: Type.Object({
 					full_page: Type.Optional(
@@ -988,41 +1056,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 						fullPage: params.full_page ?? false,
 						...(signal ? { signal } : {}),
 					});
-					let artifact: ArtifactRef | undefined;
-					let artifactError: string | undefined;
-					if (options.artifactWriter) {
-						try {
-							artifact = await options.artifactWriter({
-								workspaceId: options.snapshot.session.workspaceId,
-								sessionId: options.snapshot.session.id,
-								name: `browser-${safeToolId(toolCallId)}.png`,
-								content: result.image,
-								mimeType: "image/png",
-							});
-						} catch (error) {
-							artifactError = error instanceof Error ? error.message : String(error);
-						}
-					}
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: `Screenshot captured: ${result.title || "(untitled)"}\n${result.url}\nInspect the attached image for visual defects before reporting verification. Capture alone is not a visual review.`,
-							},
-							{
-								type: "image" as const,
-								data: result.image.toString("base64"),
-								mimeType: "image/png",
-							},
-						],
-						details: {
-							url: result.url,
-							title: result.title,
-							bytes: result.image.length,
-							...(artifact ? { artifact } : {}),
-							...(artifactError ? { artifactError } : {}),
-						},
-					};
+					return screenshotResult(options, toolCallId, result);
 				},
 			}),
 			defineTool({
@@ -1082,18 +1116,23 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 			defineTool({
 				name: "preview_status",
 				label: "preview_status",
-				description: "Read the current session's local preview-server state and recent bounded logs.",
+				description:
+					"Read this chat's preview state and bounded logs, plus other managed workspace preview URLs and commands. Match the project and command before reuse. Pass url to renew the selected managed preview when using an external browser skill. Built-in browser operations renew it automatically. Stopped only means this chat has no managed preview. Do not stop another chat's service.",
 				promptSnippet: "Inspect the local development server and its logs",
-				parameters: Type.Object({}),
+				parameters: Type.Object({
+					url: Type.Optional(
+						Type.String({ minLength: 1, maxLength: 4096, description: "Selected managed preview URL to keep alive" })
+					),
+				}),
 				executionMode: "sequential",
-				async execute() {
-					const result = await options.executor.preview!.status();
+				async execute(_toolCallId, params) {
+					const result = await options.executor.preview!.status(params.url ? { url: params.url } : undefined);
 					return textResult(JSON.stringify(result, null, 2), { ...result });
 				},
 			})
 		);
 	}
-	if (options.snapshot.sandboxMode === "read_only") return tools;
+	if (options.snapshot.sandboxMode === "read_only") return withPreviewLeases(tools, options.executor);
 
 	if (options.executor.browser?.download) {
 		const browser = options.executor.browser;
@@ -1211,8 +1250,14 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 				description:
 					"Interact with the active page or manage tabs, then return a fresh semantic snapshot. Target exactly one element by ref, CSS selector, ARIA role plus optional name, or exact text. Clicking may trigger external side effects; inspect the page first.",
 				promptSnippet: "Click, type, select, scroll, navigate, wait, or manage browser tabs",
+				promptGuidelines: browser.run
+					? [
+							"For a known local verification flow, prefer browser_action action=batch with 1-12 steps using stable selector/role/text targets. End with a wait for the expected result; use screenshot=true only for needed visual evidence. The batch returns one final snapshot and diagnostics. Do not repeat equivalent checks. On failure inspect failedStep and completedSteps; never blindly replay successful side effects. Use single actions when the next step depends on inspecting an unknown page.",
+						]
+					: [],
 				parameters: Type.Object({
 					action: Type.Union([
+						Type.Literal("batch"),
 						Type.Literal("click"),
 						Type.Literal("hover"),
 						Type.Literal("check"),
@@ -1230,6 +1275,30 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 						Type.Literal("switch_tab"),
 						Type.Literal("close_tab"),
 					]),
+					steps: Type.Optional(
+						Type.Array(browserWorkflowStep, {
+							minItems: 1,
+							maxItems: 12,
+							description:
+								"Ordered batch steps. Stable targets only; no refs or blind sleeps. Stops at the first failed step.",
+						})
+					),
+					screenshot: Type.Optional(Type.Boolean({ description: "For batch: attach one final viewport screenshot" })),
+					evidence_timeout_ms: Type.Optional(
+						Type.Integer({
+							minimum: 100,
+							maximum: 30_000,
+							description:
+								"For batch: shared final snapshot, diagnostics, screenshot and artifact budget; default 10000ms",
+						})
+					),
+					step_timeout_ms: Type.Optional(
+						Type.Integer({
+							minimum: 100,
+							maximum: 10_000,
+							description: "For batch: per-step auto-wait limit; default 5000ms",
+						})
+					),
 					...browserTargetProperties,
 					url: Type.Optional(
 						Type.String({
@@ -1274,6 +1343,118 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 				}),
 				executionMode: "sequential",
 				async execute(toolCallId, params, signal) {
+					if (params.action === "batch") {
+						if (!browser.run)
+							throw new SandboxError("process_unavailable", "This browser backend does not support batches");
+						validateBrowserWorkflow(params.steps ?? []);
+						const current = await browser.diagnostics();
+						const host = new URL(current.url).hostname || "browser-session";
+						const permit = await authorize(
+							options.approvals,
+							options.snapshot,
+							toolCallId,
+							"medium",
+							`Browser batch (${params.steps!.length} steps) on ${current.url.slice(0, 1000)}`,
+							[{ type: "network.connect", hosts: [host] }],
+							signal
+						);
+						const startedAt = Date.now();
+						try {
+							const result = await browser.run(params.steps!, {
+								...(params.timeout_ms === undefined ? {} : { timeoutMs: params.timeout_ms }),
+								...(params.step_timeout_ms === undefined ? {} : { stepTimeoutMs: params.step_timeout_ms }),
+								evidenceTimeoutMs: params.evidence_timeout_ms ?? 10_000,
+								...(signal ? { signal } : {}),
+							});
+							const evidenceDeadline = result.evidenceDeadlineMs ?? Date.now() + (params.evidence_timeout_ms ?? 10_000);
+							const page = result.snapshot
+								? browserPageResult(result.snapshot)
+								: textResult("Final page snapshot unavailable.");
+							const output: {
+								content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+								details: Record<string, unknown>;
+								isError: boolean;
+							} = {
+								content: [
+									{
+										type: "text",
+										text: JSON.stringify({
+											completedSteps: result.completedSteps,
+											failedStep: result.failedStep,
+											error: result.error,
+											steps: result.steps,
+											durationMs: result.durationMs,
+											diagnostics: result.diagnostics,
+											advice: browserDiagnosticsAdvice(result.diagnostics),
+										}),
+									},
+									...page.content,
+								],
+								details: { ...result },
+								isError: !!result.error,
+							};
+							if (params.screenshot && !output.isError) {
+								try {
+									const image = await withDeadline(evidenceDeadline, signal, async (evidenceSignal) =>
+										screenshotResult(
+											options,
+											toolCallId,
+											await browser.screenshot({ signal: evidenceSignal }),
+											evidenceSignal
+										)
+									);
+									output.content.push(...image.content);
+									Object.assign(output.details, image.details);
+								} catch (error) {
+									signal?.throwIfAborted();
+									output.isError = true;
+									output.details.evidenceError = error instanceof Error ? error.message : String(error);
+									output.content.push({
+										type: "text",
+										text: `Screenshot unavailable: ${error instanceof Error ? error.message : String(error)}. Do not replay completed steps.`,
+									});
+								}
+							}
+							const durationMs = Date.now() - startedAt;
+							const actionDurationMs = result.actionDurationMs ?? result.durationMs;
+							Object.assign(output.details, {
+								durationMs,
+								actionDurationMs,
+								evidenceDurationMs: Math.max(0, durationMs - actionDurationMs),
+							});
+							output.content[0] = {
+								type: "text",
+								text: JSON.stringify({
+									completedSteps: result.completedSteps,
+									failedStep: result.failedStep,
+									error: result.error,
+									evidenceError: output.details.evidenceError,
+									steps: result.steps,
+									durationMs,
+									actionDurationMs,
+									evidenceDurationMs: output.details.evidenceDurationMs,
+									diagnostics: result.diagnostics,
+									advice: browserDiagnosticsAdvice(result.diagnostics),
+								}),
+							};
+							if (output.isError) {
+								// Pi marks tool failures from thrown errors, not a returned isError property.
+								throw Object.assign(
+									new SandboxError(
+										"process_failed",
+										output.content
+											.filter((part) => part.type === "text")
+											.map((part) => part.text)
+											.join("\n") + "\nBrowser batch stopped. Do not replay completed steps."
+									),
+									{ details: output.details }
+								);
+							}
+							return output;
+						} finally {
+							if (permit) options.approvals.completeAuthorization?.(permit);
+						}
+					}
 					const target = browserTarget(params);
 					let action: BrowserAction;
 					switch (params.action) {
@@ -1367,7 +1548,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 				name: "preview_start",
 				label: "preview_start",
 				description:
-					"Start one long-lived development server in the host workspace and wait until its localhost URL responds. The process and children are stopped on idle timeout, explicit stop, failed readiness, or gateway shutdown.",
+					"Start a long-lived development server and wait for HTTP 2xx/3xx readiness. Repeating the same healthy command/cwd/URL in this chat reuses it. An occupied address is rejected without starting or stopping another service. Inspect preview_status first and reuse existing previews. Processes stop on idle timeout, explicit stop, failed readiness, or gateway shutdown.",
 				promptSnippet: "Start a persistent local development server and wait for readiness",
 				parameters: Type.Object({
 					command: Type.String({
@@ -1662,5 +1843,5 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 	}
 
 	if (tools.length === 0) throw new SandboxError("process_unavailable", "No sandbox tools are available");
-	return tools;
+	return withPreviewLeases(tools, options.executor);
 }

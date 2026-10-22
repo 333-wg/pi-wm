@@ -756,6 +756,9 @@ export class SqliteOrchestratorStore implements Disposable {
 	readonly #db: DatabaseSync;
 	readonly #search: SessionSearchIndex;
 	readonly #eventListeners = new Set<(event: StoredSessionEvent) => void>();
+	readonly #usageOverviewCache = new Map<string, UsageOverview>();
+	#usageCacheDataVersion: number | undefined;
+	#usageCacheDay: string | undefined;
 
 	constructor(path: string) {
 		this.#db = new DatabaseSync(path);
@@ -1590,6 +1593,21 @@ export class SqliteOrchestratorStore implements Disposable {
 		const allowedIds = typeof workspaceIds === "string" ? [workspaceIds] : workspaceIds;
 		const days = Math.max(7, Math.min(31, Math.trunc(requestedDays)));
 		const current = new Date(now);
+		const day = `${localDateKey(now)}:${current.getTimezoneOffset()}`;
+		const { data_version: dataVersion } = this.#db.prepare("PRAGMA data_version").get() as { data_version: number };
+		if (this.#usageCacheDataVersion !== dataVersion || this.#usageCacheDay !== day) {
+			this.#usageOverviewCache.clear();
+			this.#usageCacheDataVersion = dataVersion;
+			this.#usageCacheDay = day;
+		}
+		// Preserve both permission scope and the single-workspace response shape in the cache key.
+		const cacheKey = JSON.stringify([
+			workspaceId ?? null,
+			allowedIds === undefined ? null : [...new Set(allowedIds)].sort(),
+			days,
+		]);
+		const cached = this.#usageOverviewCache.get(cacheKey);
+		if (cached) return { ...cached, generatedAt: now };
 		const todayStart = new Date(current.getFullYear(), current.getMonth(), current.getDate()).getTime();
 		const tomorrowStart = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1).getTime();
 		const monthStart = new Date(current.getFullYear(), current.getMonth(), 1).getTime();
@@ -1643,7 +1661,7 @@ export class SqliteOrchestratorStore implements Disposable {
 			bucket.turnCount += 1;
 			bucket.requestCount += event.requests.length;
 		}
-		return {
+		const overview: UsageOverview = {
 			...(workspaceId === undefined ? {} : { workspaceId }),
 			generatedAt: now,
 			total,
@@ -1653,6 +1671,10 @@ export class SqliteOrchestratorStore implements Disposable {
 			month,
 			daily,
 		};
+		if (this.#usageOverviewCache.size >= 64)
+			this.#usageOverviewCache.delete(this.#usageOverviewCache.keys().next().value!);
+		this.#usageOverviewCache.set(cacheKey, overview);
+		return overview;
 	}
 
 	listChildSnapshots(parentSessionId: string, limit = 100): SessionSnapshot[] {
@@ -2606,8 +2628,8 @@ export class SqliteOrchestratorStore implements Disposable {
 			}
 
 			const current = this.#db
-				.prepare("SELECT snapshot_json, revision FROM session_snapshots WHERE session_id = ?")
-				.get(options.sessionId) as unknown as SessionRow | undefined;
+				.prepare("SELECT snapshot_json, revision, parent_session_id FROM session_snapshots WHERE session_id = ?")
+				.get(options.sessionId) as unknown as (SessionRow & { parent_session_id: string | null }) | undefined;
 			const currentRevision = current?.revision ?? 0;
 			if (currentRevision !== options.expectedRevision) {
 				throw new OrchestratorError(
@@ -2643,11 +2665,31 @@ export class SqliteOrchestratorStore implements Disposable {
 
 			if (options.queuedFollowUpMutation) {
 				const change = options.queuedFollowUpMutation;
-				const where = "operation_id = ? AND session_id = ? AND status = 'queued' AND attempt = 0 AND updated_at = ? AND json_extract(payload_json, '$.mode') = 'follow_up'";
+				const where =
+					"operation_id = ? AND session_id = ? AND status = 'queued' AND attempt = 0 AND updated_at = ? AND json_extract(payload_json, '$.mode') = 'follow_up'";
 				const result = change.payload
-					? this.#db.prepare(`UPDATE operations SET payload_json = ?, updated_at = ? WHERE ${where}`).run(JSON.stringify(change.payload), options.snapshot.session.updatedAt, change.id, options.sessionId, change.expectedUpdatedAt)
-					: this.#db.prepare(`UPDATE operations SET status = 'interrupted', abort_requested = 1, finished_at = ?, updated_at = ? WHERE ${where}`).run(options.snapshot.session.updatedAt, options.snapshot.session.updatedAt, change.id, options.sessionId, change.expectedUpdatedAt);
-				if (Number(result.changes) !== 1) throw new OrchestratorError("conflict", "该任务已开始、已删除或已被修改，请刷新队列");
+					? this.#db
+							.prepare(`UPDATE operations SET payload_json = ?, updated_at = ? WHERE ${where}`)
+							.run(
+								JSON.stringify(change.payload),
+								options.snapshot.session.updatedAt,
+								change.id,
+								options.sessionId,
+								change.expectedUpdatedAt
+							)
+					: this.#db
+							.prepare(
+								`UPDATE operations SET status = 'interrupted', abort_requested = 1, finished_at = ?, updated_at = ? WHERE ${where}`
+							)
+							.run(
+								options.snapshot.session.updatedAt,
+								options.snapshot.session.updatedAt,
+								change.id,
+								options.sessionId,
+								change.expectedUpdatedAt
+							);
+				if (Number(result.changes) !== 1)
+					throw new OrchestratorError("conflict", "该任务已开始、已删除或已被修改，请刷新队列");
 			}
 
 			if (current) {
@@ -3046,6 +3088,12 @@ export class SqliteOrchestratorStore implements Disposable {
 			}
 
 			this.#db.exec("COMMIT");
+			if (
+				options.events.some((event) => event.type === "session.usage.recorded") ||
+				(current && current.parent_session_id !== (options.snapshot.session.parentSessionId ?? null))
+			) {
+				this.#usageOverviewCache.clear();
+			}
 			if (this.#eventListeners.size > 0) {
 				setImmediate(() => {
 					for (const stored of storedEvents) {
@@ -3275,7 +3323,11 @@ export class SqliteOrchestratorStore implements Disposable {
 	}
 
 	listQueuedFollowUps(sessionId: string): DurableOperation[] {
-		const rows = this.#db.prepare("SELECT * FROM operations WHERE session_id = ? AND status = 'queued' AND attempt = 0 AND json_extract(payload_json, '$.mode') = 'follow_up' ORDER BY created_at, rowid").all(sessionId) as unknown as OperationRow[];
+		const rows = this.#db
+			.prepare(
+				"SELECT * FROM operations WHERE session_id = ? AND status = 'queued' AND attempt = 0 AND json_extract(payload_json, '$.mode') = 'follow_up' ORDER BY created_at, rowid"
+			)
+			.all(sessionId) as unknown as OperationRow[];
 		return rows.map(mapOperation);
 	}
 

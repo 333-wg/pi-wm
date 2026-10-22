@@ -220,6 +220,8 @@ export interface RuntimeCompactionRecord extends RuntimeCompactionResult {
 export type DurableMemory = MemorySummary;
 
 export interface AgentRuntime {
+	backgroundTasks?(snapshot: SessionSnapshot): Promise<import("@wuming/protocol").BackgroundTask[]>;
+	cancelBackgroundTask?(snapshot: SessionSnapshot, taskId: string): Promise<void>;
 	/** Locate an edit position without changing the current history or creating a fork. */
 	prepareHistoryRewind?(input: { snapshot: SessionSnapshot; beforeItemId: string }): Promise<{ leafId: string | null }>;
 	/** Stage a durable history branch without changing the source session. */

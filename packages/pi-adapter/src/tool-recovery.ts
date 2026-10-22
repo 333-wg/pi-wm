@@ -41,10 +41,12 @@ export class ToolRecoveryMonitor {
 	constructor(private readonly skillDiscoveryAvailable = false) {}
 	readonly #failures = new Map<string, Failure>();
 	readonly #failedMediaSubmissions = new Set<string>();
+	readonly #partialBrowserBatches = new Set<string>();
 	#lastFailure: Failure | undefined;
 	reset(): void {
 		this.#failures.clear();
 		this.#failedMediaSubmissions.clear();
+		this.#partialBrowserBatches.clear();
 		this.#lastFailure = undefined;
 	}
 	private recordFailure(key: string, tool: string, kind: FailureKind): Failure {
@@ -76,6 +78,20 @@ export class ToolRecoveryMonitor {
 					.update(JSON.stringify(canonical(args[1])))
 					.digest("hex");
 				const prior = this.#failures.get(key);
+				const params = args[1] as { action?: unknown; steps?: unknown } | undefined;
+				const batchKey =
+					tool.name === "browser_action" && params?.action === "batch"
+						? createHash("sha256")
+								.update(JSON.stringify(canonical(params.steps ?? [])))
+								.digest("hex")
+						: undefined;
+				if (batchKey && this.#partialBrowserBatches.has(batchKey))
+					throw Object.assign(
+						new Error(
+							"This browser batch already completed steps before failing. It was not replayed. Inspect completedSteps and the current page, then submit only the remaining necessary steps; changing timeout or screenshot options does not make replay safe."
+						),
+						{ code: "browser_batch_replay_blocked" }
+					);
 				if (prior && prior.count >= 2) {
 					throw Object.assign(
 						new Error(
@@ -165,6 +181,11 @@ export class ToolRecoveryMonitor {
 						],
 					};
 				} catch (error) {
+					const batchDetails =
+						error && typeof error === "object" && "details" in error
+							? (error.details as { completedSteps?: number } | undefined)
+							: undefined;
+					if (batchKey && (batchDetails?.completedSteps ?? 0) > 0) this.#partialBrowserBatches.add(batchKey);
 					const code =
 						error && typeof error === "object"
 							? String("protocolCode" in error ? error.protocolCode : "code" in error ? error.code : "")

@@ -920,6 +920,7 @@ export class GatewayServer implements AsyncDisposable {
     return [
       'workspace.list',
       'turn.queue.list',
+      'background.list',
       'usage.overview',
       'session.list',
       'session.search',
@@ -1515,6 +1516,7 @@ export class GatewayServer implements AsyncDisposable {
             type: 'skill.updated',
             workspaceId: command.workspaceId,
             skill: await manager.installFromWorkspace(command.sourcePath, {
+              ...(command.scope === undefined ? {} : { scope: command.scope }),
               ...(command.skillId === undefined ? {} : { id: command.skillId }),
               ...(command.version === undefined ? {} : { version: command.version }),
             }),
@@ -1523,9 +1525,9 @@ export class GatewayServer implements AsyncDisposable {
           return {
             type: 'skill.updated',
             workspaceId: command.workspaceId,
-            skill: await manager.setEnabled(command.skillId, command.enabled),
+            skill: await manager.setEnabled(command.skillId, command.enabled, command.scope),
           };
-        await manager.uninstall(command.skillId);
+        await manager.uninstall(command.skillId, command.scope);
         return {
           type: 'skill.uninstalled',
           workspaceId: command.workspaceId,
@@ -2456,6 +2458,10 @@ export class GatewayServer implements AsyncDisposable {
           idempotencyKey,
           sessionId: command.sessionId,
         });
+      case 'background.list':
+      case 'background.cancel':
+        this.#requireSession(connection, command.sessionId);
+        return this.#orchestrator.backgroundTasks(command.sessionId, command.type === 'background.cancel' ? command.taskId : undefined);
       case 'approval.respond':
         this.#requireSession(connection, command.sessionId);
         if (this.#store.loadSnapshot(command.sessionId)?.pendingApprovals

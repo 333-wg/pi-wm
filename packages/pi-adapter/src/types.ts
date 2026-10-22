@@ -4,6 +4,7 @@ import type { CapabilityManifest } from "@wuming/capability-kernel";
 import type { ContextFragment } from "@wuming/context-engine";
 import type { ArtifactRef, CacheUsageEvidence, PromptCacheDiagnostic, SessionSnapshot } from "@wuming/protocol";
 import type { AgentRuntime, DurableOperation } from "@wuming/orchestrator";
+import type { BackgroundTasks } from "./background-tasks.js";
 
 export interface PiPreparedPrompt {
 	text: string;
@@ -18,6 +19,15 @@ export interface PiSessionRecovery {
 }
 
 export interface PiSessionLike {
+	backgroundTasks?: BackgroundTasks;
+	sendCustomMessage?(
+		message: {
+			customType: string;
+			content: string | ToolResultMessage["content"];
+			display: boolean;
+		},
+		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }
+	): Promise<void>;
 	readonly isStreaming: boolean;
 	prepareHistoryRewind?(
 		input: Parameters<NonNullable<AgentRuntime["prepareHistoryRewind"]>>[0],

@@ -79,6 +79,7 @@ for (const width of [1365, 390, 320]) {
 		}, selectedId);
 		await openApp(page, webUrl);
 		if (width <= 720) await page.getByRole("button", { name: "打开导航", exact: true }).click();
+		await page.getByRole("button", { name: "最近对话选项" }).click();
 		const search = page.getByRole("textbox", { name: "搜索聊天正文" });
 		await search.fill("搜索验收_100%");
 		const hit = page.locator(".session-search-hit");
@@ -106,9 +107,12 @@ test("exports body-free diagnostics and searches again after reload", async ({ p
 	await page.addInitScript(() => localStorage.setItem("wuming.workspaceId", "local-workspace"));
 	await openApp(page, webUrl);
 	await page.reload();
+	await page.getByRole("button", { name: "最近对话选项" }).click();
 	const search = page.getByRole("textbox", { name: "搜索聊天正文" });
 	await search.fill("搜索验收_100%");
 	await expect(page.locator(".session-search-hit")).toHaveCount(1);
+	await page.locator(".session-search-hit").click();
+	await page.getByRole("button", { name: "显示或隐藏运行面板", exact: true }).click();
 	const download = page.waitForEvent("download");
 	await page.getByRole("button", { name: "导出诊断", exact: true }).click();
 	const file = await download;

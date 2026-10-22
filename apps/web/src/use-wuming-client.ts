@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mergeUsageRequests, sessionUsageRequests } from "@wuming/protocol";
 import type {
+	BackgroundTask,
 	ApprovalPolicy,
 	AutomationRunSummary,
 	AutomationSchedule,
@@ -54,6 +55,7 @@ import { readStoredThinking, thinkingLevelForModel, writeStoredThinking } from "
 import { isImplicitWorkspace } from "./lib/workspaces.js";
 import { desktopConnection } from "./lib/desktop.js";
 import { bearerProtocol, gatewayWebSocketUrl } from "./lib/gateway-connection.js";
+import { UsageOverviewCache } from "./lib/usage-overview-cache.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -109,6 +111,7 @@ export interface LiveRetry {
 }
 
 interface ClientState {
+	backgroundTasks: BackgroundTask[];
 	liveCompaction?: { sessionId: string; status: "running" | "complete" | "failed" | "cancelled" } | undefined;
 	connection: ConnectionStatus;
 	capabilities: Capability[];
@@ -118,6 +121,7 @@ interface ClientState {
 	selectedWorkspaceId: string | undefined;
 	selectedModel: ModelRef | undefined;
 	sessions: SessionSummary[];
+	sessionLists: Record<string, { sessions: SessionSummary[]; archived: boolean }>;
 	usageOverview: UsageOverview | undefined;
 	runs: RunSummary[];
 	followUpQueue?: { sessionId: string; entries: QueuedFollowUp[] };
@@ -148,6 +152,7 @@ export interface SessionListOptions {
 }
 
 const initialState: ClientState = {
+	backgroundTasks: [],
 	connection: "connecting",
 	capabilities: [],
 	executionEnvironment: undefined,
@@ -156,6 +161,7 @@ const initialState: ClientState = {
 	selectedWorkspaceId: undefined,
 	selectedModel: undefined,
 	sessions: [],
+	sessionLists: {},
 	usageOverview: undefined,
 	runs: [],
 	memories: [],
@@ -236,12 +242,30 @@ export function useWumingClient() {
 	const requestRef = useRef<((command: Command, idempotencyKey?: string) => Promise<CommandResult>) | undefined>(
 		undefined
 	);
+	const usageGateway = gatewayWebSocketUrl();
+	const usageCache = useMemo(
+		() =>
+			new UsageOverviewCache(async (workspaceId, days) => {
+				const result = await requestRef.current?.({
+					type: "usage.overview",
+					...(workspaceId ? { workspaceId } : {}),
+					days,
+				});
+				if (result?.type !== "usage.overview") throw new Error("用量统计读取失败");
+				return result.overview;
+			}),
+		[token, usageGateway]
+	);
 	const snapshotRef = useRef<SessionSnapshot | undefined>(undefined);
 	const restoringSession = useRef(false);
 	const goalMutationVersion = useRef(0);
+	const backgroundVersion = useRef(0);
 	const capabilitiesRef = useRef<Capability[]>([]);
 	const cursorRef = useRef<string | undefined>(localStorage.getItem("wuming.cursor") ?? undefined);
-	const sessionListRef = useRef<SessionListOptions>({ archived: false });
+	const sessionListRef = useRef<Record<string, SessionListOptions>>({});
+	const navigationRevision = useRef(0);
+	const sessionListRevision = useRef<Record<string, number>>({});
+	const toolListRevision = useRef(0);
 	const skillSelectionRevision = useRef(0);
 	const skillListRevision = useRef(0);
 	const mcpSelectionRevision = useRef(0);
@@ -368,13 +392,14 @@ export function useWumingClient() {
 	}, []);
 
 	const refreshTools = useCallback(async (workspaceId: string) => {
+		const revision = ++toolListRevision.current;
 		const result = await requestRef.current?.({ type: "tool.list", workspaceId });
 		const tools = result?.type === "tool.list" ? result.tools : [];
-		setState((current) => ({
-			...current,
-			tools,
-			toolRuntime: result?.type === "tool.list" ? result.runtime : undefined,
-		}));
+		setState((current) =>
+			revision === toolListRevision.current && current.selectedWorkspaceId === workspaceId
+				? { ...current, tools, toolRuntime: result?.type === "tool.list" ? result.runtime : undefined }
+				: current
+		);
 		return tools;
 	}, []);
 
@@ -559,32 +584,42 @@ export function useWumingClient() {
 	}, []);
 
 	const refreshSessions = useCallback(
-		async (workspaceId: string, options: SessionListOptions = sessionListRef.current) => {
+		async (workspaceId: string, options: SessionListOptions = sessionListRef.current[workspaceId] ?? {}) => {
+			const revision = (sessionListRevision.current[workspaceId] ?? 0) + 1;
+			sessionListRevision.current[workspaceId] = revision;
 			const normalized = {
 				...(options.query?.trim() ? { query: options.query.trim() } : {}),
 				archived: options.archived ?? false,
 			};
-			sessionListRef.current = normalized;
+			sessionListRef.current[workspaceId] = normalized;
 			const result = await requestRef.current?.({
 				type: "session.list",
 				workspaceId,
 				...normalized,
 				limit: 200,
 			});
-			if (result?.type === "session.list") setState((current) => ({ ...current, sessions: result.sessions }));
+			if (result?.type === "session.list")
+				setState((current) =>
+					revision === sessionListRevision.current[workspaceId]
+						? {
+								...current,
+								sessionLists: {
+									...current.sessionLists,
+									[workspaceId]: { sessions: result.sessions, archived: normalized.archived },
+								},
+								...(current.selectedWorkspaceId === workspaceId ? { sessions: result.sessions } : {}),
+							}
+						: current
+				);
 			return result?.type === "session.list" ? result.sessions : [];
 		},
 		[]
 	);
 
-	const getUsageOverview = useCallback(async (workspaceId?: string, days = 7) => {
-		const result = await requestRef.current?.({
-			type: "usage.overview",
-			...(workspaceId ? { workspaceId } : {}),
-			days,
-		});
-		return result?.type === "usage.overview" ? result.overview : undefined;
-	}, []);
+	const getUsageOverview = useCallback(
+		(workspaceId?: string, days = 7) => usageCache.load(workspaceId, days),
+		[usageCache]
+	);
 
 	const refreshUsageOverview = useCallback(
 		async (workspaceId: string, days = 7) => {
@@ -652,6 +687,29 @@ export function useWumingClient() {
 		);
 		return evaluationDatasets;
 	}, []);
+
+	const refreshWorkspaceDetails = useCallback(
+		async (workspaceId: string) => {
+			const revision = navigationRevision.current;
+			const capabilities = capabilitiesRef.current;
+			const results = await Promise.allSettled([
+				refreshSkills(workspaceId),
+				refreshUsageOverview(workspaceId),
+				...(capabilities.includes("tools") ? [refreshTools(workspaceId)] : []),
+				...(capabilities.includes("mcp") ? [refreshMcp(workspaceId)] : []),
+				...(capabilities.includes("evaluation") ? [refreshEvaluationDatasets(workspaceId)] : []),
+			]);
+			const failure = results.find((result) => result.status === "rejected");
+			if (failure?.status === "rejected" && revision === navigationRevision.current) {
+				setState((current) =>
+					current.selectedWorkspaceId === workspaceId
+						? { ...current, error: failure.reason instanceof Error ? failure.reason.message : String(failure.reason) }
+						: current
+				);
+			}
+		},
+		[refreshSkills, refreshUsageOverview, refreshTools, refreshMcp, refreshEvaluationDatasets]
+	);
 
 	const createEvaluationDataset = useCallback(
 		async (name: string, graders: EvaluationGrader[]) => {
@@ -791,9 +849,11 @@ export function useWumingClient() {
 	}, []);
 
 	const attachSession = useCallback(
-		async (sessionId: string) => {
+		async (sessionId: string, revision = ++navigationRevision.current) => {
+			if (revision !== navigationRevision.current) return;
 			discardAssistantDeltas();
 			const result = await requestRef.current?.({ type: "session.attach", sessionId });
+			if (revision !== navigationRevision.current) return;
 			if (result?.type === "session.attached") {
 				// Opening a child must preserve the policy inherited from its parent.
 				// Primary sessions keep the existing once-on-attach default behavior.
@@ -801,6 +861,14 @@ export function useWumingClient() {
 					? result.snapshot
 					: await syncStoredPermission(result.snapshot);
 				const workspaceId = snapshot.session.workspaceId;
+				if (revision !== navigationRevision.current) return;
+				const workspaceChanged = localStorage.getItem("wuming.workspaceId") !== workspaceId;
+				if (workspaceChanged) {
+					++skillSelectionRevision.current;
+					++skillListRevision.current;
+					++mcpSelectionRevision.current;
+					++mcpListRevision.current;
+				}
 				snapshotRef.current = snapshot;
 				localStorage.setItem("wuming.workspaceId", workspaceId);
 				localStorage.setItem(sessionSelectionKey(workspaceId), sessionId);
@@ -809,6 +877,19 @@ export function useWumingClient() {
 					...current,
 					selectedWorkspaceId: workspaceId,
 					selectedModel: snapshot.model,
+					sessions: current.sessionLists[workspaceId]?.sessions ?? [],
+					...(workspaceChanged
+						? {
+								skills: [],
+								selectedSkill: undefined,
+								mcpServers: [],
+								selectedMcpServer: undefined,
+								tools: [],
+								toolRuntime: undefined,
+								evaluationDatasets: [],
+								usageOverview: undefined,
+							}
+						: {}),
 					snapshot,
 					liveAssistants: {},
 					liveTools: {},
@@ -821,6 +902,7 @@ export function useWumingClient() {
 					automations: [],
 					error: undefined,
 				}));
+				if (workspaceChanged) void refreshWorkspaceDetails(workspaceId);
 				await Promise.all([
 					refreshRuns(sessionId),
 					...(capabilitiesRef.current.includes("session.memory") ? [refreshMemories(sessionId)] : []),
@@ -837,12 +919,14 @@ export function useWumingClient() {
 			refreshMemories,
 			refreshRuns,
 			refreshSubagents,
+			refreshWorkspaceDetails,
 			syncStoredPermission,
 		]
 	);
 
 	const restoreSelectedSession = useCallback(
-		async (workspaceId: string, sessions: SessionSummary[], restoreRoot: boolean) => {
+		async (workspaceId: string, sessions: SessionSummary[], restoreRoot: boolean, revision: number) => {
+			if (revision !== navigationRevision.current) return;
 			const storedId = localStorage.getItem(sessionSelectionKey(workspaceId));
 			if (storedId && !sessions.some((session) => session.id === storedId)) {
 				// Child sessions are intentionally omitted from the root conversation list.
@@ -855,12 +939,12 @@ export function useWumingClient() {
 					result.snapshot.session.parentSessionId &&
 					result.snapshot.session.archivedAt === undefined
 				) {
-					await attachSession(storedId);
+					await attachSession(storedId, revision);
 					return;
 				}
 			}
 			const session = sessions.find((candidate) => candidate.id === storedId) ?? sessions[0];
-			if (restoreRoot && session) await attachSession(session.id);
+			if (restoreRoot && session) await attachSession(session.id, revision);
 		},
 		[attachSession]
 	);
@@ -888,7 +972,24 @@ export function useWumingClient() {
 			new Promise<CommandResult>((resolve, reject) => {
 				if (ws.readyState !== WebSocket.OPEN) return reject(new Error("网关尚未连接"));
 				const requestId = id();
-				pending.current.set(requestId, { resolve, reject });
+				// A stalled stop acknowledgement must not leave the composer locked forever.
+				const timer =
+					command.type === "turn.abort"
+						? window.setTimeout(() => {
+								pending.current.delete(requestId);
+								reject(new Error("停止请求未收到回应，请重试"));
+							}, 8_000)
+						: undefined;
+				pending.current.set(requestId, {
+					resolve: (result) => {
+						window.clearTimeout(timer);
+						resolve(result);
+					},
+					reject: (error) => {
+						window.clearTimeout(timer);
+						reject(error);
+					},
+				});
 				ws.send(JSON.stringify({ type: "request", requestId, idempotencyKey, command }));
 			});
 		requestRef.current = request;
@@ -931,7 +1032,9 @@ export function useWumingClient() {
 				return;
 			}
 			if (message.type === "hello") {
+				const revision = ++navigationRevision.current;
 				helloReceived = true;
+				usageCache.clear();
 				restoringSession.current = true;
 				if (!desktopConnection()) localStorage.setItem("wuming.token", token);
 				capabilitiesRef.current = message.capabilities;
@@ -948,6 +1051,7 @@ export function useWumingClient() {
 							request({ type: "workspace.list" }),
 							request({ type: "model.list" }),
 						]);
+						if (disposed || revision !== navigationRevision.current) return;
 						const workspaces = workspaceResult.type === "workspace.list" ? workspaceResult.workspaces : [];
 						const models = modelResult.type === "model.list" ? modelResult.models : [];
 						const storedWorkspaceId = localStorage.getItem("wuming.workspaceId");
@@ -974,21 +1078,22 @@ export function useWumingClient() {
 							selectedModel,
 						}));
 						if (!workspace) return;
-						await refreshSkills(workspace.id);
-						if (message.capabilities.includes("tools")) await refreshTools(workspace.id);
-						if (message.capabilities.includes("mcp")) await refreshMcp(workspace.id);
-						if (message.capabilities.includes("evaluation")) await refreshEvaluationDatasets(workspace.id);
-						const sessionResult = await request({
-							type: "session.list",
-							workspaceId: workspace.id,
-							...sessionListRef.current,
-							limit: 200,
-						});
-						const sessions = sessionResult.type === "session.list" ? sessionResult.sessions : [];
-						setState((current) => ({ ...current, sessions }));
-						await refreshUsageOverview(workspace.id);
-						await restoreSelectedSession(workspace.id, sessions, !isImplicitWorkspace(workspace));
+						const sessionsPromise = refreshSessions(workspace.id);
+						const recentWorkspace = workspaces.find(isImplicitWorkspace);
+						if (recentWorkspace && recentWorkspace.id !== workspace.id) {
+							void refreshSessions(recentWorkspace.id, { archived: false }).catch((error) => {
+								if (!disposed)
+									setState((current) => ({
+										...current,
+										error: error instanceof Error ? error.message : String(error),
+									}));
+							});
+						}
+						void refreshWorkspaceDetails(workspace.id);
+						const sessions = await sessionsPromise;
+						await restoreSelectedSession(workspace.id, sessions, !isImplicitWorkspace(workspace), revision);
 					} catch (error) {
+						if (disposed || revision !== navigationRevision.current) return;
 						setState((current) => ({
 							...current,
 							connection: "error",
@@ -1015,6 +1120,12 @@ export function useWumingClient() {
 			if (message.type === "progress") {
 				const event = message.event;
 				if (event.sessionId !== snapshotRef.current?.session.id) return;
+				if (event.type === "background.tasks") {
+					if (event.runSessionId && event.runSessionId !== event.sessionId) return;
+					backgroundVersion.current++;
+					setState((current) => ({ ...current, backgroundTasks: event.tasks }));
+					return;
+				}
 				if (event.type === "context.compaction") {
 					if (event.runSessionId && event.runSessionId !== event.sessionId) return;
 					setState((current) => ({ ...current, liveCompaction: { sessionId: event.sessionId, status: event.status } }));
@@ -1205,6 +1316,7 @@ export function useWumingClient() {
 			if (message.type !== "event") return;
 			const event = message.event;
 			if (event.type === "resync_required") {
+				usageCache.invalidate();
 				cursorRef.current = undefined;
 				localStorage.removeItem("wuming.cursor");
 				if (snapshotRef.current) void resync(snapshotRef.current.session.id);
@@ -1212,11 +1324,24 @@ export function useWumingClient() {
 			}
 			cursorRef.current = message.cursor;
 			localStorage.setItem("wuming.cursor", message.cursor);
+			// Recorded turn usage is published by the gateway as a full session snapshot.
+			if (event.type === "session.snapshot") usageCache.invalidate();
 			if (event.type === "session.snapshot") {
 				setState((current) => ({
 					...current,
 					sessions: current.sessions.map((session) =>
 						session.id === event.snapshot.session.id ? event.snapshot.session : session
+					),
+					sessionLists: Object.fromEntries(
+						Object.entries(current.sessionLists).map(([workspaceId, list]) => [
+							workspaceId,
+							{
+								...list,
+								sessions: list.sessions.map((session) =>
+									session.id === event.snapshot.session.id ? event.snapshot.session : session
+								),
+							},
+						])
 					),
 				}));
 				if (event.snapshot.session.phase === "idle") discardAssistantDeltas(event.snapshot.session.id);
@@ -1244,6 +1369,17 @@ export function useWumingClient() {
 					...current,
 					sessions: current.sessions.map((session) =>
 						session.id === event.sessionId ? { ...session, phase: event.phase } : session
+					),
+					sessionLists: Object.fromEntries(
+						Object.entries(current.sessionLists).map(([workspaceId, list]) => [
+							workspaceId,
+							{
+								...list,
+								sessions: list.sessions.map((session) =>
+									session.id === event.sessionId ? { ...session, phase: event.phase } : session
+								),
+							},
+						])
 					),
 				}));
 			}
@@ -1406,6 +1542,8 @@ export function useWumingClient() {
 
 		return () => {
 			disposed = true;
+			++navigationRevision.current;
+			usageCache.clear();
 			discardAssistantDeltas();
 			if (reconnectTimer) clearTimeout(reconnectTimer);
 			ws.close();
@@ -1429,9 +1567,11 @@ export function useWumingClient() {
 		refreshTools,
 		refreshMcp,
 		refreshUsageOverview,
+		refreshWorkspaceDetails,
 		restoreSelectedSession,
 		scheduleAssistantDeltaFlush,
 		token,
+		usageCache,
 	]);
 
 	useEffect(() => {
@@ -1467,16 +1607,12 @@ export function useWumingClient() {
 
 	const openWorkspace = useCallback(
 		async (workspaceId: string, attachLatest = true) => {
+			const revision = ++navigationRevision.current;
 			++skillSelectionRevision.current;
 			++skillListRevision.current;
 			++mcpSelectionRevision.current;
 			++mcpListRevision.current;
 			const previousSession = snapshotRef.current;
-			if (previousSession && (!attachLatest || previousSession.session.workspaceId !== workspaceId)) {
-				await requestRef
-					.current?.({ type: "session.detach", sessionId: previousSession.session.id })
-					.catch(() => undefined);
-			}
 			localStorage.setItem("wuming.workspaceId", workspaceId);
 			snapshotRef.current = undefined;
 			setState((current) => ({
@@ -1504,25 +1640,24 @@ export function useWumingClient() {
 				goals: [],
 				automations: [],
 			}));
-			await refreshSkills(workspaceId);
-			if (state.capabilities.includes("tools")) await refreshTools(workspaceId);
-			if (state.capabilities.includes("mcp")) await refreshMcp(workspaceId);
-			if (state.capabilities.includes("evaluation")) await refreshEvaluationDatasets(workspaceId);
-			const sessions = await refreshSessions(workspaceId);
-			await refreshUsageOverview(workspaceId);
-			if (attachLatest) await restoreSelectedSession(workspaceId, sessions, true);
+			discardAssistantDeltas();
+			// Detaching and ancillary data must not delay navigation or the conversation.
+			if (previousSession && (!attachLatest || previousSession.session.workspaceId !== workspaceId)) {
+				void requestRef
+					.current?.({ type: "session.detach", sessionId: previousSession.session.id })
+					.catch(() => undefined);
+			}
+			const sessionsPromise = refreshSessions(workspaceId, { archived: false });
+			void refreshWorkspaceDetails(workspaceId);
+			try {
+				const sessions = await sessionsPromise;
+				if (attachLatest) await restoreSelectedSession(workspaceId, sessions, true, revision);
+			} catch (error) {
+				if (revision !== navigationRevision.current) return;
+				setState((current) => ({ ...current, error: error instanceof Error ? error.message : String(error) }));
+			}
 		},
-		[
-			attachSession,
-			restoreSelectedSession,
-			refreshEvaluationDatasets,
-			refreshSessions,
-			refreshSkills,
-			refreshTools,
-			refreshMcp,
-			refreshUsageOverview,
-			state.capabilities,
-		]
+		[discardAssistantDeltas, restoreSelectedSession, refreshSessions, refreshWorkspaceDetails]
 	);
 
 	const selectWorkspace = useCallback(
@@ -1680,14 +1815,18 @@ export function useWumingClient() {
 
 	const browseSessions = useCallback(
 		async (workspaceId: string, options: SessionListOptions) => {
+			const revision = navigationRevision.current;
 			const sessions = await refreshSessions(workspaceId, options);
-			if (restoringSession.current) return sessions;
+			if (restoringSession.current || revision !== navigationRevision.current) return sessions;
 			const current = snapshotRef.current;
 			const archived = options.archived ?? false;
+			// Loading another sidebar section must not navigate away from the open chat.
+			if (!current || current.session.workspaceId !== workspaceId) return sessions;
 			if (current?.session.workspaceId === workspaceId && (current.session.archivedAt !== undefined) === archived)
 				return sessions;
 			if (current)
 				await requestRef.current?.({ type: "session.detach", sessionId: current.session.id }).catch(() => undefined);
+			if (revision !== navigationRevision.current) return sessions;
 			snapshotRef.current = undefined;
 			localStorage.removeItem(sessionSelectionKey(workspaceId));
 			setState((value) => ({
@@ -1704,7 +1843,7 @@ export function useWumingClient() {
 				liveTools: {},
 				liveRetry: undefined,
 			}));
-			if (sessions[0]) await attachSession(sessions[0].id);
+			if (sessions[0]) await attachSession(sessions[0].id, revision);
 			return sessions;
 		},
 		[attachSession, refreshSessions]
@@ -1749,7 +1888,7 @@ export function useWumingClient() {
 				approvalPolicy: permission.approvalPolicy,
 			});
 			if (result?.type === "session.created") {
-				sessionListRef.current = { archived: false };
+				sessionListRef.current[workspaceId] = { archived: false };
 				snapshotRef.current = result.snapshot;
 				localStorage.setItem("wuming.workspaceId", workspaceId);
 				localStorage.setItem(sessionSelectionKey(workspaceId), result.snapshot.session.id);
@@ -2000,15 +2139,20 @@ export function useWumingClient() {
 		[]
 	);
 
-	const attachDirectory = useCallback(async (path?: string): Promise<ArtifactRef> => {
-		const workspaceId = snapshotRef.current?.session.workspaceId ?? state.selectedWorkspaceId ?? state.workspaces[0]?.id;
-		if (!workspaceId) throw new Error("未选择工作区");
-		const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/directory-attachments`, {
-			method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-			body: JSON.stringify(path ? { path } : {}),
-		});
-		return readUploadedArtifact(response);
-	}, [token, state.selectedWorkspaceId, state.workspaces]);
+	const attachDirectory = useCallback(
+		async (path?: string): Promise<ArtifactRef> => {
+			const workspaceId =
+				snapshotRef.current?.session.workspaceId ?? state.selectedWorkspaceId ?? state.workspaces[0]?.id;
+			if (!workspaceId) throw new Error("未选择工作区");
+			const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/directory-attachments`, {
+				method: "POST",
+				headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+				body: JSON.stringify(path ? { path } : {}),
+			});
+			return readUploadedArtifact(response);
+		},
+		[token, state.selectedWorkspaceId, state.workspaces]
+	);
 
 	const uploadArtifact = useCallback(
 		async (file: File): Promise<ArtifactRef> => {
@@ -2146,7 +2290,10 @@ export function useWumingClient() {
 			const workspaceId = result.snapshot.session.workspaceId;
 			await refreshSessions(workspaceId);
 			if (snapshotRef.current?.session.id !== sessionId) return;
-			if ((result.snapshot.session.archivedAt !== undefined) === (sessionListRef.current.archived ?? false)) {
+			if (
+				(result.snapshot.session.archivedAt !== undefined) ===
+				(sessionListRef.current[workspaceId]?.archived ?? false)
+			) {
 				snapshotRef.current = result.snapshot;
 				setState((current) => ({ ...current, snapshot: result.snapshot }));
 				return;
@@ -2533,9 +2680,47 @@ export function useWumingClient() {
 	const abortTurn = useCallback(async () => {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
-		await requestRef.current?.({ type: "turn.abort", sessionId: snapshot.session.id });
-		await refreshRuns(snapshot.session.id);
+		if (!requestRef.current) throw new Error("网关尚未连接");
+		await requestRef.current({ type: "turn.abort", sessionId: snapshot.session.id });
+		void refreshRuns(snapshot.session.id).catch(() => undefined);
 	}, [refreshRuns]);
+
+	const cancelBackgroundTask = useCallback(async (taskId: string) => {
+		const sessionId = snapshotRef.current?.session.id;
+		if (!sessionId || !requestRef.current) return;
+		const version = backgroundVersion.current;
+		const result = await requestRef.current({ type: "background.cancel", sessionId, taskId });
+		if (
+			version === backgroundVersion.current &&
+			result.type === "background.tasks" &&
+			snapshotRef.current?.session.id === sessionId
+		)
+			setState((current) => ({ ...current, backgroundTasks: result.tasks }));
+	}, []);
+
+	useEffect(() => {
+		const sessionId = state.snapshot?.session.id;
+		setState((current) => ({ ...current, backgroundTasks: [] }));
+		const version = ++backgroundVersion.current;
+		let active = true;
+		if (sessionId && state.connection === "connected") {
+			void requestRef
+				.current?.({ type: "background.list", sessionId })
+				.then((result) => {
+					if (
+						active &&
+						version === backgroundVersion.current &&
+						result.type === "background.tasks" &&
+						snapshotRef.current?.session.id === sessionId
+					)
+						setState((current) => ({ ...current, backgroundTasks: result.tasks }));
+				})
+				.catch(() => {});
+		}
+		return () => {
+			active = false;
+		};
+	}, [state.snapshot?.session.id, state.connection]);
 
 	const agentTemplates = useCallback(async (command: Extract<Command, { type: `agent.template.${string}` }>) => {
 		const result = await requestRef.current?.(command);
@@ -2559,6 +2744,7 @@ export function useWumingClient() {
 
 	return {
 		...state,
+		cancelBackgroundTask,
 		teamCommand,
 		agentTemplates,
 		listTeams,
@@ -2570,6 +2756,7 @@ export function useWumingClient() {
 		searchSessions,
 		refreshSessions,
 		getUsageOverview,
+		usageCache,
 		refreshUsageOverview,
 		refreshRuns,
 		changeQueuedFollowUp,

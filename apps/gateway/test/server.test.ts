@@ -168,6 +168,62 @@ function send(ws: WebSocket, message: ClientMessage): void {
 }
 
 describe("GatewayServer", () => {
+	it("authorizes background list and cancellation against workspace access and viewer roles", async () => {
+		const store = new SqliteOrchestratorStore(":memory:");
+		cleanup.push(() => store.close());
+		const cancelled: string[] = [];
+		const runtime = new GatewayRuntime();
+		Object.assign(runtime, {
+			backgroundTasks: async () => [],
+			cancelBackgroundTask: async (_snapshot: unknown, id: string) => {
+				cancelled.push(id);
+			},
+		});
+		const orchestrator = new SessionOrchestrator(store, runtime);
+		const { snapshot } = await orchestrator.createSession({
+			principalId: "owner",
+			idempotencyKey: "background-session",
+			workspaceId: workspace.id,
+			model: { provider: "test", id: "model" },
+			thinkingLevel: "off",
+			sandboxMode: "workspace_write",
+			approvalPolicy: "never",
+		});
+		const server = new GatewayServer({
+			store,
+			orchestrator,
+			auth: new StaticTokenMapAuth([
+				{ token: "owner", principal: { id: "owner", role: "owner", workspaces: [workspace] } },
+				{ token: "viewer", principal: { id: "viewer", role: "viewer", workspaces: [workspace] } },
+				{ token: "outsider", principal: { id: "outsider", role: "owner", workspaces: [] } },
+			]),
+		});
+		const address = await server.listen();
+		cleanup.push(() => server.close());
+		for (const token of ["owner", "viewer", "outsider"]) {
+			const client = await openClient(`ws://127.0.0.1:${address.port}/api/ws`, token);
+			send(client.ws, { type: "hello", protocolVersion: 1, clientId: token, capabilities: [] });
+			await client.collector.waitFor((message) => message.type === "hello");
+			for (const type of ["background.list", "background.cancel"] as const) {
+				const command: Command =
+					type === "background.list"
+						? { type, sessionId: snapshot.session.id }
+						: { type, sessionId: snapshot.session.id, taskId: "task" };
+				send(client.ws, { type: "request", requestId: type, idempotencyKey: `${token}-${type}`, command });
+				const response = await client.collector.waitFor(
+					(message) => message.type === "response" && message.requestId === type
+				);
+				const allowed = token === "owner" || (token === "viewer" && type === "background.list");
+				expect(response).toMatchObject(
+					allowed
+						? { ok: true, result: { type: "background.tasks", sessionId: snapshot.session.id, tasks: [] } }
+						: { ok: false, error: { code: "forbidden" } }
+				);
+			}
+		}
+		expect(cancelled).toEqual(["task"]);
+	});
+
 	it("includes hidden workspace usage only for the local profile and enforces explicit workspace access", async () => {
 		const store = new SqliteOrchestratorStore(":memory:");
 		cleanup.push(() => store.close());
@@ -2078,26 +2134,54 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 	it("guards local directory references by authentication, placement, workspace and input", async () => {
 		for (const placement of ["local_device", "server"] as const) {
-			const store = new SqliteOrchestratorStore(":memory:"); cleanup.push(() => store.close());
+			const store = new SqliteOrchestratorStore(":memory:");
+			cleanup.push(() => store.close());
 			let calls = 0;
 			const server = new GatewayServer({
 				auth: new StaticTokenAuth("secret", { id: "user-1", workspaces: [workspace] }),
-				orchestrator: new SessionOrchestrator(store, new GatewayRuntime()), store,
-				executionEnvironment: { placement, processMode: "disabled", terminalMode: "disabled", previewEnabled: false, platform: process.platform, shell: "test" },
-				directoryAttachments: { attach: async (workspaceId, ownerId, path) => {
-					calls++; expect(workspaceId).toBe(workspace.id); expect(ownerId).toBe("user-1");
-					expect(path === undefined || path === "D:/folder").toBe(true);
-					return { id: "reference", name: "folder.directory.json", mimeType: "application/json", size: 10, sha256: "a".repeat(64) };
-				} },
+				orchestrator: new SessionOrchestrator(store, new GatewayRuntime()),
+				store,
+				executionEnvironment: {
+					placement,
+					processMode: "disabled",
+					terminalMode: "disabled",
+					previewEnabled: false,
+					platform: process.platform,
+					shell: "test",
+				},
+				directoryAttachments: {
+					attach: async (workspaceId, ownerId, path) => {
+						calls++;
+						expect(workspaceId).toBe(workspace.id);
+						expect(ownerId).toBe("user-1");
+						expect(path === undefined || path === "D:/folder").toBe(true);
+						return {
+							id: "reference",
+							name: "folder.directory.json",
+							mimeType: "application/json",
+							size: 10,
+							sha256: "a".repeat(64),
+						};
+					},
+				},
 			});
-			const address = await server.listen(); cleanup.push(() => server.close());
+			const address = await server.listen();
+			cleanup.push(() => server.close());
 			const base = `http://127.0.0.1:${address.port}/api/workspaces`;
-			const post = (id: string, body: string, authenticated = true) => fetch(`${base}/${id}/directory-attachments`, { method: "POST", headers: authenticated ? { Authorization: "Bearer secret", "Content-Type": "application/json" } : {}, body });
+			const post = (id: string, body: string, authenticated = true) =>
+				fetch(`${base}/${id}/directory-attachments`, {
+					method: "POST",
+					headers: authenticated ? { Authorization: "Bearer secret", "Content-Type": "application/json" } : {},
+					body,
+				});
 			expect((await post(workspace.id, "{}", false)).status).toBe(401);
 			expect((await post("other", "{}")).status).toBe(403);
-			for (const body of ["null", "[]", "{\"path\":3}", "{\"path\":\"\"}", "{\"extra\":true}"]) expect((await post(workspace.id, body)).status).toBe(placement === "server" ? 403 : 400);
+			for (const body of ["null", "[]", '{"path":3}', '{"path":""}', '{"extra":true}'])
+				expect((await post(workspace.id, body)).status).toBe(placement === "server" ? 403 : 400);
 			expect(calls).toBe(0);
-			expect((await post(workspace.id, JSON.stringify({ path: "D:/folder" }))).status).toBe(placement === "server" ? 403 : 201);
+			expect((await post(workspace.id, JSON.stringify({ path: "D:/folder" }))).status).toBe(
+				placement === "server" ? 403 : 201
+			);
 			expect((await post(workspace.id, "{}")).status).toBe(placement === "server" ? 403 : 201);
 			expect(calls).toBe(placement === "server" ? 0 : 2);
 		}

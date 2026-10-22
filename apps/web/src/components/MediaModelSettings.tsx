@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Image, Video, Save, Trash2, RefreshCw, ListFilter, Star, Pencil, Plus, ChevronDown } from "lucide-react";
+import { MediaModelRemoveDialog, type MediaModelRemoval } from "./MediaModelRemoveDialog.js";
 import type {
 	CustomModelCandidate,
 	CustomModelConfig,
@@ -106,6 +107,7 @@ function ModelForm({
 	const native = kind === "video" ? nativeProtocol(videoProtocol, baseUrl, model) : undefined;
 	const pairCredentials = native === "jimeng" || native === "kling";
 	const [busy, setBusy] = useState(false);
+	const [removing, setRemoving] = useState(false);
 	const [notice, setNotice] = useState("");
 	const [error, setError] = useState("");
 	const [candidates, setCandidates] = useState<CustomModelCandidate[]>([]);
@@ -426,17 +428,26 @@ function ModelForm({
 						title="移除此模型"
 						aria-label="移除此模型"
 						disabled={!saved}
-						onClick={() => {
-							if (window.confirm(`移除${kind === "image" ? "生图" : "生视频"}默认模型配置？`))
-								void perform(async () => {
-									await onRemove(kind);
-								});
-						}}
+						onClick={() => setRemoving(true)}
 					>
 						<Trash2 size={14} />
 					</button>
 				</div>
 			</fieldset>
+			{removing && saved && (
+				<MediaModelRemoveDialog
+					model={{
+						kind,
+						name: saved.model,
+						id: saved.model,
+						baseUrl: saved.baseUrl,
+						active: false,
+						remove: () => onRemove(kind),
+					}}
+					connected={connected}
+					onClose={() => setRemoving(false)}
+				/>
+			)}
 			{busy && <div role="status">处理中…</div>}
 			{kind === "image" && imageModels.length > 50 && (
 				<div className="media-model-error" role="alert">
@@ -461,6 +472,7 @@ export function MediaModelSettings(props: Props) {
 	const [settings, setSettings] = useState<SavedModel[]>([]);
 	const [catalog, setCatalog] = useState<CustomModelSettings[]>([]);
 	const [catalogBusy, setCatalogBusy] = useState(false);
+	const [removing, setRemoving] = useState<MediaModelRemoval>();
 	const [catalogError, setCatalogError] = useState("");
 	const [loaded, setLoaded] = useState(false);
 	const [error, setError] = useState("");
@@ -511,6 +523,9 @@ export function MediaModelSettings(props: Props) {
 	}
 	return (
 		<section className="media-model-settings" aria-label="图片与视频生成模型">
+			{removing && (
+				<MediaModelRemoveDialog model={removing} connected={props.connected} onClose={() => setRemoving(undefined)} />
+			)}
 			<h3>图片与视频生成</h3>
 			{catalogError && (
 				<div className="media-model-error" role="alert">
@@ -605,14 +620,18 @@ export function MediaModelSettings(props: Props) {
 									title="移除已添加模型"
 									aria-label={`移除模型：${item.id}`}
 									disabled={catalogBusy || !props.connected || !loaded}
-									onClick={() => {
-										if (window.confirm(`移除已添加的模型 ${item.name}？`))
-											void catalogAction(async () => {
+									onClick={() =>
+										setRemoving({
+											...item,
+											kind: "image",
+											active,
+											remove: async () => {
 												const ref = { provider: item.provider, id: item.id };
 												if (item.custom) await props.onRemoveCatalog(ref);
 												else setSettings(await props.onRemoveImage(ref));
-											});
-									}}
+											},
+										})
+									}
 								>
 									<Trash2 size={15} />
 								</button>
@@ -741,14 +760,18 @@ export function MediaModelSettings(props: Props) {
 											title="移除已添加模型"
 											aria-label={`移除模型：${item.id}`}
 											disabled={catalogBusy || !props.connected}
-											onClick={() => {
-												if (window.confirm(`移除已添加的模型 ${item.name}？`))
-													void catalogAction(async () => {
+											onClick={() =>
+												setRemoving({
+													...item,
+													kind: "video",
+													active,
+													remove: async () => {
 														const ref = { provider: item.provider, id: item.id };
 														if (item.custom) await props.onRemoveCatalog(ref);
 														else setSettings(await props.onRemoveVideo(ref));
-													});
-											}}
+													},
+												})
+											}
 										>
 											<Trash2 size={15} />
 										</button>

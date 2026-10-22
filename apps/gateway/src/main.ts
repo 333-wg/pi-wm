@@ -919,8 +919,11 @@ async function main(): Promise<void> {
 					assertWorkspace: workspacePathFor,
 				})
 			: undefined;
-	const skillCatalog = new ManagedSkillCatalog(undefined, localUserCapabilities, (id) =>
-		id === "computer-use" ? Boolean(computer?.status().enabled) : undefined
+	const skillCatalog = new ManagedSkillCatalog(
+		undefined,
+		localUserCapabilities,
+		(id) => (id === "computer-use" ? Boolean(computer?.status().enabled) : undefined),
+		envPath(process.env.WUMING_SKILLS_HOME, homedir())
 	);
 	const trustedMcpServers = configuredMcpTrust();
 	const mcpCatalog = new FileMcpCatalog({
@@ -1366,7 +1369,7 @@ async function main(): Promise<void> {
 	);
 	const orchestrator = new SessionOrchestrator(store, runtime, {
 		turnTimeoutMs: envNonNegativeNumber("WUMING_TURN_TIMEOUT_MS", 0),
-		abortGraceMs: envPositiveNumber("WUMING_ABORT_GRACE_MS", 5_000),
+		abortGraceMs: envPositiveNumber("WUMING_ABORT_GRACE_MS", 1_000),
 		forceTerminateTimeoutMs: envPositiveNumber("WUMING_FORCE_TERMINATE_TIMEOUT_MS", 2_000),
 		maxRetries: envNonNegativeNumber("WUMING_MAX_RETRIES", 5),
 		retryBaseDelayMs: envNonNegativeNumber("WUMING_RETRY_BASE_DELAY_MS", 1_000),

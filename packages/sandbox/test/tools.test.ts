@@ -792,6 +792,9 @@ describe("sandbox tool output artifacts", () => {
 
 	it("exposes a persistent browser workflow and stores screenshots with their real MIME type", async () => {
 		const actions: BrowserAction[] = [];
+		const batches: unknown[] = [];
+		const permissions: unknown[] = [];
+		let denyBatch = false;
 		const waits: unknown[] = [];
 		let opened = "";
 		let screenshotMime = "";
@@ -819,6 +822,18 @@ describe("sandbox tool output artifacts", () => {
 				actions.push(action);
 				return { ...page, text: `${page.text}\nSaved` };
 			},
+			async run(steps, options) {
+				batches.push({ steps, options });
+				const failed = steps.some((step) => step.selector === "#missing");
+				return {
+					completedSteps: failed ? 0 : steps.length,
+					steps: [],
+					snapshot: page,
+					durationMs: 10,
+					diagnostics: await this.diagnostics(),
+					...(failed ? { failedStep: 1, error: "Expected result missing" } : {}),
+				};
+			},
 			async screenshot() {
 				return { image: Buffer.from("png-bytes"), url: page.url, title: page.title };
 			},
@@ -832,7 +847,12 @@ describe("sandbox tool output artifacts", () => {
 		};
 		const tools = createSandboxTools({
 			snapshot,
-			approvals,
+			approvals: {
+				authorize: async (request: unknown) => {
+					permissions.push(request);
+					if (denyBatch) throw new Error("Permission denied");
+				},
+			} as unknown as ApprovalBroker,
 			executor: {
 				files: {
 					root: "C:/workspace",
@@ -908,6 +928,65 @@ describe("sandbox tool output artifacts", () => {
 			artifact: { id: "screen-1", mimeType: "image/png" },
 		});
 		expect(screenshotMime).toBe("image/png");
+		const actionTool = tools.find((tool) => tool.name === "browser_action")!;
+		const batch = await actionTool.execute(
+			"batch",
+			{
+				action: "batch",
+				steps: [
+					{ action: "fill", role: "textbox", name: "Name", value: "Ada" },
+					{ action: "wait", text: "Saved" },
+				],
+				screenshot: true,
+				step_timeout_ms: 1000,
+			},
+			signal,
+			undefined,
+			noContext
+		);
+		expect(batch).toMatchObject({ isError: false, details: { completedSteps: 2, artifact: { id: "screen-1" } } });
+		expect(batch.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "image" })]));
+		expect(batches).toHaveLength(1);
+		expect(batches[0]).toMatchObject({ options: { stepTimeoutMs: 1000, signal } });
+		expect(permissions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					toolCallId: "batch",
+					risk: "medium",
+					capabilities: [{ type: "network.connect", hosts: ["localhost"] }],
+				}),
+			])
+		);
+		await expect(
+			actionTool.execute("bad-batch", { action: "batch", steps: [{ action: "wait" }] }, undefined, undefined, noContext)
+		).rejects.toThrow(/stable/);
+		expect(batches).toHaveLength(1);
+		await expect(
+			actionTool.execute(
+				"failed-batch",
+				{ action: "batch", steps: [{ action: "wait", selector: "#missing" }] },
+				undefined,
+				undefined,
+				noContext
+			)
+		).rejects.toMatchObject({
+			details: { failedStep: 1, completedSteps: 0 },
+			message: expect.stringContaining("Expected result missing"),
+		});
+		denyBatch = true;
+		await expect(
+			actionTool.execute(
+				"denied-batch",
+				{ action: "batch", steps: [{ action: "click", selector: "#save" }] },
+				undefined,
+				undefined,
+				noContext
+			)
+		).rejects.toThrow(/Permission denied/);
+		expect(batches).toHaveLength(2);
+		expect(tools.find((tool) => tool.name === "browser_screenshot")!.promptGuidelines?.join(" ")).not.toContain(
+			"Use desktop and mobile viewport sizes"
+		);
 		expect(screenshot.content).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({

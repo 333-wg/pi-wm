@@ -47,7 +47,13 @@ export function skillItems(skills: readonly SkillSummary[], query: string): Sugg
 		group: "技能",
 		icon: <Box size={16} />,
 		badge: [
-			skill.source === "builtin" ? "系统" : skill.source === "user" ? "工作区" : "技能",
+			skill.source === "builtin"
+				? "系统"
+				: skill.scope === "global"
+					? "用户全局"
+					: skill.source === "user"
+						? "工作区"
+						: "技能",
 			...(skill.allowImplicitInvocation === false ? ["手动"] : []),
 		].join(" · "),
 	}));

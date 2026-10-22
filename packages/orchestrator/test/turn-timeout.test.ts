@@ -91,3 +91,68 @@ it("honors an explicitly configured positive deadline", async () => {
 	expect(store.listOperations(sessionId)[0]).toMatchObject({ status: "failed", error: "Turn timed out" });
 	expect(vi.getTimerCount()).toBe(0);
 });
+
+it.each(["resolveCapabilities", "resolveContext", "executeTurn"] as const)(
+	"immediately cancels a stalled %s without waiting for cleanup or timers",
+	async (stage) => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const store = new SqliteOrchestratorStore(":memory:");
+		stores.push(store);
+		let started!: () => void;
+		const ready = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		let release!: () => void;
+		const stalled = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const executeTurn = vi.fn(async () => ({ items: [] }));
+		const forceTerminate = vi.fn(() => new Promise<void>(() => {}));
+		const runtime: AgentRuntime = { executeTurn, forceTerminate };
+		runtime[stage] = async ({ signal }) => {
+			started();
+			await stalled;
+			signal.throwIfAborted();
+			throw new Error("Preparation should have been cancelled");
+		};
+		const orchestrator = new SessionOrchestrator(store, runtime);
+		const { snapshot } = await orchestrator.createSession({
+			principalId: "user",
+			idempotencyKey: "create",
+			workspaceId: "workspace",
+			model: { provider: "test", id: "test" },
+			thinkingLevel: "off",
+			sandboxMode: "workspace_write",
+			approvalPolicy: "never",
+		});
+		const sessionId = snapshot.session.id;
+		const send = (key: string) =>
+			orchestrator.acceptTurn({
+				principalId: "user",
+				idempotencyKey: key,
+				sessionId,
+				mode: "prompt",
+				content: [{ type: "text", text: key }],
+			});
+		await send("stalled");
+		const draining = orchestrator.drainSession(sessionId);
+		await ready;
+		await orchestrator.abortTurn({ principalId: "user", idempotencyKey: "stop", sessionId });
+		expect(forceTerminate).toHaveBeenCalledWith(sessionId);
+		await draining;
+		expect(executeTurn).not.toHaveBeenCalled();
+		expect(store.listOperations(sessionId)[0]).toMatchObject({ status: "interrupted", failureKind: "user_abort" });
+		expect(store.loadSnapshot(sessionId)?.session.phase).toBe("idle");
+		if (stage !== "executeTurn") delete runtime[stage];
+		runtime.executeTurn = executeTurn;
+		await send("next turn");
+		await orchestrator.drainSession(sessionId);
+		expect(executeTurn).toHaveBeenCalledTimes(1);
+		const revision = store.loadSnapshot(sessionId)?.revision;
+		release();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(store.loadSnapshot(sessionId)?.revision).toBe(revision);
+		expect(executeTurn).toHaveBeenCalledTimes(1);
+		expect(vi.getTimerCount()).toBe(0);
+	}
+);

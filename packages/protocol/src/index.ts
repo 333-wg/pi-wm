@@ -9,6 +9,30 @@ export * from "./automation-schedule.js";
 
 export const PROTOCOL_VERSION = 1 as const;
 
+export const BackgroundTaskSchema = Type.Object(
+	{
+		id: Type.String(),
+		sessionId: Type.String(),
+		operationId: Type.String(),
+		toolCallId: Type.String(),
+		toolName: Type.String(),
+		label: Type.String(),
+		status: Type.Union([
+			Type.Literal("running"),
+			Type.Literal("completed"),
+			Type.Literal("failed"),
+			Type.Literal("cancelled"),
+			Type.Literal("interrupted"),
+		]),
+		startedAt: Type.Number(),
+		finishedAt: Type.Optional(Type.Number()),
+		preview: Type.String(),
+		consumed: Type.Boolean(),
+	},
+	{ additionalProperties: false }
+);
+export type BackgroundTask = Static<typeof BackgroundTaskSchema>;
+
 const Id = Type.String({ minLength: 1, maxLength: 200 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Revision = Type.Integer({ minimum: 0 });
@@ -944,7 +968,11 @@ export const WorkspaceSummarySchema = StrictObject({
 });
 export type WorkspaceSummary = Static<typeof WorkspaceSummarySchema>;
 
+export const SkillScopeSchema = Type.Union([Type.Literal("workspace"), Type.Literal("global")]);
+export type SkillScope = Static<typeof SkillScopeSchema>;
+
 export const SkillSummarySchema = StrictObject({
+	scope: Type.Optional(SkillScopeSchema),
 	source: Type.Optional(Type.Union([Type.Literal("builtin"), Type.Literal("user")])),
 	id: Id,
 	workspaceId: Id,
@@ -1625,6 +1653,7 @@ export function sessionUsageRequests(snapshot: SessionSnapshot): UsageRequestSum
 
 const PromptContent = Type.Array(UserContentPartSchema, { minItems: 1, maxItems: 32 });
 export const InstalledSkillSchema = StrictObject({
+	scope: Type.Optional(SkillScopeSchema),
 	id: Id,
 	name: Type.String({ minLength: 1, maxLength: 200 }),
 	source: Type.Union([Type.Literal("builtin"), Type.Literal("user")]),
@@ -1650,6 +1679,7 @@ export const CommandSchema = Type.Union([
 	StrictObject({ type: Type.Literal("skill.installed.list"), workspaceId: Id }),
 	StrictObject({
 		type: Type.Literal("skill.install"),
+		scope: Type.Optional(SkillScopeSchema),
 		workspaceId: Id,
 		sourcePath: Type.String({ minLength: 1, maxLength: 4000 }),
 		skillId: Type.Optional(Id),
@@ -1658,11 +1688,17 @@ export const CommandSchema = Type.Union([
 	StrictObject({ type: Type.Literal("skill.preview"), workspaceId: Id, skillId: Id }),
 	StrictObject({
 		type: Type.Literal("skill.set_enabled"),
+		scope: Type.Optional(SkillScopeSchema),
 		workspaceId: Id,
 		skillId: Id,
 		enabled: Type.Boolean(),
 	}),
-	StrictObject({ type: Type.Literal("skill.uninstall"), workspaceId: Id, skillId: Id }),
+	StrictObject({
+		type: Type.Literal("skill.uninstall"),
+		workspaceId: Id,
+		skillId: Id,
+		scope: Type.Optional(SkillScopeSchema),
+	}),
 	StrictObject({ type: Type.Literal("mcp.list"), workspaceId: Id }),
 	StrictObject({ type: Type.Literal("mcp.get"), workspaceId: Id, serverId: Id }),
 	StrictObject({ type: Type.Literal("mcp.configuration.get"), workspaceId: Id, serverId: Id }),
@@ -1965,6 +2001,8 @@ export const CommandSchema = Type.Union([
 		expectedUpdatedAt: Timestamp,
 	}),
 	StrictObject({ type: Type.Literal("turn.abort"), sessionId: Id }),
+	StrictObject({ type: Type.Literal("background.list"), sessionId: Id }),
+	StrictObject({ type: Type.Literal("background.cancel"), sessionId: Id, taskId: Id }),
 	StrictObject({
 		type: Type.Literal("approval.respond"),
 		sessionId: Id,
@@ -1995,6 +2033,7 @@ export const ProtocolErrorSchema = StrictObject({
 export type ProtocolError = Static<typeof ProtocolErrorSchema>;
 
 export const CommandResultSchema = Type.Union([
+	StrictObject({ type: Type.Literal("background.tasks"), sessionId: Id, tasks: Type.Array(BackgroundTaskSchema) }),
 	AgentTemplateResultSchema,
 	AgentTeamResultSchema,
 	AgentTeamListResultSchema,
@@ -2358,6 +2397,13 @@ export const DurableEventSchema = Type.Union([
 	StrictObject({ type: Type.Literal("resync_required"), reason: Type.String() }),
 ]);
 export const ProgressEventSchema = Type.Union([
+	StrictObject({
+		type: Type.Literal("background.tasks"),
+		sessionId: Id,
+		goalId: Type.Optional(Id),
+		runSessionId: Type.Optional(Id),
+		tasks: Type.Array(BackgroundTaskSchema),
+	}),
 	StrictObject({
 		type: Type.Literal("context.compaction"),
 		sessionId: Id,

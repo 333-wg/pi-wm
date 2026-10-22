@@ -24,7 +24,7 @@ afterEach(async () => {
 async function fixture() {
 	const root = await mkdtemp(join(tmpdir(), "wuming-skill-tools-"));
 	roots.push(root);
-	const catalog = new ManagedSkillCatalog();
+	const catalog = new ManagedSkillCatalog(undefined, true, undefined, join(root, "global-home"));
 	const manager = catalog.manager(root);
 	const tools = createSkillTools(manager, "workspace");
 	return {
@@ -166,22 +166,26 @@ describe("model-driven skill discovery", () => {
 			await expect(invoke("skill_install", { sourcePath: "package", skillId: "local-review" })).resolves.toMatchObject({
 				details: { installed: true },
 			});
-			expect(await readFile(join(root, ".wuming", "skills", "local-review", "SKILL.md"), "utf8")).toContain(
-				"Review carefully."
-			);
+			expect(
+				await readFile(join(root, "global-home", ".wuming", "skills", "local-review", "SKILL.md"), "utf8")
+			).toContain("Review carefully.");
 			await expect(invoke("skill_install", { sourcePath: "package", skillId: "local-review" })).rejects.toMatchObject({
 				protocolCode: "conflict",
 			});
 			await expect(invoke("skill_install", { sourcePath: "../outside", skillId: "outside" })).rejects.toMatchObject({
 				protocolCode: "forbidden",
 			});
-			await expect(invoke("skill_set_enabled", { skillId: "local-review", enabled: false })).resolves.toMatchObject({
+			await expect(
+				invoke("skill_set_enabled", { skillId: "local-review", enabled: false, scope: "global" })
+			).resolves.toMatchObject({
 				details: { enabled: false },
 			});
-			await expect(invoke("skill_set_enabled", { skillId: "local-review", enabled: true })).resolves.toMatchObject({
+			await expect(
+				invoke("skill_set_enabled", { skillId: "local-review", enabled: true, scope: "global" })
+			).resolves.toMatchObject({
 				details: { enabled: true },
 			});
-			await expect(invoke("skill_uninstall", { skillId: "local-review" })).resolves.toMatchObject({
+			await expect(invoke("skill_uninstall", { skillId: "local-review", scope: "global" })).resolves.toMatchObject({
 				details: { uninstalled: true },
 			});
 			expect((await manager.list()).some((skill) => skill.id === "local-review")).toBe(false);
@@ -194,7 +198,7 @@ describe("model-driven skill discovery", () => {
 				sandboxMode: "workspace_write",
 				approvalPolicy: "on_risk",
 			});
-			const pending = invoke("skill_uninstall", { skillId: "local-review" });
+			const pending = invoke("skill_uninstall", { skillId: "local-review", scope: "global" });
 			await vi.waitFor(() => expect(store.loadSnapshot(fullAccess.session.id)?.pendingApprovals).toHaveLength(1));
 			expect((await manager.list()).some((skill) => skill.id === "local-review")).toBe(true);
 			const approval = store.loadSnapshot(fullAccess.session.id)!.pendingApprovals[0]!;
@@ -212,50 +216,67 @@ describe("model-driven skill discovery", () => {
 			store.close();
 		}
 	});
-	it("lets the agent install and manage a user-owned skill entirely in the local workspace", async () => {
-		const { root, manager } = await fixture();
-		const source = join(root, "package");
-		await mkdir(source);
-		await writeFile(
-			join(source, "SKILL.md"),
-			"---\nname: Local review\ndescription: Review local changes\n---\nReview carefully."
-		);
-		const authorize = vi.fn(async (_request: ApprovalAuthorization): Promise<ApprovalPermit | undefined> => undefined);
-		const tools = createSkillManagementTools(manager, snapshot(), {
-			authorize,
-			completeAuthorization: vi.fn(),
-		} as never);
-		const invoke = (name: string, params: Record<string, unknown>) =>
-			tools
-				.find((tool) => tool.name === name)!
-				.execute(
-					`call-${name}`,
-					params,
-					new AbortController().signal,
-					undefined,
-					undefined as unknown as Parameters<ToolDefinition["execute"]>[4]
-				);
+	it.each([undefined, "workspace", "global"] as const)(
+		"lets the agent install and manage a local user skill in %s scope",
+		async (scope) => {
+			const { root, manager } = await fixture();
+			const effectiveScope = scope ?? "global";
+			const source = join(root, "package");
+			await mkdir(source);
+			await writeFile(
+				join(source, "SKILL.md"),
+				"---\nname: Local review\ndescription: Review local changes\n---\nReview carefully."
+			);
+			const authorize = vi.fn(
+				async (_request: ApprovalAuthorization): Promise<ApprovalPermit | undefined> => undefined
+			);
+			const tools = createSkillManagementTools(manager, snapshot(), {
+				authorize,
+				completeAuthorization: vi.fn(),
+			} as never);
+			const invoke = (name: string, params: Record<string, unknown>) =>
+				tools
+					.find((tool) => tool.name === name)!
+					.execute(
+						`call-${name}`,
+						{ ...params, ...(name === "skill_install" && scope === undefined ? {} : { scope: effectiveScope }) },
+						new AbortController().signal,
+						undefined,
+						undefined as unknown as Parameters<ToolDefinition["execute"]>[4]
+					);
 
-		await expect(invoke("skill_install", { sourcePath: "package", skillId: "local-review" })).resolves.toMatchObject({
-			details: { localOnly: true, skillId: "local-review", installed: true },
-		});
-		expect(await readFile(join(root, ".wuming", "skills", "local-review", "SKILL.md"), "utf8")).toContain(
-			"Review carefully."
-		);
-		await expect(invoke("skill_set_enabled", { skillId: "local-review", enabled: false })).resolves.toMatchObject({
-			details: { localOnly: true, enabled: false },
-		});
-		await expect(invoke("skill_uninstall", { skillId: "local-review" })).resolves.toMatchObject({
-			details: { localOnly: true, uninstalled: true },
-		});
-		expect((await manager.list()).some((skill) => skill.id === "local-review")).toBe(false);
-		expect(authorize.mock.calls.map(([request]) => request.capabilities[0])).toEqual([
-			{ type: "skill.manage", skillId: "local-review", action: "install" },
-			{ type: "skill.manage", skillId: "local-review", action: "disable" },
-			{ type: "skill.manage", skillId: "local-review", action: "uninstall" },
-		]);
-		expect(authorize.mock.calls.every(([request]) => request.requireExplicitApproval === true)).toBe(true);
-	});
+			await expect(invoke("skill_install", { sourcePath: "package", skillId: "local-review" })).resolves.toMatchObject({
+				details: { localOnly: true, skillId: "local-review", installed: true },
+			});
+			expect(
+				await readFile(
+					join(
+						effectiveScope === "global" ? join(root, "global-home") : root,
+						".wuming",
+						"skills",
+						"local-review",
+						"SKILL.md"
+					),
+					"utf8"
+				)
+			).toContain("Review carefully.");
+			await expect(invoke("skill_set_enabled", { skillId: "local-review", enabled: false })).resolves.toMatchObject({
+				details: { localOnly: true, enabled: false },
+			});
+			await expect(invoke("skill_uninstall", { skillId: "local-review" })).resolves.toMatchObject({
+				details: { localOnly: true, uninstalled: true },
+			});
+			expect((await manager.list()).some((skill) => skill.id === "local-review")).toBe(false);
+			expect(authorize.mock.calls.map(([request]) => request.capabilities[0])).toEqual([
+				{ type: "skill.manage", skillId: "local-review", action: "install" },
+				{ type: "skill.manage", skillId: "local-review", action: "disable" },
+				{ type: "skill.manage", skillId: "local-review", action: "uninstall" },
+			]);
+			expect(authorize.mock.calls.every(([request]) => request.requireExplicitApproval === true)).toBe(true);
+			if (effectiveScope === "global")
+				expect(authorize.mock.calls.every(([request]) => request.summary.includes("affects all projects"))).toBe(true);
+		}
+	);
 
 	it("places bounded eligible summaries in the load tool without instruction bodies", async () => {
 		const { manager } = await fixture();
@@ -405,7 +426,7 @@ describe("model-driven skill discovery", () => {
 			"---\nname: helper\ndescription: Read scripts\n---\nRead scripts/helper.js when needed."
 		);
 		await writeFile(join(source, "scripts", "helper.js"), "throw new Error('not executed');");
-		await manager.install(source, { id: "helper" });
+		await manager.install(source, { id: "helper", scope: "workspace" });
 		const result = await invoke("skill_load", {
 			skillId: "helper",
 			resourcePath: "scripts/helper.js",

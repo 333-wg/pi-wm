@@ -316,6 +316,7 @@ test("archives, browses, and restores a chat", async ({ page }) => {
 			.filter({ hasText: /^归档交互 E2E$/ })
 	).toHaveCount(0);
 
+	await page.getByRole("button", { name: "最近对话选项" }).click();
 	await page.getByRole("button", { name: "查看归档聊天" }).click();
 	const archivedSession = page
 		.getByRole("navigation", { name: "会话" })

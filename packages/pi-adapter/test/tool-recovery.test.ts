@@ -8,6 +8,55 @@ const invoke = (tool: ToolDefinition, params = {}, signal?: AbortSignal) =>
 const success = { content: [{ type: "text" as const, text: "ok" }], details: {} };
 
 describe("tool failure feedback", () => {
+	it("preserves batch failures and blocks replay of completed steps even when capture options change", async () => {
+		let calls = 0;
+		const monitor = new ToolRecoveryMonitor();
+		const tool = monitor.wrap(
+			defineTool({
+				name: "browser_action",
+				label: "browser",
+				description: "browser",
+				parameters: Type.Object({
+					action: Type.String(),
+					steps: Type.Array(Type.Object({ action: Type.String() })),
+					screenshot: Type.Optional(Type.Boolean()),
+				}),
+				async execute() {
+					calls++;
+					throw Object.assign(new Error("Browser batch stopped after submitting"), {
+						details: { completedSteps: 1, failedStep: 2 },
+					});
+				},
+			})
+		);
+		const steps = [{ action: "click" }, { action: "wait" }];
+		await expect(invoke(tool, { action: "batch", steps })).rejects.toMatchObject({
+			details: { completedSteps: 1, wumingRecovery: { status: "failed" } },
+		});
+		const edit = monitor.wrap(
+			defineTool({
+				name: "edit",
+				label: "edit",
+				description: "edit",
+				parameters: Type.Object({}),
+				async execute() {
+					return success;
+				},
+			})
+		);
+		await invoke(edit);
+		await expect(invoke(tool, { action: "batch", steps, screenshot: true })).rejects.toMatchObject({
+			code: "browser_batch_replay_blocked",
+		});
+		expect(calls).toBe(1);
+		await expect(invoke(tool, { action: "batch", steps: [{ action: "wait" }] })).rejects.toThrow(
+			"Browser batch stopped"
+		);
+		expect(calls).toBe(2);
+		monitor.reset();
+		await expect(invoke(tool, { action: "batch", steps })).rejects.toThrow("Browser batch stopped");
+		expect(calls).toBe(3);
+	});
 	it("blocks changed billable submissions after a provider failure, even after successful status inspection", async () => {
 		let calls = 0;
 		const monitor = new ToolRecoveryMonitor(true);

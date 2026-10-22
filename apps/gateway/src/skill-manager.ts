@@ -14,10 +14,12 @@ import {
 } from "./skill-storage.js";
 
 export type SkillSource = "builtin" | "user";
+export type SkillScope = "workspace" | "global";
 export interface InstalledSkill {
 	id: string;
 	name: string;
 	source: SkillSource;
+	scope?: SkillScope;
 	enabled: boolean;
 	version: string;
 	installedAt: number;
@@ -27,6 +29,9 @@ interface State {
 	skills: Record<string, InstalledSkill>;
 }
 const BUILTIN_SKILL_VERSION = "1.0.0";
+function validateScope(scope: SkillScope | undefined): void {
+	if (scope !== undefined && scope !== "workspace" && scope !== "global") throw skillError("Invalid skill scope");
+}
 
 function parseState(buffer: Buffer): State {
 	try {
@@ -71,17 +76,30 @@ export class SkillManager {
 	readonly #builtins: string;
 	readonly #userSkillsEnabled: boolean;
 	readonly #managedEnabled: ((id: string) => boolean | undefined) | undefined;
+	readonly #global: SkillManager | undefined;
+	readonly #localScope: SkillScope;
 	readonly #userCatalog = new FileSkillCatalog();
 	readonly #builtinCatalog = new FileSkillCatalog([]);
 	constructor(
 		root: string,
 		builtins: string,
-		options: { userSkillsEnabled?: boolean; managedEnabled?: (id: string) => boolean | undefined } = {}
+		options: {
+			userSkillsEnabled?: boolean;
+			managedEnabled?: (id: string) => boolean | undefined;
+			globalRoot?: string;
+		} = {}
 	) {
 		this.#root = resolve(root);
 		this.#builtins = resolve(builtins);
 		this.#userSkillsEnabled = options.userSkillsEnabled ?? true;
 		this.#managedEnabled = options.managedEnabled;
+		this.#localScope = options.globalRoot && resolve(options.globalRoot) === this.#root ? "global" : "workspace";
+		if (this.#userSkillsEnabled && options.globalRoot) {
+			this.#global = new SkillManager(options.globalRoot, builtins, {
+				userSkillsEnabled: true,
+				...(options.managedEnabled ? { managedEnabled: options.managedEnabled } : {}),
+			});
+		}
 	}
 	private control() {
 		return join(this.#root, ".wuming");
@@ -140,7 +158,7 @@ export class SkillManager {
 		}
 		return [...entries.values()];
 	}
-	async list(): Promise<InstalledSkill[]> {
+	private async localList(): Promise<InstalledSkill[]> {
 		const state = await this.readState();
 		return (await this.discovered())
 			.map(({ summary, source }) => {
@@ -160,25 +178,51 @@ export class SkillManager {
 			})
 			.sort((a, b) => a.id.localeCompare(b.id));
 	}
+	async list(): Promise<InstalledSkill[]> {
+		const local = await this.localList();
+		const entries = new Map(local.filter((item) => item.source === "builtin").map((item) => [item.id, item]));
+		for (const item of (await this.#global?.localList()) ?? []) {
+			if (item.source === "user") entries.set(item.id, { ...item, scope: "global" });
+		}
+		for (const item of local) {
+			if (item.source === "user") entries.set(item.id, { ...item, scope: this.#localScope });
+		}
+		return [...entries.values()].sort((a, b) => a.id.localeCompare(b.id));
+	}
+	private globalManager(): SkillManager {
+		if (!this.#global) throw skillError("Global skill management is unavailable on this host", "forbidden");
+		return this.#global;
+	}
 	async listEnabled(workspaceId: string): Promise<SkillSummary[]> {
-		const enabled = new Set((await this.list()).filter((item) => item.enabled).map((item) => item.id));
-		return (await this.discovered())
-			.filter(({ summary }) => enabled.has(summary.id))
-			.map(({ summary, source }) => ({ ...summary, workspaceId, source }));
+		const entries = new Map((await this.discovered()).map(({ summary }) => [summary.id, summary]));
+		const global = new Map(((await this.#global?.discovered()) ?? []).map(({ summary }) => [summary.id, summary]));
+		return (await this.list())
+			.filter((item) => item.enabled)
+			.map((item) => ({
+				...(item.scope === "global" ? global : entries).get(item.id)!,
+				workspaceId,
+				source: item.source,
+				...(item.scope ? { scope: item.scope } : {}),
+			}));
 	}
 	async get(workspaceId: string, id: string, preview = false): Promise<Skill> {
 		validateSkillId(id);
 		const item = (await this.list()).find((skill) => skill.id === id);
 		if (!item) throw skillError(`Skill ${id} was not found`, "not_found");
 		if (!item.enabled && !preview) throw skillError(`Skill ${id} is disabled`, "forbidden");
-		return item.source === "builtin"
-			? this.#builtinCatalog.get(workspaceId, this.#builtins, id)
-			: this.#userCatalog.get(workspaceId, this.#root, id);
+		const skill =
+			item.scope === "global"
+				? await this.globalManager().get(workspaceId, id, preview)
+				: item.source === "builtin"
+					? await this.#builtinCatalog.get(workspaceId, this.#builtins, id)
+					: await this.#userCatalog.get(workspaceId, this.#root, id);
+		return { ...skill, source: item.source, ...(item.scope ? { scope: item.scope } : {}) };
 	}
 	async readResource(workspaceId: string, id: string, resourcePath: string): Promise<string> {
 		await this.get(workspaceId, id);
 		const item = (await this.list()).find((skill) => skill.id === id);
 		if (!item) throw skillError("Skill is no longer available", "not_found");
+		if (item.scope === "global") return this.globalManager().readResource(workspaceId, id, resourcePath);
 		const root = item.source === "builtin" ? join(this.#builtins, id) : join(this.control(), "skills", id);
 		const path = resolve(root, resourcePath);
 		const suffix = relative(root, path);
@@ -201,7 +245,15 @@ export class SkillManager {
 			throw skillError("Skill resource is not UTF-8 text; binary assets require an appropriate artifact tool");
 		}
 	}
-	async install(sourceDir: string, options: { id?: string; version?: string } = {}): Promise<InstalledSkill> {
+	async install(
+		sourceDir: string,
+		options: { id?: string; version?: string; scope?: SkillScope } = {}
+	): Promise<InstalledSkill> {
+		validateScope(options.scope);
+		if ((options.scope ?? (this.#global ? "global" : "workspace")) === "global") {
+			const { scope: _scope, ...localOptions } = options;
+			return { ...(await this.globalManager().install(sourceDir, localOptions)), scope: "global" };
+		}
 		if (!this.#userSkillsEnabled) throw skillError("User skill installation requires a local device host", "forbidden");
 		const id = options.id ?? basename(resolve(sourceDir));
 		validateSkillId(id);
@@ -230,10 +282,10 @@ export class SkillManager {
 			const state = await this.readState();
 			const target = join(this.control(), "skills", id);
 			await safeDirectory(dirname(target), true);
-			if ((await exists(target)) || (await this.list()).some((item) => item.id.toLowerCase() === id.toLowerCase()))
+			if ((await exists(target)) || (await this.localList()).some((item) => item.id.toLowerCase() === id.toLowerCase()))
 				throw skillError("Skill already exists; installation never overwrites an existing skill", "conflict");
 			if ((await readdir(dirname(target))).length >= 100)
-				throw skillError("Workspace skill directory limit of 100 entries reached");
+				throw skillError("Skill directory limit of 100 entries reached");
 			const item: InstalledSkill = {
 				id,
 				name: metadata.name,
@@ -265,7 +317,7 @@ export class SkillManager {
 	}
 	async installFromWorkspace(
 		sourcePath: string,
-		options: { id?: string; version?: string } = {}
+		options: { id?: string; version?: string; scope?: SkillScope } = {}
 	): Promise<InstalledSkill> {
 		const source = resolve(this.#root, sourcePath);
 		const suffix = relative(this.#root, source);
@@ -282,26 +334,35 @@ export class SkillManager {
 		}
 		return this.install(source, options);
 	}
-	async setEnabled(id: string, enabled: boolean): Promise<InstalledSkill> {
+	async setEnabled(id: string, enabled: boolean, scope: SkillScope = "workspace"): Promise<InstalledSkill> {
+		validateScope(scope);
+		if (scope === "global") {
+			const manager = this.globalManager();
+			if (!(await manager.localList()).some((item) => item.id === id && item.source === "user"))
+				throw skillError("Only user-global skills can be changed in global scope", "forbidden");
+			return { ...(await manager.setEnabled(id, enabled)), scope: "global" };
+		}
 		if (!this.#userSkillsEnabled) throw skillError("User skill management requires a local device host", "forbidden");
 		validateSkillId(id);
 		if (this.#managedEnabled?.(id) !== undefined)
 			throw skillError("This built-in skill is managed in Settings > Computer Use", "forbidden");
 		return this.mutate(async () => {
 			const state = await this.readState();
-			const item = (await this.list()).find((entry) => entry.id === id);
+			const item = (await this.localList()).find((entry) => entry.id === id);
 			if (!item) throw skillError(`Skill ${id} is not installed`, "not_found");
 			const updated = { ...item, enabled };
 			await this.save({ skills: { ...state.skills, [id]: updated } });
 			return updated;
 		});
 	}
-	async uninstall(id: string): Promise<void> {
+	async uninstall(id: string, scope: SkillScope = "workspace"): Promise<void> {
+		validateScope(scope);
+		if (scope === "global") return this.globalManager().uninstall(id);
 		if (!this.#userSkillsEnabled) throw skillError("User skill management requires a local device host", "forbidden");
 		validateSkillId(id);
 		await this.mutate(async () => {
 			const state = await this.readState();
-			const item = (await this.list()).find((entry) => entry.id === id);
+			const item = (await this.localList()).find((entry) => entry.id === id);
 			if (!item || item.source !== "user") throw skillError("Only installed user skills can be removed", "forbidden");
 			const target = join(this.control(), "skills", id);
 			await safeDirectory(target);

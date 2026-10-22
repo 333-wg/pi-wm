@@ -104,20 +104,22 @@ export class LocalProcessSandbox implements ProcessSandbox {
 		let timedOut = false;
 		let settled = false;
 		const terminate = () => killTree(child);
-		const timeout = setTimeout(() => {
-			timedOut = true;
-			terminate();
-		}, timeoutMs);
-		const abort = () => terminate();
-		if (options.signal?.aborted) abort();
-		else options.signal?.addEventListener("abort", abort, { once: true });
 
 		return new Promise((resolve, reject) => {
+			let timeout: ReturnType<typeof setTimeout> | undefined;
 			const finish = () => {
 				clearTimeout(timeout);
 				options.signal?.removeEventListener("abort", abort);
 			};
+			const abort = () => {
+				if (settled) return;
+				terminate();
+				settled = true;
+				finish();
+				reject(options.signal?.reason ?? new Error("Command aborted"));
+			};
 			child.stdout?.on("data", (data: Buffer) => {
+				if (settled || options.signal?.aborted) return;
 				const chunk = data.toString("utf8");
 				options.onOutput?.(chunk);
 				const appended = appendBounded(stdout, chunk, this.#maxOutputBytes);
@@ -125,6 +127,7 @@ export class LocalProcessSandbox implements ProcessSandbox {
 				truncated ||= appended.truncated;
 			});
 			child.stderr?.on("data", (data: Buffer) => {
+				if (settled || options.signal?.aborted) return;
 				const chunk = data.toString("utf8");
 				options.onOutput?.(chunk);
 				const appended = appendBounded(stderr, chunk, this.#maxOutputBytes);
@@ -153,6 +156,12 @@ export class LocalProcessSandbox implements ProcessSandbox {
 				}
 				resolve({ exitCode, stdout, stderr, truncated, timedOut: false });
 			});
+			timeout = setTimeout(() => {
+				timedOut = true;
+				terminate();
+			}, timeoutMs);
+			if (options.signal?.aborted) abort();
+			else options.signal?.addEventListener("abort", abort, { once: true });
 		});
 	}
 }

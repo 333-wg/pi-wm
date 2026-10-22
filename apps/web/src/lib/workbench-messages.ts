@@ -1,6 +1,8 @@
 // Interface strings only; conversation content and tool output remain unchanged.
 export const workbenchMessages = {
 	archivedChats: ["归档聊天", "Archived chats"],
+	recentConversationOptions: ["最近对话选项", "Recent conversation options"],
+	newProjectlessChat: ["新建项目外对话", "New chat without a project"],
 	moreCommands: ["更多命令", "More commands"],
 	waitForUpload: [
 		"请等待当前上传或发送完成后，再添加附件",
@@ -13,8 +15,14 @@ export const workbenchMessages = {
 		"Drop multiple files at once. Desktop folders are added as read-only references.",
 	],
 	folderReferenceLabel: ["文件夹 · 只读引用", "Folder · Read-only"],
-	folderReferenceHint: ["按需读取本机目录，不打包、不上传目录内容；不授予写入权限。", "Reads local files on demand without uploading or archiving the folder. Does not grant write access."],
-	directoryDropUnavailable: ["无法获取文件夹路径，请在桌面端直接拖入文件夹，或选择其中的文件上传。", "Folder path unavailable. Drop the folder in the desktop app, or upload individual files."],
+	folderReferenceHint: [
+		"按需读取本机目录，不打包、不上传目录内容；不授予写入权限。",
+		"Reads local files on demand without uploading or archiving the folder. Does not grant write access.",
+	],
+	directoryDropUnavailable: [
+		"无法获取文件夹路径，请在桌面端直接拖入文件夹，或选择其中的文件上传。",
+		"Folder path unavailable. Drop the folder in the desktop app, or upload individual files.",
+	],
 	chooseAttachments: ["选择附件", "Choose attachments"],
 	detachProject: ["不在项目中工作", "Work without a project"],
 	removeArtifact: ["移除 {name}", "Remove {name}"],
@@ -26,6 +34,12 @@ export const workbenchMessages = {
 	queueMode: ["排队方式", "Queue mode"],
 	steerNow: ["立即补充", "Steer now"],
 	stopTask: ["停止任务", "Stop task"],
+	backgroundTasks: ["后台任务", "Background tasks"],
+	backgroundRunning: ["后台运行中", "Running in background"],
+	backgroundCompleted: ["已完成", "Completed"],
+	backgroundFailed: ["失败", "Failed"],
+	backgroundCancelled: ["已取消", "Cancelled"],
+	backgroundInterrupted: ["已中断", "Interrupted"],
 	send: ["发送", "Send"],
 	copied: ["已复制", "Copied"],
 	copyMessage: ["复制消息", "Copy message"],

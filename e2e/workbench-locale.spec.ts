@@ -45,6 +45,8 @@ test("switches the entire chat workbench in both directions and preserves conver
 	await expect(page.locator(".message-row.assistant")).toContainText("Demo runtime received:");
 	await page.reload();
 	await page.getByRole("button", { name: original, exact: true }).click();
+	await page.locator(".turn-process-summary").click();
+	for (const group of await page.locator('.tool-group-summary[aria-expanded="false"]').all()) await group.click();
 	await expect(page.locator(".tool-verb").filter({ hasText: "桌面截图" })).toBeVisible();
 	await page.locator(".sidebar-footer").getByRole("button", { name: "设置", exact: true }).click();
 	await page
@@ -59,6 +61,7 @@ test("switches the entire chat workbench in both directions and preserves conver
 	await expect(page.locator(".sidebar-new-chat")).toHaveText("New chat");
 	await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeVisible();
 	await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "Recent conversation options" }).click();
 	await expect(page.getByRole("textbox", { name: "Search messages" })).toBeVisible();
 	await expect(page.locator(".session-archive-switch")).toHaveText("View archived chats");
 	await page.getByRole("button", { name: "Show or hide run panel", exact: true }).click();
@@ -80,6 +83,9 @@ test("switches the entire chat workbench in both directions and preserves conver
 	await page.reload();
 	await expect(page.locator("html")).toHaveAttribute("lang", "en");
 	await page.getByRole("button", { name: original, exact: true }).click();
+	await page.locator(".turn-process-summary").click();
+	for (const group of await page.locator('.tool-group-summary[aria-expanded="false"]').all()) await group.click();
+	await page.getByRole("button", { name: "Recent conversation options" }).click();
 	await page.getByRole("button", { name: "Show or hide run panel", exact: true }).click();
 	await expect(page.locator(".run-diagnostics h2")).toHaveText("Run diagnostics");
 	for (const width of [390, 320]) {

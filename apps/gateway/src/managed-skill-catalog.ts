@@ -9,7 +9,8 @@ export class ManagedSkillCatalog implements SkillCatalog {
 	constructor(
 		private readonly builtins = fileURLToPath(new URL("../builtin-skills/", import.meta.url)),
 		private readonly userSkillsEnabled = true,
-		private readonly managedEnabled?: (id: string) => boolean | undefined
+		private readonly managedEnabled?: (id: string) => boolean | undefined,
+		private readonly globalRoot?: string
 	) {}
 	manager(workspaceRoot: string): SkillManager {
 		const key = resolve(workspaceRoot);
@@ -17,6 +18,7 @@ export class ManagedSkillCatalog implements SkillCatalog {
 		if (!manager) {
 			manager = new SkillManager(key, this.builtins, {
 				userSkillsEnabled: this.userSkillsEnabled,
+				...(this.globalRoot ? { globalRoot: this.globalRoot } : {}),
 				...(this.managedEnabled ? { managedEnabled: this.managedEnabled } : {}),
 			});
 			this.#managers.set(key, manager);

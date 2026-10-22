@@ -19,9 +19,13 @@ previewed there but cannot be selected or loaded for execution.
 
 Builtin skills are packaged with Wuming and are available wherever the Gateway
 runs. User-created or user-installed skills are different: they are owned by the
-workspace on the user's machine and are stored under `.wuming/skills` with
-metadata in `.wuming/skills.json`. They are not uploaded to a Wuming service and
-are not global account data.
+local user. Project skills are stored under `<workspace>/.wuming/skills` with
+metadata in `<workspace>/.wuming/skills.json`. User-global skills live under
+`~/.wuming/skills` with metadata in `~/.wuming/skills.json` and are available to
+all projects on this device. They are not uploaded or synchronized between devices.
+`WUMING_SKILLS_HOME` can override the home directory (the host appends `.wuming`),
+for isolated tests or a deliberately separate local profile. Existing project
+skills are never automatically moved or copied into global storage.
 
 User skill discovery and management are enabled only when the Gateway is running
 as `local_device`. Server mode exposes bundled skills, but it does not discover
@@ -45,8 +49,7 @@ explicit approval and a write-capable sandbox. An always-ask policy still prompt
   preserves the rest of the draft and does not send a turn. The selected badge
   can be removed with its close button; sending carries the explicit skill ID.
 - Only enabled skills are listed. Manual-only skills are explicitly selectable
-  and labeled accordingly. Source is System or Workspace, not an inferred
-  global personal scope. Oversized skills retain the existing execution guard.
+  and labeled accordingly. Source distinguishes System, Workspace and User Global. Oversized skills retain the existing execution guard.
 
 ### Package Directory
 
@@ -62,7 +65,12 @@ packages/my-skill/
 
 Enter `packages/my-skill` in the install form. The skill ID defaults to the
 directory name or can be supplied explicitly. Successful installation copies a
-validated snapshot into `.wuming/skills/<id>`; the source is not modified.
+validated snapshot into `.wuming/skills/<id>` in the selected scope; the source is not modified.
+The install form defaults to **用户全局（所有项目）**. Use **当前项目** only
+when the user explicitly requests a particular project or rules out global
+installation. A project-local source directory does not restrict the installation
+scope. Omitted installation scope also defaults to global in the RPC and agent
+tool. Global changes affect all projects for the current local user.
 SKILL.md must be UTF-8 with YAML metadata and nonempty instructions/description.
 The current form installs version 1.0.0; RPC callers can supply a version.
 
@@ -73,7 +81,15 @@ directory, but is not the remote interface.
 
 ## Sources and State
 
-New installs never overwrite an existing skill or collide with a builtin ID.
+New installs never overwrite a skill in the target scope or collide with a builtin ID.
+Effective resolution is **workspace > user global > builtin**, using the skill ID.
+The management list shows the effective entry and its scope. A disabled higher-priority
+entry still shadows lower-priority entries, so disabling cannot silently activate
+another copy. Uninstalling a project copy reveals the global/builtin fallback.
+Global enable/disable and uninstall require explicit `scope: "global"`; omitted
+scope always targets the workspace, never silently mutates global storage.
+Global state is read live, so subsequent discovery/loads in other projects see changes;
+already loaded instructions in a running turn are not revoked.
 Manually placed workspace skills remain compatible with the existing catalog;
 when such a file already has a builtin ID, the workspace version wins and is
 identified as a user skill. Removing it reveals the unchanged builtin again.
@@ -90,9 +106,9 @@ read into a running model conversation.
 
 - `skill.installed.list`: all discovered skills, including disabled entries.
 - `skill.preview`: read content without enabling or selecting it.
-- `skill.install`: workspace-relative sourcePath, optional skillId and version.
-- `skill.set_enabled`: skillId and boolean enabled.
-- `skill.uninstall`: user skillId only.
+- `skill.install`: workspace-relative sourcePath, optional skillId, version and scope (`workspace` or `global`).
+- `skill.set_enabled`: skillId, boolean enabled and optional scope.
+- `skill.uninstall`: user skillId and optional scope.
 - Existing `skill.list`/`skill.get`: enabled execution catalog.
 
 The Pi runtime also exposes local-device management tools with the same mutation

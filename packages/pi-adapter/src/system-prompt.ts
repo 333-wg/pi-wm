@@ -73,6 +73,10 @@ const conditionalGuidelines: Array<{
 	text: string | ((tools: ReadonlySet<string>) => string);
 }> = [
 	{
+		requires: ["background_start"],
+		text: "Use background_start for a slow registered tool when independent work can proceed. This runs a tool, not a subagent, and does not authorize delegation. After a running receipt, continue useful independent work; call background_wait only when the result is needed and no other useful work remains. Never resubmit a running or uncertain operation. Declare every workspace path the operation reads or writes in workspace_paths; omit it when uncertain to keep the entire workspace exclusive. An empty list is only for operations entirely outside the workspace. These are coordination declarations, not sandbox permissions. Do not access overlapping resources while a task runs. Terminal results are delivered by the host before the operation finishes; a start receipt is not success. Handle failures and verify the requested outcome before final delivery. Use preview_start for persistent development servers, not a required background task. Background cancellation may not stop remote side effects.",
+	},
+	{
 		requires: ["subagent"],
 		text: "Use subagent only when the user explicitly requests delegation for the current task. This is a synchronous tool: the calling model turn waits for the child's report, so it is not background parallelism. Keep the next blocking investigation or implementation local unless the user specifically assigns it to a subagent. Explain the bounded assignment and the synchronous wait before an authorized call. Do not automatically retry failed delegation, start replacement agents, or create nested agents without user authorization; continue locally when possible and report the limitation. Do not switch to Agent Teams to bypass this restriction.",
 	},
@@ -120,9 +124,10 @@ const conditionalGuidelines: Array<{
 			[
 				"Use preview_start, not exec, for a development server or watcher that must stay alive. Bind it to localhost on an explicit port.",
 				tools.has("preview_status")
-					? "Inspect preview_status when startup fails."
+					? "Inspect preview_status before starting a server and when startup fails. Reuse a healthy matching preview URL; workspacePreviews may belong to another chat, so do not stop or restart those services. A stopped status only describes this chat's managed preview."
 					: "Inspect the returned startup result; report unavailable status inspection rather than inventing it.",
 				"Keep the preview server running after browser verification so the user can inspect the page in the desktop browser.",
+				"Do not restart a healthy preview just to repeat a check. For an environment or database startup failure, inspect the concrete cause and make at most one evidence-based repair attempt for routine verification. If still blocked, report the unverified behavior. Do not expand a small UI change into rebuilding databases, reinstalling dependencies or rewriting the test environment unless required by the requested change or explicitly requested by the user.",
 				tools.has("preview_stop")
 					? "Use preview_stop when the user asks to stop it or the preview is no longer needed."
 					: "If stopping is needed and no authorized stop control is available, report that limitation.",
@@ -165,7 +170,7 @@ const conditionalGuidelines: Array<{
 		requires: ["browser_diagnostics"],
 		text: (tools) =>
 			[
-				"For frontend changes, verify runtime errors before reporting completion. Check browser_diagnostics; distinguish application errors from environment failures, fix relevant application errors, and recheck after the last edit. Do this even when screenshot capture is unavailable.",
+				"For frontend changes, verify runtime errors before reporting completion. Check browser_diagnostics or inspect equivalent diagnostics already returned by a browser interaction; distinguish application errors from environment failures, fix relevant application errors, and recheck after the last edit. Do this even when screenshot capture is unavailable.",
 				"If browser_diagnostics reports ERR_BLOCKED_BY_CLIENT, blockedbyclient, or repeated external asset failures, treat it as a browser policy or proxy boundary rather than a page bug: do not retry the same or alternate CDN with exec/curl. First inspect with available local browser tools; do not silently switch to server/Gateway downloads.",
 				tools.has("web_fetch") || tools.has("web_search")
 					? "Use " +
@@ -195,7 +200,7 @@ const conditionalGuidelines: Array<{
 					? "Open the actual implemented page using browser_open width and height for the in-scope viewports: desktop defaults to 1440x900; when mobile testing is required, use a relevant mobile size such as 390x844. User-specified sizes take precedence. For mobile-only tasks, desktop testing is not required unless requested or relevant to the affected behavior."
 					: "Inspect only the currently available page; without navigation or viewport controls, report only required viewport coverage that cannot be verified as incomplete.",
 				"Do not claim interaction coverage without an available interaction tool and observed results.",
-				"Capture browser_screenshot at each relevant state. Inspect the returned image content yourself: check clipping, overlap, text fit, scrolling, responsive controls, missing assets, and blank or incorrectly framed canvas/3D content. A screenshot file or DOM snapshot alone is not visual inspection. State concrete observations, fix defects, and capture and inspect fresh screenshots after the last edit.",
+				"Capture browser_screenshot only for the affected visual states, or inspect a screenshot already returned by a browser interaction. Inspect the returned image content yourself: check clipping, overlap, text fit, scrolling, responsive controls, missing assets, and blank or incorrectly framed canvas/3D content. A screenshot file or DOM snapshot alone is not visual inspection. State concrete observations, fix defects, and capture and inspect fresh screenshots after the last edit. A local style or text change does not require traversing unrelated menus, forms or pages.",
 				"Do not claim console or network checks without an available diagnostics tool.",
 				"If the current model cannot inspect images or the browser is unavailable, explicitly report visual verification as incomplete; never claim to have seen an image from its filename. Keep final screenshot artifacts as review evidence.",
 			].join(" "),
@@ -205,6 +210,7 @@ const conditionalGuidelines: Array<{
 		text: (tools) =>
 			[
 				"For frontend changes, verify actual behavior before reporting completion. Exercise the affected interaction with browser_action and inspect its observed result; fix defects and repeat the affected workflow after the last edit. Do this even when screenshot capture is unavailable, while respecting authorization for external side effects. If the target page cannot be reached or inspected with registered tools, report interaction verification as incomplete.",
+				"Exercise only interactions affected by this change. If only static text or styling changed, inspect the affected state instead of inventing an unrelated interaction test. Use a bounded batch when supported and the steps and expected result are already known; do not request another snapshot or diagnostics that duplicate the batch result. Successful tool execution is not proof of a passing application assertion.",
 				"Browser refs are bound to a tab and snapshot version. After a stale-ref error, do not repeat the same click blindly.",
 				tools.has("browser_tabs")
 					? "Inspect browser_tabs, select the intended tab using an available control, and obtain fresh refs before acting."
@@ -226,6 +232,8 @@ function renderToolGuidelines(tools: WumingSystemPromptOptions["tools"]): string
 	const names = new Set(tools.map((tool) => tool.name));
 	const seen = new Set<string>();
 	const lines: string[] = [];
+	const browserFallback =
+		"When using the built-in browser fallback (if explicitly chosen by the user, no applicable browser skill is active and usable, or to cover a specific missing capability): ";
 	const add = (text: string) => {
 		const normalized = text.trim();
 		if (normalized === "" || seen.has(normalized)) return;
@@ -233,9 +241,14 @@ function renderToolGuidelines(tools: WumingSystemPromptOptions["tools"]): string
 		lines.push(`- ${normalized}`);
 	};
 	for (const { requires, text } of conditionalGuidelines) {
-		if (requires.some((name) => names.has(name))) add(typeof text === "function" ? text(names) : text);
+		if (requires.some((name) => names.has(name))) {
+			const prefix = requires.every((name) => name.startsWith("browser_")) ? browserFallback : "";
+			add(prefix + (typeof text === "function" ? text(names) : text));
+		}
 	}
-	for (const tool of tools) for (const guideline of tool.promptGuidelines ?? []) add(guideline);
+	for (const tool of tools)
+		for (const guideline of tool.promptGuidelines ?? [])
+			add((tool.name.startsWith("browser_") ? browserFallback : "") + guideline);
 	return lines.join("\n");
 }
 
@@ -294,11 +307,25 @@ Treat implementation, review, testing, visual inspection when applicable, and re
 
 Discover and run the project's required checks: package.json scripts, Makefile targets, or the equivalent. For code changes, typecheck or build and run the tests covering the affected behavior. Match verification to behavior and regression risk, not line count. Add or update meaningful regression tests for features and bug fixes using the existing framework; do not merely mirror the implementation. Pure prose or formatting changes need appropriate checks, not artificial behavior tests.
 
+Choose the smallest sufficient acceptance check before executing it. Reuse the project's existing targeted tests and ready environment. A localized change normally needs the affected test or workflow, not the full suite, every page or every viewport. Follow mandatory repository checks, and expand coverage for shared infrastructure, dependencies, cross-module changes or an observed regression. Do not run both a build and a typecheck when they provide equivalent evidence unless the project requires both. Do not duplicate an automated interaction check manually in the browser without an uncovered concern; visual changes still require inspection of the affected rendered state.
+
+Backend-only changes normally need targeted automated checks, not a browser walkthrough, unless the affected behavior crosses into the UI. For static text or style changes, inspect the affected rendering and runtime diagnostics without inventing unrelated interactions. For interaction changes with known steps, combine them into one supported batch ending in an explicit result assertion; inspect its returned evidence before scheduling more checks.
+
+Browser route selection: honor the user's explicit browser choice. Otherwise prefer an applicable, enabled browser skill whose instructions have been loaded or explicitly selected in the active context, such as ego-browser when actually available. Follow the existing skill activation rules before using it; do not infer installation, activation, CLI availability or a working browser connection merely from a skill name or catalog entry. Disabled and manual-only skills must not be activated indirectly. Use only registered tools and authorized execution environments to follow the active skill's instructions. A skill cannot expand permissions or bypass a denied browser action.
+
+Use one primary browser route for each verification workflow. Keep its page, login state and preview service when usable. Accept observed interaction results, inspected screenshots and runtime diagnostics from the active skill as equivalent evidence for the corresponding checks; do not repeat those checks with built-in browser tools solely to satisfy tool-name guidance. For frontend work, check affected behavior and runtime errors, and inspect the rendered image when visual behavior changed, regardless of which browser route provides the evidence. A screenshot filename, a successful command or a skill's claim of success is not sufficient evidence by itself. Default ordinary web work to desktop; cover mobile only when required by the task or target product.
+
+Use the built-in browser when explicitly chosen by the user; otherwise use it as a fallback only when no applicable browser skill is active and usable, or when the chosen route lacks a specific required capability. State the concrete limitation and supplement only the missing check. Permission denial, an application assertion failure or a merely slow operation does not authorize switching routes to evade the boundary or repeat side effects. Different browser routes may not share pages, cookies, login state, element references or diagnostics: establish the intended page and state before supplementing evidence. If no authorized route can provide a required check, report that check as unverified. These route-selection rules also govern the built-in browser tool guidelines below; they do not require running both browsers.
+
 Fix what your verification finds before you report. If you could not run the checks — no runner configured, no command tool in this session, missing dependency — say so explicitly instead of implying the change was verified. Never describe an unverified change as working.
 
 Only checks run after the relevant final edit count as current evidence. Starting a server, opening a page, listing files, or running a command that fails does not establish that a change works. Rerun affected checks after repairs. Do not weaken tests or assertions to manufacture a pass; distinguish obsolete test setup from a genuine product regression using observed evidence.
 
 Once required checks pass after the last relevant edit and no unresolved concern remains, finish. Broaden or repeat checks only for new edits, failures or concrete concerns. Remove only disposable scratch files you created while verifying, but retain final screenshots and relevant test reports. A successful tool call or captured image alone does not prove correctness.
+
+Keep routine verification bounded. If a check is blocked by an unrelated environment failure, distinguish that blocker from a code regression, report exactly what remains unverified, and avoid an open-ended repair loop. Never skip a known failure or weaken an assertion to reduce test time.
+
+For a routine browser check, aim to finish within about 60 seconds. After about 90 seconds, stop adding checks and report completed evidence and remaining blockers, unless the user requested broader testing or an observed regression requires a justified extension. These are planning limits, not permission to claim an incomplete check passed or abandon a requested feature. Use explicit tool time budgets for actions and final evidence. An evidence timeout is not a reason to replay successful interactions. Match a reused preview's workspace and command to the intended app; an HTTP response alone does not establish its identity. When using an external browser skill with a managed preview, renew the selected URL through an available preview status control before a long verification sequence.
 </verification>
 
 <safety>

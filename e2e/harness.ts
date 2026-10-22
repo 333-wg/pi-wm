@@ -78,6 +78,7 @@ export async function startWebApp(
 		WUMING_RUNTIME: "demo",
 		WUMING_WORKSPACE: workspace,
 		WUMING_DATA_DIR: data,
+		WUMING_SKILLS_HOME: join(temporaryRoot, "skill-home"),
 		WUMING_TERMINAL_MODE: "disabled",
 		...gatewayEnvironment,
 	};

@@ -104,11 +104,106 @@ async function openUsage(page: Page) {
 	return page.locator("#settings-panel-usage");
 }
 
+test("reopens cached usage immediately and preserves data during slow or failed refreshes", async ({
+	page,
+}, testInfo) => {
+	let hold = false;
+	let requests = 0;
+	const held: Array<{ release: () => void; fail: () => void }> = [];
+	await page.routeWebSocket("**/api/ws", (socket) => {
+		const server = socket.connectToServer();
+		socket.onMessage((message) => {
+			const parsed = JSON.parse(String(message));
+			if (parsed.command?.type === "usage.overview" && !parsed.command.workspaceId) {
+				requests++;
+				if (hold) {
+					held.push({
+						release: () => server.send(message),
+						fail: () =>
+							socket.send(
+								JSON.stringify({
+									type: "response",
+									requestId: parsed.requestId,
+									ok: false,
+									error: { code: "internal", message: "Usage temporarily unavailable" },
+								})
+							),
+					});
+					return;
+				}
+			}
+			server.send(message);
+		});
+	});
+	await page.setViewportSize({ width: 1440, height: 1000 });
+	await openApp(page, webUrl);
+	const panel = await openUsage(page);
+	const total = panel.locator(".usage-metric-card").last();
+	const refresh = panel.getByRole("button", { name: "刷新用量统计" });
+	await expect(total).toContainText("6.0k");
+	await expect(refresh).toBeEnabled();
+	const initialRequests = requests;
+	hold = true;
+	await page
+		.getByRole("dialog", { name: "设置", exact: true })
+		.getByRole("button", { name: "关闭", exact: true })
+		.click();
+	await openUsage(page);
+	await expect(total).toContainText("6.0k");
+	await expect(panel.getByText("正在统计", { exact: true })).toHaveCount(0);
+	await expect(refresh).toBeEnabled();
+	expect(requests).toBe(initialRequests);
+	await refresh.click();
+	await expect.poll(() => held.length).toBe(1);
+	await expect(refresh).toBeDisabled();
+	await expect(total).toContainText("6.0k");
+	await expect(panel.locator(".usage-trend-line")).toHaveCount(1);
+	await page.screenshot({ path: testInfo.outputPath("usage-background-refresh.png") });
+	await page
+		.getByRole("dialog", { name: "设置", exact: true })
+		.getByRole("button", { name: "关闭", exact: true })
+		.click();
+	await openUsage(page);
+	await expect(total).toContainText("6.0k");
+	await expect(refresh).toBeDisabled();
+	expect(held).toHaveLength(1);
+	held.shift()!.fail();
+	await expect(panel.locator(".usage-settings-error")).toContainText("Usage temporarily unavailable");
+	await expect(total).toContainText("6.0k");
+	await expect(refresh).toBeEnabled();
+	await refresh.click();
+	await expect.poll(() => held.length).toBe(1);
+	held.shift()!.release();
+	await expect(refresh).toBeEnabled();
+	await expect(panel.locator(".usage-settings-error")).toHaveCount(0);
+	await panel.getByRole("button", { name: "近 14 天", exact: true }).click();
+	await expect.poll(() => held.length).toBe(1);
+	await panel.getByRole("button", { name: "近 7 天", exact: true }).click();
+	await expect(total).toContainText("6.0k");
+	await expect(panel.locator(".usage-settings-day")).toHaveCount(7);
+	held.shift()!.release();
+	await panel.getByRole("button", { name: "近 14 天", exact: true }).click();
+	await expect(panel.locator(".usage-settings-day")).toHaveCount(14);
+	await expect(refresh).toBeEnabled();
+	await page.setViewportSize({ width: 390, height: 844 });
+	await refresh.click();
+	await expect.poll(() => held.length).toBe(1);
+	await expect(total).toContainText("6.0k");
+	expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+	await page.screenshot({ path: testInfo.outputPath("usage-background-refresh-mobile.png") });
+	held.shift()!.release();
+	await expect(refresh).toBeEnabled();
+});
+
 test("defaults to all historical usage and preserves totals after hiding projects and restarting", async ({
 	page,
 }, testInfo) => {
 	await page.setViewportSize({ width: 1440, height: 1000 });
 	await openApp(page, webUrl);
+	await page.locator(".recent-conversations .session-open").first().click();
+	await expect(page.getByRole("button", { name: "显示或隐藏运行面板", exact: true })).toBeVisible();
+	if (!(await page.locator(".right-rail").isVisible()))
+		await page.getByRole("button", { name: "显示或隐藏运行面板", exact: true }).click();
 	const sparkline = page.getByRole("group", { name: "最近 7 天 Token 用量", exact: true });
 	await expect(sparkline.locator(".usage-sparkline-line")).toHaveAttribute("d", / C /);
 	await expect(sparkline.getByRole("button")).toHaveCount(7);

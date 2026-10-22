@@ -91,6 +91,12 @@ describe("workspace usage overview", () => {
 			});
 			expect(store.usageOverview(["visible", "hidden"], now).total.totalTokens).toBe(300);
 			expect(store.usageOverview([], now).total.totalTokens).toBe(0);
+			expect(store.usageOverview(undefined, now + 1000).daily).toBe(total.daily);
+			expect(store.usageOverview(undefined, now + 1000).generatedAt).toBe(now + 1000);
+			const restricted = store.usageOverview(["visible", "hidden"], now);
+			expect(store.usageOverview(["hidden", "visible", "visible"], now).daily).toBe(restricted.daily);
+			expect(store.usageOverview(["visible"], now).workspaceId).toBeUndefined();
+			expect(store.usageOverview("visible", now).workspaceId).toBe("visible");
 			store.close();
 			store = new SqliteOrchestratorStore(join(root, "usage.db"));
 			expect(store.usageOverview(undefined, now)).toEqual(total);
@@ -186,6 +192,77 @@ describe("workspace usage overview", () => {
 			turnCount: 1,
 			requestCount: 1,
 		});
+		await orchestrator.archiveSession({
+			principalId: "user-1",
+			idempotencyKey: "archive-parent",
+			sessionId: parent.snapshot.session.id,
+			archived: true,
+		});
+		expect(store.usageOverview("workspace-1", now).daily).toBe(overview.daily);
+		record(parent.snapshot.session.id, now, 500, 0.05);
+		const updated = store.usageOverview("workspace-1", now);
+		expect(updated.total.totalTokens).toBe(7_500);
+		expect(updated.today.totalTokens).toBe(2_500);
+		expect(updated.totalRequestCount).toBe(4);
+		expect(store.usageOverview(undefined, now).total.totalTokens).toBe(7_500);
+		const tomorrow = store.usageOverview("workspace-1", new Date(2026, 8, 5, 0).getTime());
+		expect(tomorrow.today.totalTokens).toBe(0);
+		expect(tomorrow.daily.at(-2)?.usage.totalTokens).toBe(2_500);
+		const nextMonth = store.usageOverview("workspace-1", new Date(2026, 9, 1, 0).getTime());
+		expect(nextMonth.month.totalTokens).toBe(0);
+		expect(nextMonth.total.totalTokens).toBe(7_500);
 		store.close();
+	});
+
+	it("invalidates cached totals after another database connection records usage", async () => {
+		const root = await mkdtemp(join(tmpdir(), "usage-cache-"));
+		const path = join(root, "usage.db");
+		const store = new SqliteOrchestratorStore(path);
+		const writer = new SqliteOrchestratorStore(path);
+		try {
+			const now = new Date(2026, 9, 21, 12).getTime();
+			const orchestrator = new SessionOrchestrator(writer, {
+				async executeTurn() {
+					return { items: [] };
+				},
+			});
+			const { snapshot } = await orchestrator.createSession({
+				principalId: "user",
+				idempotencyKey: "external",
+				workspaceId: "workspace",
+				model: { provider: "test", id: "model" },
+				thinkingLevel: "medium",
+				sandboxMode: "workspace_write",
+				approvalPolicy: "on_risk",
+			});
+			expect(store.usageOverview(undefined, now).total.totalTokens).toBe(0);
+			const recorded = usage(100, 0.1);
+			const event: SessionEvent = {
+				type: "session.usage.recorded",
+				eventId: "external-usage",
+				sessionId: snapshot.session.id,
+				revision: snapshot.revision + 1,
+				timestamp: now,
+				turnId: "external-turn",
+				mode: "prompt",
+				model: snapshot.model,
+				attempt: 1,
+				usage: recorded,
+				tools: [],
+				requests: [{ requestId: "external-request", model: snapshot.model, usage: recorded }],
+			};
+			writer.commitMutation({
+				sessionId: snapshot.session.id,
+				expectedRevision: snapshot.revision,
+				events: [event],
+				snapshot: reduceSessionEvent(snapshot, event),
+			});
+			expect(store.usageOverview(undefined, now).total.totalTokens).toBe(100);
+			expect(store.usageOverview("workspace", now).today.totalTokens).toBe(100);
+		} finally {
+			writer.close();
+			store.close();
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });

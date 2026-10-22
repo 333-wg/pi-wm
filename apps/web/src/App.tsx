@@ -24,6 +24,7 @@ import { ComputerUseSettings, useComputerUse } from "./components/ComputerUseSet
 import { OfficialAccountSettings } from "./components/OfficialAccountSettings.js";
 import { AgentTemplateSettings } from "./components/AgentTemplateSettings.js";
 import { TeamLaunchNotice } from "./components/TeamLaunchNotice.js";
+import { BackgroundTaskPanel } from "./components/BackgroundTasks.js";
 import { FollowUpQueue } from "./components/FollowUpQueue.js";
 import { DesktopUpdateNotice, DesktopUpdateSettings, useDesktopUpdates } from "./components/DesktopUpdates.js";
 import { WelcomeScreen } from "./components/WelcomeScreen.js";
@@ -112,6 +113,8 @@ import {
 	Fragment,
 } from "react";
 import { validateCalendarSchedule, type CalendarSchedule } from "@wuming/protocol";
+import type { UsageOverviewCache } from "./lib/usage-overview-cache.js";
+import { useUsageOverview } from "./use-usage-overview.js";
 import { CalendarScheduleEditor, SchedulePreview, scheduleLabel } from "./components/AutomationScheduleEditor";
 import { ScheduledTasks } from "./components/ScheduledTasks";
 import { BranchPicker } from "./components/BranchPicker";
@@ -2002,6 +2005,7 @@ function Composer({
 	const [sending, setSending] = useState(false);
 	const [selectingSkill, setSelectingSkill] = useState(false);
 	const [stopping, setStopping] = useState(false);
+	const stopAttempt = useRef(0);
 	const [branchBusy, setBranchBusy] = useState(false);
 	const [trigger, setTrigger] = useState<Trigger>();
 	const [dismissed, setDismissed] = useState(false);
@@ -2036,7 +2040,10 @@ function Composer({
 		onCancelEdit();
 	};
 	useEffect(() => {
-		if (!active) setStopping(false);
+		if (!active) {
+			stopAttempt.current += 1;
+			setStopping(false);
+		}
 	}, [active]);
 
 	// The trigger is derived from the caret, so every interaction that can move
@@ -2503,10 +2510,18 @@ function Composer({
 							className="stop-button"
 							type="button"
 							title={t("stopTask")}
+							aria-label={t("stopTask")}
+							aria-busy={stopping}
 							disabled={stopping}
 							onClick={() => {
+								const attempt = ++stopAttempt.current;
+								setSendError(undefined);
 								setStopping(true);
-								void onAbort().catch(() => setStopping(false));
+								void onAbort().catch((error: unknown) => {
+									if (attempt !== stopAttempt.current) return;
+									setStopping(false);
+									setSendError(error instanceof Error ? error.message : String(error));
+								});
 							}}
 						>
 							<Square size={13} fill="currentColor" />
@@ -3701,54 +3716,28 @@ function aggregateDailyUsage(entries: UsageOverview["daily"]): {
 }
 
 function UsageSettings({
-	overview,
+	cache,
+	active,
 	snapshot,
 	workspaces,
 	models,
-	onRefresh,
 }: {
-	overview: UsageOverview | undefined;
+	cache: UsageOverviewCache;
+	active: boolean;
 	snapshot: SessionSnapshot | undefined;
 	workspaces: WorkspaceSummary[];
 	models: ModelMetadata[];
-	onRefresh: (workspaceId: string | undefined, days: UsageRange) => Promise<UsageOverview | undefined>;
 }) {
 	const { locale, t } = useLocale();
 	const [range, setRange] = useState<UsageRange>(7);
 	const [scope, setScope] = useState("");
 	const workspaceId = scope || undefined;
-	const [data, setData] = useState<UsageOverview>();
-	const [refreshKey, setRefreshKey] = useState(0);
-	const [loading, setLoading] = useState(false);
-	const [error, setError] = useState<string>();
+	const { data, loading, error, refresh } = useUsageOverview(cache, workspaceId, range, active);
 	const session = !workspaceId || snapshot?.session.workspaceId === workspaceId ? snapshot : undefined;
 
 	useEffect(() => {
 		if (scope && !workspaces.some((workspace) => workspace.id === scope)) setScope("");
 	}, [scope, workspaces]);
-
-	useEffect(() => {
-		let active = true;
-		setLoading(true);
-		setError(undefined);
-		setData((current) =>
-			current?.workspaceId === workspaceId && current?.daily.length === range ? current : undefined
-		);
-		void onRefresh(workspaceId, range)
-			.then((next) => {
-				if (!next) throw new Error(t("usageLoadFailed"));
-				if (active) setData(next);
-			})
-			.catch((cause: unknown) => {
-				if (active) setError(cause instanceof Error ? cause.message : t("usageLoadFailed"));
-			})
-			.finally(() => {
-				if (active) setLoading(false);
-			});
-		return () => {
-			active = false;
-		};
-	}, [workspaceId, range, onRefresh, overview?.generatedAt, refreshKey, t]);
 
 	const selectRange = (nextRange: UsageRange) => {
 		setRange(nextRange);
@@ -3825,13 +3814,7 @@ function UsageSettings({
 				<div className="usage-settings-actions">
 					<div className="usage-range-control" role="group" aria-label={t("usageRange")}>
 						{([7, 14, 30] as const).map((days) => (
-							<button
-								key={days}
-								type="button"
-								aria-pressed={range === days}
-								disabled={loading}
-								onClick={() => selectRange(days)}
-							>
+							<button key={days} type="button" aria-pressed={range === days} onClick={() => selectRange(days)}>
 								{t("usageLastDays", { days })}
 							</button>
 						))}
@@ -3842,7 +3825,7 @@ function UsageSettings({
 						title={t("usageRefresh")}
 						aria-label={t("usageRefresh")}
 						disabled={loading}
-						onClick={() => setRefreshKey((key) => key + 1)}
+						onClick={refresh}
 					>
 						<RefreshCw className={loading ? "spin" : ""} size={15} />
 					</button>
@@ -4506,6 +4489,9 @@ function RightRail({
 
 function SessionNavigation({
 	sessions,
+	archived = false,
+	onNewSession,
+	newSessionDisabled = false,
 	selectedSessionId,
 	workspaceId,
 	disabled,
@@ -4517,6 +4503,9 @@ function SessionNavigation({
 	onOpenMatch,
 }: {
 	sessions: SessionSummary[];
+	archived?: boolean;
+	onNewSession?: () => Promise<void>;
+	newSessionDisabled?: boolean;
 	selectedSessionId?: string;
 	workspaceId?: string;
 	disabled: boolean;
@@ -4528,23 +4517,12 @@ function SessionNavigation({
 	onOpenMatch: (sessionId: string, messageId: string) => Promise<void>;
 }) {
 	const t = useT();
-	const [archived, setArchived] = useState(false);
+	const [toolsOpen, setToolsOpen] = useState(false);
 	const [renamingId, setRenamingId] = useState<string>();
 	const [nameDraft, setNameDraft] = useState("");
 	const [busyId, setBusyId] = useState<string>();
 	const [browsing, setBrowsing] = useState(false);
 	const [error, setError] = useState<string>();
-
-	useEffect(() => {
-		if (!workspaceId || disabled) return;
-		setArchived(false);
-		const timer = setTimeout(() => {
-			void onBrowse(workspaceId, { archived: false }).catch((cause) =>
-				setError(cause instanceof Error ? cause.message : String(cause))
-			);
-		}, 180);
-		return () => clearTimeout(timer);
-	}, [disabled, onBrowse, workspaceId]);
 
 	const switchArchiveView = async (nextArchived: boolean) => {
 		if (!workspaceId || browsing) return;
@@ -4552,7 +4530,6 @@ function SessionNavigation({
 		setError(undefined);
 		try {
 			await onBrowse(workspaceId, { archived: nextArchived });
-			setArchived(nextArchived);
 			setRenamingId(undefined);
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : String(cause));
@@ -4578,13 +4555,42 @@ function SessionNavigation({
 
 	return (
 		<div className="session-browser">
-			<SessionSearch
-				{...(workspaceId ? { workspaceId } : {})}
-				archived={archived}
-				disabled={disabled}
-				search={onSearch}
-				onOpen={onOpenMatch}
-			/>
+			{onNewSession && (
+				<div className="recent-conversations-heading">
+					<span className="nav-label" id="recent-conversations-heading">
+						{t("recent")}
+					</span>
+					<div className="project-heading-actions">
+						<button
+							type="button"
+							title={t("recentConversationOptions")}
+							aria-label={t("recentConversationOptions")}
+							aria-expanded={toolsOpen}
+							onClick={() => setToolsOpen((open) => !open)}
+						>
+							<MoreHorizontal size={16} />
+						</button>
+						<button
+							type="button"
+							title={t("newProjectlessChat")}
+							aria-label={t("newProjectlessChat")}
+							disabled={disabled || newSessionDisabled}
+							onClick={() => void onNewSession()}
+						>
+							<SquarePen size={16} />
+						</button>
+					</div>
+				</div>
+			)}
+			{(!onNewSession || toolsOpen) && (
+				<SessionSearch
+					{...(workspaceId ? { workspaceId } : {})}
+					archived={archived}
+					disabled={disabled}
+					search={onSearch}
+					onOpen={onOpenMatch}
+				/>
+			)}
 			{archived && (
 				<div className="session-view-label">
 					<Archive size={12} />
@@ -4617,7 +4623,13 @@ function SessionNavigation({
 							</form>
 						) : (
 							<>
-								<button className="session-open" type="button" onClick={() => onSelect(session.id)}>
+								<button
+									className="session-open"
+									type="button"
+									title={session.name || t("newChat")}
+									aria-current={selectedSessionId === session.id ? "page" : undefined}
+									onClick={() => onSelect(session.id)}
+								>
 									<span>{session.name || t("newChat")}</span>
 									{session.phase === "turn" || session.phase === "compaction" || session.phase === "retry" ? (
 										<LoaderCircle
@@ -4686,21 +4698,23 @@ function SessionNavigation({
 					<div className="session-list-empty">{archived ? t("noArchivedChats") : t("noChats")}</div>
 				)}
 			</nav>
-			<button
-				className="session-archive-switch"
-				type="button"
-				disabled={disabled || browsing || !workspaceId}
-				onClick={() => void switchArchiveView(!archived)}
-			>
-				{browsing ? (
-					<RefreshCw className="spin" size={12} />
-				) : archived ? (
-					<ArrowLeft size={12} />
-				) : (
-					<Archive size={12} />
-				)}
-				<span>{archived ? t("backToChats") : t("viewArchivedChats")}</span>
-			</button>
+			{(!onNewSession || toolsOpen || archived) && (
+				<button
+					className="session-archive-switch"
+					type="button"
+					disabled={disabled || browsing || !workspaceId}
+					onClick={() => void switchArchiveView(!archived)}
+				>
+					{browsing ? (
+						<RefreshCw className="spin" size={12} />
+					) : archived ? (
+						<ArrowLeft size={12} />
+					) : (
+						<Archive size={12} />
+					)}
+					<span>{archived ? t("backToChats") : t("viewArchivedChats")}</span>
+				</button>
+			)}
 			{error && (
 				<div className="session-list-error">
 					<CircleAlert size={13} />
@@ -6349,7 +6363,8 @@ export function App() {
 									{expanded && (
 										<div className="project-conversations">
 											<SessionNavigation
-												sessions={client.sessions}
+												sessions={client.sessionLists[workspace.id]?.sessions ?? []}
+												archived={client.sessionLists[workspace.id]?.archived ?? false}
 
 												{...(client.snapshot ? { selectedSessionId: client.snapshot.session.id } : {})}
 												workspaceId={workspace.id}
@@ -6367,16 +6382,14 @@ export function App() {
 							);
 						})}
 						{projectWorkspaces.length === 0 && <div className="project-tree-empty">{t("noProjects")}</div>}
-						{implicitWorkspace && isImplicitWorkspace(selectedWorkspace) && (
+						{implicitWorkspace && (
 							<section className="recent-conversations" aria-labelledby="recent-conversations-heading">
-								<div className="recent-conversations-heading">
-									<span className="nav-label" id="recent-conversations-heading">
-										{t("recent")}
-									</span>
-								</div>
 								<div className="projectless-conversations">
 									<SessionNavigation
-										sessions={client.sessions}
+										sessions={client.sessionLists[implicitWorkspace.id]?.sessions ?? []}
+										archived={client.sessionLists[implicitWorkspace.id]?.archived ?? false}
+										onNewSession={() => startNewChat(implicitWorkspace.id)}
+										newSessionDisabled={!canCreateChat || newChatBusy}
 
 										{...(client.snapshot ? { selectedSessionId: client.snapshot.session.id } : {})}
 										workspaceId={implicitWorkspace.id}
@@ -6880,6 +6893,11 @@ export function App() {
 							)}
 						</div>
 						<div className="composer-wrap">
+							<BackgroundTaskPanel
+								key={client.snapshot?.session.id}
+								tasks={client.backgroundTasks}
+								onCancel={client.cancelBackgroundTask}
+							/>
 							<TeamLaunchNotice
 								transcript={client.snapshot?.transcript ?? []}
 								onOpen={(teamId) => {
@@ -7481,11 +7499,11 @@ export function App() {
 												<p>{t("usageSettingsDescription")}</p>
 											</div>
 											<UsageSettings
-												overview={client.usageOverview}
+												cache={client.usageCache}
+												active={settingsSection === "usage" && client.connection === "connected"}
 												snapshot={client.snapshot}
 												workspaces={client.workspaces}
 												models={client.models}
-												onRefresh={client.getUsageOverview}
 											/>
 										</section>
 										{desktopUpdates.enabled && (

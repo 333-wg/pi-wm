@@ -5,6 +5,7 @@ import type {
 	WorkspaceListing,
 } from "./workspace-search.js";
 import type { EnvironmentInspector } from "./environment.js";
+import type { BrowserWorkflowProgress, BrowserWorkflowStep } from "./browser-workflow.js";
 import type { WebEvidence } from "@wuming/protocol";
 
 export interface ReadTextOptions {
@@ -207,6 +208,23 @@ export interface BrowserAutomation {
 		signal?: AbortSignal;
 	}): Promise<BrowserSnapshot>;
 	act(action: BrowserAction, signal?: AbortSignal): Promise<BrowserSnapshot>;
+	run?(
+		steps: BrowserWorkflowStep[],
+		options?: {
+			timeoutMs?: number;
+			stepTimeoutMs?: number;
+			evidenceTimeoutMs?: number;
+			signal?: AbortSignal;
+		}
+	): Promise<
+		BrowserWorkflowProgress & {
+			snapshot?: BrowserSnapshot;
+			diagnostics: BrowserDiagnostics;
+			durationMs: number;
+			actionDurationMs?: number;
+			evidenceDeadlineMs?: number;
+		}
+	>;
 	screenshot(options?: {
 		fullPage?: boolean;
 		signal?: AbortSignal;
@@ -232,6 +250,13 @@ export interface PreviewServerStatus {
 	exitCode?: number | null;
 	log: string;
 	truncated: boolean;
+	workspacePreviews?: Array<{
+		ownerSessionId: string;
+		url: string;
+		cwd: string;
+		command?: string;
+		state: "starting" | "running";
+	}>;
 }
 
 /** One long-lived local preview process scoped to an agent session. */
@@ -240,7 +265,9 @@ export interface PreviewServerAutomation {
 		command: string,
 		options: { cwd?: string; url: string; timeoutMs?: number; signal?: AbortSignal }
 	): Promise<PreviewServerStatus>;
-	status(): Promise<PreviewServerStatus>;
+	status(options?: { url?: string }): Promise<PreviewServerStatus>;
+	/** Hold a managed preview alive during browser work; releasing renews its idle period. */
+	acquire?(url: string): (() => void) | undefined;
 	stop(): Promise<PreviewServerStatus>;
 }
 

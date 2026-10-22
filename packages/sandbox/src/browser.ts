@@ -28,6 +28,8 @@ import type {
 } from "./types.js";
 import { isAllowedWebResolution, isPublicWebAddress } from "./web.js";
 import { pageEvidence, searchEvidence } from "./web-evidence.js";
+import { runBrowserWorkflow, type BrowserWorkflowStep } from "./browser-workflow.js";
+import { withAbort, withDeadline } from "./operation-deadline.js";
 
 const INTERACTIVE_SELECTOR = [
 	"a[href]",
@@ -222,6 +224,7 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 			open: (url, options) => this.#open(sessionId, url, options),
 			snapshot: (options) => this.#snapshot(sessionId, options),
 			act: (action, signal) => this.#act(sessionId, action, signal),
+			run: (steps, options) => this.#run(sessionId, steps, options),
 			screenshot: (options) => this.#screenshot(sessionId, options),
 			...(searchHost ? { searchHost } : {}),
 			search: (query, options) => this.#search(sessionId, query, options),
@@ -603,19 +606,38 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 	async #pageEvidence(state: BrowserPageState) {
 		const text = await state.page
 			.locator("body")
-			.evaluate((body) => {
-				const root = body.querySelector("main, article, [role=main]") ?? body;
-				const copy = root.cloneNode(true) as Element;
-				copy
-					.querySelectorAll("script, style, noscript, nav, header, footer, [hidden], [aria-hidden=true]")
-					.forEach((node) => node.remove());
-				return (copy.textContent ?? "").slice(0, 20000);
-			})
+			.evaluate(
+				(body) => {
+					const root = body.querySelector("main, article, [role=main]") ?? body;
+					const copy = root.cloneNode(true) as Element;
+					copy
+						.querySelectorAll("script, style, noscript, nav, header, footer, [hidden], [aria-hidden=true]")
+						.forEach((node) => node.remove());
+					return (copy.textContent ?? "").slice(0, 20000);
+				},
+				undefined,
+				{ timeout: 2000 }
+			)
 			.catch(() => "");
 		return pageEvidence(text, state.documentStatus);
 	}
 
 	async #snapshot(
+		sessionId: string,
+		options: Parameters<BrowserAutomation["snapshot"]>[0] = {},
+		closeOnAbort = false
+	): Promise<BrowserSnapshot> {
+		options.signal?.throwIfAborted();
+		if (!closeOnAbort) return this.#collectSnapshot(sessionId, options);
+		const state = await this.#active(await this.#state(sessionId));
+		return withAbort(
+			options.signal,
+			() => this.#collectSnapshot(sessionId, options),
+			() => state.page.close()
+		);
+	}
+
+	async #collectSnapshot(
 		sessionId: string,
 		options: Parameters<BrowserAutomation["snapshot"]>[0] = {}
 	): Promise<BrowserSnapshot> {
@@ -629,9 +651,23 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 			Math.max(0, options.waitTimeoutMs ?? (options.waitFor ? 5000 : 2000))
 		);
 		let webEvidence = await this.#pageEvidence(state);
+		const localControlsReady =
+			!options.waitFor &&
+			isLoopbackHost(hostname(new URL(state.page.url()))) &&
+			(await state.page
+				.locator(`:is(${INTERACTIVE_SELECTOR}):visible`)
+				.first()
+				.isVisible()
+				.catch(() => false));
+		if (localControlsReady && state.documentStatus < 400 && webEvidence.level === "insufficient_content") {
+			webEvidence = {
+				level: "page_content",
+				note: "Visible local UI controls were retrieved. Short text alone does not imply loading. Use explicit result assertions to verify asynchronous data and interactions.",
+			};
+		}
 		let ready = options.waitFor
 			? await state.page.locator(options.waitFor).first().isVisible()
-			: webEvidence.level !== "insufficient_content";
+			: localControlsReady || webEvidence.level !== "insufficient_content";
 		while (
 			!ready &&
 			webEvidence.level !== "access_blocked" &&
@@ -659,7 +695,7 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 		}
 		const waitedMs = Date.now() - startedAt;
 		const revision = this.#nextSnapshotRevision++;
-		for (const handle of state.refs.values()) await handle.dispose().catch(() => undefined);
+		await Promise.all([...state.refs.values()].map((handle) => handle.dispose().catch(() => undefined)));
 		state.refs.clear();
 		const root = options?.selector ? state.page.locator(options.selector).first() : state.page.locator("body");
 		if (options?.selector) await root.waitFor({ state: "attached" });
@@ -669,7 +705,15 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 		} catch {
 			aria = trimText(await root.innerText().catch(() => "(page body is unavailable)"), 20_000);
 		}
-		const handles = await state.page.locator(INTERACTIVE_SELECTOR).elementHandles();
+		const handles = await root.locator(INTERACTIVE_SELECTOR).elementHandles();
+		if (options.selector) {
+			const rootHandle = await root.elementHandle();
+			if (rootHandle) {
+				if (await rootHandle.evaluate((element, selector) => element.matches(selector), INTERACTIVE_SELECTOR))
+					handles.unshift(rootHandle);
+				else await rootHandle.dispose();
+			}
+		}
 		const references: string[] = [];
 		for (const handle of handles) {
 			if (references.length >= MAX_INTERACTIVE_ELEMENTS) {
@@ -811,6 +855,49 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 		await handle.evaluate((node, value) => (node as Element).scrollBy(value.x, value.y), delta);
 	}
 
+	async #run(
+		sessionId: string,
+		steps: BrowserWorkflowStep[],
+		options: Parameters<NonNullable<BrowserAutomation["run"]>>[1] = {}
+	) {
+		const startedAt = Date.now();
+		const session = await this.#state(sessionId);
+		const state = await this.#active(session);
+		const origin = new URL(state.page.url()).origin;
+		const progress = await runBrowserWorkflow(state.page, steps, {
+			...options,
+			isActive: () =>
+				session.activePageId === state.id && !state.page.isClosed() && new URL(state.page.url()).origin === origin,
+		});
+		options.signal?.throwIfAborted();
+		const actionDurationMs = Date.now() - startedAt;
+		const evidenceDeadlineMs = Date.now() + Math.min(30_000, Math.max(100, options.evidenceTimeoutMs ?? 10_000));
+		let snapshot: BrowserSnapshot | undefined;
+		// Even failed workflows return current evidence, but must never replay successful steps.
+		try {
+			snapshot = await withDeadline(evidenceDeadlineMs, options.signal, async (signal) => {
+				let current: BrowserSnapshot;
+				do {
+					current = await this.#snapshot(sessionId, { waitTimeoutMs: 0, maxChars: 12_000, signal }, true);
+					// A popup can become active while the previous page is being collected.
+				} while (current.tabId !== session.activePageId);
+				return current;
+			});
+		} catch (error) {
+			options.signal?.throwIfAborted();
+			progress.error ??= `Final snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`;
+		}
+		const evidenceState = (snapshot ? session.pages.get(snapshot.tabId) : undefined) ?? state;
+		return {
+			...progress,
+			...(snapshot ? { snapshot } : {}),
+			diagnostics: structuredClone({ ...evidenceState.diagnostics, url: evidenceState.page.url() }),
+			durationMs: Date.now() - startedAt,
+			actionDurationMs,
+			evidenceDeadlineMs,
+		};
+	}
+
 	async #act(sessionId: string, action: BrowserAction, signal?: AbortSignal): Promise<BrowserSnapshot> {
 		const session = await this.#state(sessionId);
 		let state = await this.#active(session);
@@ -915,17 +1002,24 @@ export class PlaywrightBrowserManager implements AsyncDisposable {
 	): Promise<{ image: Buffer; url: string; title: string }> {
 		const state = await this.#active(await this.#state(sessionId));
 		if (options?.signal?.aborted) throw options.signal.reason ?? new Error("Browser screenshot aborted");
-		const image = await state.page.screenshot({
-			type: "png",
-			fullPage: options?.fullPage ?? false,
-		});
-		if (image.length > this.#options.maxScreenshotBytes) {
-			throw new SandboxError(
-				"file_too_large",
-				`Browser screenshot exceeds ${this.#options.maxScreenshotBytes} bytes; capture the viewport instead of the full page`
-			);
-		}
-		return { image, url: state.page.url(), title: await state.page.title() };
+		return withAbort(
+			options.signal,
+			async () => {
+				const image = await state.page.screenshot({
+					type: "png",
+					fullPage: options?.fullPage ?? false,
+				});
+				options.signal?.throwIfAborted();
+				if (image.length > this.#options.maxScreenshotBytes) {
+					throw new SandboxError(
+						"file_too_large",
+						`Browser screenshot exceeds ${this.#options.maxScreenshotBytes} bytes; capture the viewport instead of the full page`
+					);
+				}
+				return { image, url: state.page.url(), title: await state.page.title() };
+			},
+			() => state.page.close()
+		);
 	}
 
 	async #diagnostics(sessionId: string, clear = false): Promise<BrowserDiagnostics> {

@@ -503,6 +503,13 @@ html[data-wallpaper="true"] .desktop-titlebar {
 	border-radius: 10px;
 	border-color: color-mix(in srgb, var(--line) 45%, transparent);
 }
+/* Apply the reading tint once; opaque nested code surfaces would hide the wallpaper. */
+.app-shell[data-wallpaper="true"] .code-scroll:has(.code-block-file) {
+	background: var(--wallpaper-reading);
+}
+.app-shell[data-wallpaper="true"] .code-block-file {
+	background: transparent;
+}
 /* Dense content owns a readable local surface; the full pane stays transparent. */
 .app-shell[data-wallpaper="true"] .message-row:not(.user) {
 	background: var(--wallpaper-reading);

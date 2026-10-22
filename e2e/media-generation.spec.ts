@@ -363,8 +363,33 @@ test("persists default media settings without returning keys", async ({ page }, 
 		settings.getByRole("button", { name: "启用默认模型：configured-image-edited", exact: true })
 	).toBeDisabled();
 	await settings.getByRole("button", { name: "启用默认模型：configured-image", exact: true }).click();
-	page.once("dialog", (dialog) => dialog.accept());
-	await settings.getByRole("button", { name: "移除模型：configured-image-edited", exact: true }).click();
+	const removeImage = settings.getByRole("button", { name: "移除模型：configured-image-edited", exact: true });
+	await removeImage.click();
+	const removal = page.getByRole("alertdialog", { name: "移除图片模型？" });
+	await expect(removal).toContainText("configured-image-edited");
+	await expect(removal).toContainText(providerUrl);
+	await expect(removal.getByRole("button", { name: "取消", exact: true })).toBeFocused();
+	await removal.getByRole("button", { name: "取消", exact: true }).click();
+	await expect(removal).toHaveCount(0);
+	await expect(removeImage).toBeFocused();
+	await removeImage.click();
+	await page.keyboard.press("Escape");
+	await expect(removal).toHaveCount(0);
+	await expect(removeImage).toBeFocused();
+	await removeImage.click();
+	await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+	await page.screenshot({ path: testInfo.outputPath("remove-image-dark-desktop.png") });
+	await page.setViewportSize({ width: 390, height: 844 });
+	const removalBox = (await removal.boundingBox())!;
+	expect(removalBox.x).toBeGreaterThanOrEqual(0);
+	expect(removalBox.x + removalBox.width).toBeLessThanOrEqual(390);
+	expect(await removal.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+	await page.screenshot({ path: testInfo.outputPath("remove-image-dark-mobile.png") });
+	await page.evaluate(() => document.documentElement.setAttribute("data-theme", "white"));
+	await page.screenshot({ path: testInfo.outputPath("remove-image-light-mobile.png") });
+	await page.setViewportSize({ width: 1280, height: 720 });
+	await removal.getByRole("button", { name: "移除模型", exact: true }).click();
+	await expect(removal).toHaveCount(0);
 	await expect(settings.getByRole("button", { name: "移除模型：configured-image-edited", exact: true })).toHaveCount(0);
 	await settings.scrollIntoViewIfNeeded();
 	await settings.getByRole("button", { name: "配置视频模型：configured-video", exact: true }).click();
@@ -471,8 +496,11 @@ test("configures native video services and hides saved dual credentials on deskt
 	await page.screenshot({ path: testInfo.outputPath("native-video-settings-mobile.png") });
 	expect(requests.length).toBe(before);
 	for (const profile of profiles) {
-		page.once("dialog", (dialog) => dialog.accept());
 		await settings.getByRole("button", { name: "移除模型：" + profile.model, exact: true }).click();
+		await page
+			.getByRole("alertdialog", { name: "移除视频模型？" })
+			.getByRole("button", { name: "移除模型", exact: true })
+			.click();
 		await expect(settings.getByRole("button", { name: "移除模型：" + profile.model, exact: true })).toHaveCount(0);
 	}
 });
@@ -504,8 +532,10 @@ test("fetches only matching media candidates using saved or unsaved connections"
 		"true"
 	);
 	// Removing the default promotes another available model, without removing its service.
-	page.once("dialog", (dialog) => dialog.accept());
 	await settings.getByRole("button", { name: "移除模型：gpt-image-1", exact: true }).click();
+	const removal = page.getByRole("alertdialog", { name: "移除图片模型？" });
+	await expect(removal).toContainText("这是当前默认模型");
+	await removal.getByRole("button", { name: "移除模型", exact: true }).click();
 	await expect(settings.getByRole("button", { name: "启用默认模型：configured-image", exact: true })).toBeDisabled();
 	await settings.locator("summary").filter({ hasText: "手动添加视频服务" }).click();
 	await videoForm.getByLabel("Base URL").fill(providerUrl);

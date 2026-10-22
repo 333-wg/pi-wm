@@ -1,6 +1,6 @@
 import { BookOpen, CircleAlert, Download, RefreshCw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Command, CommandResult, InstalledSkill, Skill } from "@wuming/protocol";
+import type { Command, CommandResult, InstalledSkill, Skill, SkillScope } from "@wuming/protocol";
 import { useFocusTrap } from "../use-focus-trap.js";
 
 type SkillCommand = Extract<
@@ -23,6 +23,7 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 	const [error, setError] = useState<string>();
 	const [sourcePath, setSourcePath] = useState("");
 	const [skillId, setSkillId] = useState("");
+	const [scope, setScope] = useState<SkillScope>("global");
 	const [removal, setRemoval] = useState<string>();
 	const revision = useRef(0);
 	const previewSection = useRef<HTMLElement>(null);
@@ -134,6 +135,7 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 							type: "skill.install",
 							workspaceId,
 							sourcePath: sourcePath.trim(),
+							scope,
 							...(skillId.trim() ? { skillId: skillId.trim() } : {}),
 						});
 					}}
@@ -157,10 +159,28 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 							disabled={busy}
 						/>
 					</label>
+					<label>
+						安装范围
+						<select
+							aria-label="安装范围"
+							value={scope}
+							disabled={busy}
+							onChange={(event) => setScope(event.target.value as SkillScope)}
+						>
+							<option value="global">用户全局（所有项目）</option>
+							<option value="workspace">当前项目</option>
+						</select>
+					</label>
 					<button type="submit" disabled={busy || !sourcePath.trim()}>
 						<Download size={15} />
 						安装
 					</button>
+					<p className="skill-scope-hint">
+						{scope === "global"
+							? "安装到 ~/.wuming/skills，供本机当前用户的所有项目使用。"
+							: "安装到当前项目的 .wuming/skills，不影响其他项目。"}
+						同名技能按当前项目、用户全局、系统内置的顺序生效；全局启停和卸载影响所有项目。
+					</p>
 				</form>
 				{error && (
 					<div className="workbench-error" role="alert">
@@ -187,7 +207,13 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 							<div className="skill-manager-identity">
 								<strong>{skill.name}</strong>
 								<small>
-									{skill.id} · {skill.source === "builtin" ? "系统内置" : "用户安装"} · {skill.version}
+									{skill.id} ·{" "}
+									{skill.source === "builtin"
+										? "系统内置"
+										: skill.scope === "global"
+											? "用户安装 · 用户全局"
+											: "用户安装 · 当前项目"}{" "}
+									· {skill.version}
 									{skill.allowImplicitInvocation === false ? " · 手动调用" : ""}
 								</small>
 							</div>
@@ -204,6 +230,7 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 												type: "skill.set_enabled",
 												workspaceId,
 												skillId: skill.id,
+												...(skill.scope ? { scope: skill.scope } : {}),
 												enabled: event.target.checked,
 											})
 										}
@@ -235,11 +262,23 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 							</div>
 							{removal === skill.id && (
 								<div className="skill-remove-confirm">
-									<span>卸载 {skill.name}？</span>
+									<span>
+										卸载 {skill.name}？
+										{skill.scope === "global"
+											? "将从所有项目移除这份全局技能。"
+											: "仅移除当前项目的技能；如有同名全局或内置技能，将重新显示。"}
+									</span>
 									<button
 										type="button"
 										disabled={busy}
-										onClick={() => void act({ type: "skill.uninstall", workspaceId, skillId: skill.id })}
+										onClick={() =>
+											void act({
+												type: "skill.uninstall",
+												workspaceId,
+												skillId: skill.id,
+												...(skill.scope ? { scope: skill.scope } : {}),
+											})
+										}
 									>
 										确认卸载
 									</button>

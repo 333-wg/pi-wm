@@ -145,6 +145,7 @@ for (const width of widths) {
 		const closeRail = page.getByRole("button", { name: "关闭运行面板", exact: true }).first();
 		if (await closeRail.isVisible()) await closeRail.click();
 		if (width < 720) await page.getByRole("button", { name: "打开导航", exact: true }).click();
+		await page.getByRole("button", { name: "最近对话选项" }).click();
 		await page.getByRole("textbox", { name: "搜索聊天正文" }).fill("HISTORY_PROOF_501");
 		await page.locator(".session-search-hit").click();
 		const target = page.locator('[data-message-id="history-501"]');

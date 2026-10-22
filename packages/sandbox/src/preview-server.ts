@@ -22,6 +22,17 @@ interface PreviewRecord {
 	log: string;
 	truncated: boolean;
 	idleTimer?: ReturnType<typeof setTimeout>;
+	activeUsers: number;
+}
+
+type PreviewProbe = { state: "responding"; status: number } | { state: "closed" | "unknown" };
+
+function connectionRefused(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	if ("code" in error && error.code === "ECONNREFUSED") return true;
+	if ("errors" in error && Array.isArray(error.errors))
+		return error.errors.length > 0 && error.errors.every(connectionRefused);
+	return "cause" in error && connectionRefused(error.cause);
 }
 
 function appendBounded(record: PreviewRecord, chunk: Buffer | string, maxBytes: number): void {
@@ -80,6 +91,8 @@ export function validatePreviewUrl(value: string): URL {
 export class HostPreviewServerManager implements AsyncDisposable {
 	readonly #policyPending: Promise<WorkspacePathPolicy>;
 	readonly #records = new Map<string, PreviewRecord>();
+	readonly #pendingOrigins = new Map<string, string>();
+	readonly #stopping = new Set<Promise<void>>();
 	readonly #maxOutputBytes: number;
 	readonly #defaultReadyTimeoutMs: number;
 	readonly #idleTimeoutMs: number;
@@ -96,12 +109,97 @@ export class HostPreviewServerManager implements AsyncDisposable {
 		if (!sessionId) throw new SandboxError("process_unavailable", "Preview session ID is required");
 		return {
 			start: (command, options) => this.#start(sessionId, command, options),
-			status: () => this.#status(sessionId),
+			status: (options) => this.#status(sessionId, options?.url),
+			acquire: (url) => this.#acquire(url),
 			stop: () => this.#stop(sessionId),
 		};
 	}
 
 	async #start(
+		sessionId: string,
+		command: string,
+		options: Parameters<PreviewServerAutomation["start"]>[1]
+	): Promise<PreviewServerStatus> {
+		if (this.#disposed) throw new SandboxError("process_unavailable", "Preview manager is closed");
+		options.signal?.throwIfAborted();
+		const url = validatePreviewUrl(options.url);
+		const cwd = await (await this.#policyPending).existing(options.cwd ?? ".");
+		const current = this.#records.get(sessionId);
+		if (
+			current?.state === "running" &&
+			current.command === command &&
+			current.cwd === cwd &&
+			current.url === url.href
+		) {
+			const status = await this.#probe(url, options.signal);
+			if (status.state === "responding" && status.status >= 200 && status.status < 400 && current.state === "running") {
+				this.#touch(sessionId, current);
+				return this.#view(current);
+			}
+			if (status.state === "unknown") {
+				this.#touch(sessionId, current);
+				throw new SandboxError(
+					"process_timeout",
+					"Preview health is unknown: the probe timed out or failed. The existing process was preserved. Inspect logs or retry its URL; do not restart it based on this probe alone"
+				);
+			}
+			throw new SandboxError(
+				"process_failed",
+				"Existing preview is not healthy; inspect its status and logs before deciding whether to restart it"
+			);
+		}
+		if (current && current.state !== "exited")
+			throw new SandboxError(
+				"process_failed",
+				"A preview server is already running for this session; reuse its URL or stop it before changing its command"
+			);
+		for (const [owner, record] of this.#records) {
+			if (owner !== sessionId && record.state !== "exited" && new URL(record.url).origin === url.origin)
+				throw new SandboxError(
+					"process_failed",
+					`A workspace preview already uses ${url.origin}. Inspect preview_status and reuse its URL; do not stop another chat's server`
+				);
+		}
+		if (this.#pendingOrigins.has(url.origin) || [...this.#pendingOrigins.values()].includes(sessionId))
+			throw new SandboxError(
+				"process_failed",
+				"A preview start is already pending for this session or address; inspect status before retrying"
+			);
+		this.#pendingOrigins.set(url.origin, sessionId);
+		try {
+			const probe = await this.#probe(url, options.signal);
+			if (probe.state === "unknown")
+				throw new SandboxError(
+					"process_timeout",
+					`Preview address availability is unknown at ${url.origin}: the probe timed out or failed. No command was started. Inspect the existing service before retrying`
+				);
+			if (probe.state === "responding")
+				throw new SandboxError(
+					"process_failed",
+					`A service already responds at ${url.origin}. Inspect and reuse it if it is the intended app, or choose another port. It was not started or stopped by this call`
+				);
+			options.signal?.throwIfAborted();
+			return await this.#launch(sessionId, command, options);
+		} finally {
+			this.#pendingOrigins.delete(url.origin);
+		}
+	}
+
+	async #probe(url: URL, signal?: AbortSignal): Promise<PreviewProbe> {
+		try {
+			const response = await fetch(url, {
+				redirect: "manual",
+				signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(500)]) : AbortSignal.timeout(500),
+			});
+			await response.body?.cancel().catch(() => undefined);
+			return { state: "responding", status: response.status };
+		} catch (error) {
+			signal?.throwIfAborted();
+			return { state: connectionRefused(error) ? "closed" : "unknown" };
+		}
+	}
+
+	async #launch(
 		sessionId: string,
 		command: string,
 		options: Parameters<PreviewServerAutomation["start"]>[1]
@@ -134,6 +232,7 @@ export class HostPreviewServerManager implements AsyncDisposable {
 			state: "starting",
 			log: "",
 			truncated: false,
+			activeUsers: 0,
 		};
 		this.#records.set(sessionId, record);
 		child.stdout?.on("data", (chunk: Buffer) => appendBounded(record, chunk, this.#maxOutputBytes));
@@ -152,6 +251,7 @@ export class HostPreviewServerManager implements AsyncDisposable {
 
 		const timeoutMs = Math.min(120_000, Math.max(1_000, options.timeoutMs ?? this.#defaultReadyTimeoutMs));
 		const deadline = Date.now() + timeoutMs;
+		let lastHttpStatus: number | undefined;
 		try {
 			while (Date.now() < deadline) {
 				if (options.signal?.aborted) throw options.signal.reason ?? new Error("Preview start aborted");
@@ -161,12 +261,21 @@ export class HostPreviewServerManager implements AsyncDisposable {
 						`Preview process exited before becoming ready${record.log ? `:\n${record.log}` : ""}`
 					);
 				try {
-					await fetch(url, {
+					const response = await fetch(url, {
 						redirect: "manual",
-						signal: AbortSignal.timeout(Math.min(1000, Math.max(1, deadline - Date.now()))),
+						signal: AbortSignal.any([
+							...(options.signal ? [options.signal] : []),
+							AbortSignal.timeout(Math.min(1000, Math.max(1, deadline - Date.now()))),
+						]),
 					});
-					record.state = "running";
-					return this.#view(record);
+					lastHttpStatus = response.status;
+					await response.body?.cancel().catch(() => undefined);
+					options.signal?.throwIfAborted();
+					if (response.status >= 200 && response.status < 400 && record.child.exitCode === null) {
+						record.state = "running";
+						this.#touch(sessionId, record);
+						return this.#view(record);
+					}
 				} catch (error) {
 					if (error instanceof SandboxError) throw error;
 				}
@@ -174,7 +283,7 @@ export class HostPreviewServerManager implements AsyncDisposable {
 			}
 			throw new SandboxError(
 				"process_timeout",
-				`Preview server did not become ready at ${url.href} within ${timeoutMs}ms`
+				`Preview server did not become ready at ${url.href} within ${timeoutMs}ms${lastHttpStatus === undefined ? "" : ` (last HTTP status: ${lastHttpStatus})`}`
 			);
 		} catch (error) {
 			await this.#stop(sessionId);
@@ -182,11 +291,41 @@ export class HostPreviewServerManager implements AsyncDisposable {
 		}
 	}
 
-	async #status(sessionId: string): Promise<PreviewServerStatus> {
+	#acquire(value: string): (() => void) | undefined {
+		let origin: string;
+		try {
+			origin = new URL(value).origin;
+		} catch {
+			return undefined;
+		}
+		for (const [owner, record] of this.#records) {
+			if (record.state === "exited" || new URL(record.url).origin !== origin) continue;
+			record.activeUsers++;
+			this.#touch(owner, record);
+			let released = false;
+			return () => {
+				if (released) return;
+				released = true;
+				record.activeUsers--;
+				if (this.#records.get(owner) === record) this.#touch(owner, record);
+			};
+		}
+		return undefined;
+	}
+
+	async #status(sessionId: string, url?: string): Promise<PreviewServerStatus> {
+		// An explicit URL renews only the selected service, including for external browser skills.
+		if (url) this.#acquire(url)?.();
 		const record = this.#records.get(sessionId);
-		if (!record) return { state: "stopped", log: "", truncated: false };
+		const workspacePreviews = [...this.#records.entries()].flatMap(([ownerSessionId, other]) =>
+			ownerSessionId !== sessionId && other.state !== "exited"
+				? [{ ownerSessionId, url: other.url, cwd: other.cwd, command: other.command, state: other.state }]
+				: []
+		);
+		const shared = workspacePreviews.length ? { workspacePreviews } : {};
+		if (!record) return { state: "stopped", log: "", truncated: false, ...shared };
 		this.#touch(sessionId, record);
-		return this.#view(record);
+		return { ...this.#view(record), ...shared };
 	}
 
 	async #stop(sessionId: string): Promise<PreviewServerStatus> {
@@ -194,13 +333,19 @@ export class HostPreviewServerManager implements AsyncDisposable {
 		if (!record) return { state: "stopped", log: "", truncated: false };
 		this.#records.delete(sessionId);
 		if (record.idleTimer) clearTimeout(record.idleTimer);
-		await this.#terminate(record.child);
+		const stopping = this.#terminate(record.child);
+		this.#stopping.add(stopping);
+		try {
+			await stopping;
+		} finally {
+			this.#stopping.delete(stopping);
+		}
 		return { ...this.#view(record), state: "stopped" };
 	}
 
 	#touch(sessionId: string, record: PreviewRecord): void {
 		if (record.idleTimer) clearTimeout(record.idleTimer);
-		if (record.state === "exited") return;
+		if (record.state !== "running" || record.activeUsers > 0) return;
 		record.idleTimer = setTimeout(() => void this.#stop(sessionId), this.#idleTimeoutMs);
 		record.idleTimer.unref?.();
 	}
@@ -253,5 +398,6 @@ export class HostPreviewServerManager implements AsyncDisposable {
 		if (this.#disposed) return;
 		this.#disposed = true;
 		await Promise.all([...this.#records.keys()].map((sessionId) => this.#stop(sessionId)));
+		await Promise.all(this.#stopping);
 	}
 }

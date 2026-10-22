@@ -483,6 +483,74 @@ describe("Pi-Wm task and permission contracts", () => {
 		expect(prompt).toContain("Broaden or repeat checks only for new edits, failures or concrete concerns");
 		expect(prompt).toContain("Make the final answer self-contained");
 		expect(prompt).toContain("any unverified behavior or blocker");
+		expect(prompt).toContain("Choose the smallest sufficient acceptance check");
+		expect(prompt).toContain("Do not duplicate an automated interaction check manually");
+		expect(prompt).toContain("Never skip a known failure or weaken an assertion");
+		expect(prompt).toContain("Backend-only changes normally need targeted automated checks");
+		expect(prompt).toContain("about 60 seconds");
+		expect(prompt).toContain("After about 90 seconds, stop adding checks");
+		expect(prompt).toContain("An evidence timeout is not a reason to replay successful interactions");
+	});
+
+	it("reuses ready previews and limits unrelated environment repairs", () => {
+		const guidelines = section(build(fullToolset), "tool_guidelines");
+		expect(guidelines).toContain("workspacePreviews may belong to another chat");
+		expect(guidelines).toContain("at most one evidence-based repair attempt");
+		expect(guidelines).toContain("Do not restart a healthy preview");
+		expect(guidelines).toContain("do not request another snapshot or diagnostics that duplicate the batch result");
+		expect(guidelines).toContain("static text or styling changed");
+	});
+
+	it("prefers active usable browser skills without assuming installation or bypassing activation", () => {
+		for (const tools of [[], [tool("exec")], [tool("skill_list")], [tool("skill_load"), ...fullToolset]]) {
+			const verification = section(build(tools), "verification");
+			expect(verification).toContain("honor the user's explicit browser choice");
+			expect(verification).toContain("instructions have been loaded or explicitly selected");
+			expect(verification).toContain("ego-browser when actually available");
+			expect(verification).toContain("do not infer installation, activation, CLI availability");
+			expect(verification).toContain("Disabled and manual-only skills must not be activated indirectly");
+			expect(verification).toContain("Use only registered tools and authorized execution environments");
+		}
+	});
+
+	it("accepts equivalent skill evidence and supplements only missing checks without weakening verification", () => {
+		const verification = section(build(fullToolset), "verification");
+		expect(verification).toContain("Use one primary browser route");
+		expect(verification).toContain("observed interaction results, inspected screenshots and runtime diagnostics");
+		expect(verification).toContain("do not repeat those checks with built-in browser tools");
+		expect(verification).toContain("check affected behavior and runtime errors");
+		expect(verification).toContain(
+			"A screenshot filename, a successful command or a skill's claim of success is not sufficient"
+		);
+		expect(verification).toContain("supplement only the missing check");
+		expect(verification).toContain(
+			"Permission denial, an application assertion failure or a merely slow operation does not authorize switching"
+		);
+		expect(verification).toContain("may not share pages, cookies, login state, element references or diagnostics");
+		expect(verification).toContain("report that check as unverified");
+	});
+
+	it("scopes both built-in browser rules and appended tool guidelines to the fallback route", () => {
+		const guidelines = section(
+			build([
+				...fullToolset,
+				tool("browser_action", undefined, ["Use browser_action action=batch for a known flow."]),
+				tool("browser_screenshot", undefined, ["Inspect the image content returned by browser_screenshot."]),
+				tool("exec", undefined, ["Run focused tests."]),
+			]),
+			"tool_guidelines"
+		);
+		const browserLines = guidelines
+			.split("\n")
+			.filter((line) =>
+				/For frontend changes|complete a visual review loop|browser_open requires|Use browser_action action=batch|Inspect the image content returned by browser_screenshot/.test(
+					line
+				)
+			);
+		expect(browserLines.length).toBeGreaterThanOrEqual(6);
+		for (const line of browserLines) expect(line).toMatch(/^- When using the built-in browser fallback/);
+		expect(guidelines).toContain("\n- Run focused tests.");
+		expect(guidelines).toContain("\n- Search the web when a fact could have changed");
 	});
 });
 

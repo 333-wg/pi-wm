@@ -9,6 +9,8 @@ import type { SkillManager } from "./skill-manager.js";
 import { skillError, validateSkillId } from "./skill-storage.js";
 import { adaptMediaSkillContent, type MediaDefaults } from "./media-skill-policy.js";
 
+const managementScope = Type.Optional(Type.Union([Type.Literal("workspace"), Type.Literal("global")]));
+
 const implicit = (skills: SkillSummary[]) =>
 	skills.filter((skill) => skill.allowImplicitInvocation !== false).sort((a, b) => a.id.localeCompare(b.id));
 
@@ -135,7 +137,7 @@ export function createSkillTools(
 				signal?.throwIfAborted();
 				const page = skills
 					.slice(offset, offset + limit)
-					.map(({ id, name, description }) => ({ id, name, description }));
+					.map(({ id, name, description, scope, source }) => ({ id, name, description, scope, source }));
 				return {
 					content: [
 						{
@@ -249,15 +251,17 @@ export function createSkillManagementTools(
 			name: "skill_install",
 			label: "Install local skill",
 			description:
-				"Install a user-owned skill package from a relative directory inside the local workspace. The package must contain SKILL.md. This never uploads the skill to a Wuming server and never overwrites an existing skill.",
-			promptSnippet: "Install a user skill from the local workspace",
+				"Install a user-owned skill package from a relative directory inside the local workspace. The package must contain SKILL.md. Default to scope=global, installing into ~/.wuming/skills for all projects on this device. Use scope=workspace only when the user explicitly requests installation in a particular project or rules out global installation; honor the requested target project. A source directory inside a project does not imply project-only installation. This never uploads the skill to a Wuming server and never overwrites an existing skill.",
+			promptSnippet: "Install a user skill globally by default; honor explicit project-only requests",
 			parameters: Type.Object({
 				sourcePath: Type.String({ minLength: 1, maxLength: 4000 }),
+				scope: managementScope,
 				skillId: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
 				version: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
 			}),
 			async execute(toolCallId, params, signal) {
 				signal?.throwIfAborted();
+				const scope = params.scope ?? "global";
 				const skillId = params.skillId ?? basename(params.sourcePath);
 				validateSkillId(skillId);
 				const permit = await authorizeSkillManagement(
@@ -266,11 +270,12 @@ export function createSkillManagementTools(
 					toolCallId,
 					skillId,
 					"install",
-					`Install local user skill from ${params.sourcePath}`,
+					`Install ${scope === "global" ? "global user skill (affects all projects)" : "workspace skill"} from ${params.sourcePath}`,
 					signal
 				);
 				try {
 					const installed = await manager.installFromWorkspace(params.sourcePath, {
+						scope,
 						...(params.skillId === undefined ? {} : { id: params.skillId }),
 						...(params.version === undefined ? {} : { version: params.version }),
 					});
@@ -287,10 +292,11 @@ export function createSkillManagementTools(
 			name: "skill_set_enabled",
 			label: "Enable or disable skill",
 			description:
-				"Enable or disable one user-owned skill in the local workspace. Built-in skills are not changed by this tool.",
+				"Enable or disable a local skill. Scope defaults to workspace; explicitly use global for a user-global skill, affecting every project. Check its scope before changing it.",
 			promptSnippet: "Change whether a local user skill is enabled",
 			parameters: Type.Object({
 				skillId: Type.String({ minLength: 1, maxLength: 100 }),
+				scope: managementScope,
 				enabled: Type.Boolean(),
 			}),
 			async execute(toolCallId, params, signal) {
@@ -303,11 +309,11 @@ export function createSkillManagementTools(
 					toolCallId,
 					params.skillId,
 					action,
-					`${params.enabled ? "Enable" : "Disable"} local user skill ${params.skillId}`,
+					`${params.enabled ? "Enable" : "Disable"} ${params.scope === "global" ? "global skill (affects all projects)" : "workspace skill"} ${params.skillId}`,
 					signal
 				);
 				try {
-					const skill = await manager.setEnabled(params.skillId, params.enabled);
+					const skill = await manager.setEnabled(params.skillId, params.enabled, params.scope);
 					return {
 						content: [{ type: "text", text: JSON.stringify({ skill, localOnly: true }) }],
 						details: { localOnly: true, skillId: skill.id, enabled: skill.enabled },
@@ -320,9 +326,10 @@ export function createSkillManagementTools(
 		defineTool({
 			name: "skill_uninstall",
 			label: "Uninstall local skill",
-			description: "Uninstall one user-owned skill from the local workspace. Built-in skills cannot be removed.",
+			description:
+				"Uninstall one local user skill. Scope defaults to workspace; explicitly use global to remove it for all projects. Built-in skills cannot be removed.",
 			promptSnippet: "Remove one local user skill",
-			parameters: Type.Object({ skillId: Type.String({ minLength: 1, maxLength: 100 }) }),
+			parameters: Type.Object({ skillId: Type.String({ minLength: 1, maxLength: 100 }), scope: managementScope }),
 			async execute(toolCallId, params, signal) {
 				signal?.throwIfAborted();
 				validateSkillId(params.skillId);
@@ -332,11 +339,11 @@ export function createSkillManagementTools(
 					toolCallId,
 					params.skillId,
 					"uninstall",
-					`Uninstall local user skill ${params.skillId}`,
+					`Uninstall ${params.scope === "global" ? "global skill (affects all projects)" : "workspace skill"} ${params.skillId}`,
 					signal
 				);
 				try {
-					await manager.uninstall(params.skillId);
+					await manager.uninstall(params.skillId, params.scope);
 					return {
 						content: [{ type: "text", text: JSON.stringify({ skillId: params.skillId, localOnly: true }) }],
 						details: { localOnly: true, skillId: params.skillId, uninstalled: true },

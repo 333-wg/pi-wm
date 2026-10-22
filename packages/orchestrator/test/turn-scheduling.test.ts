@@ -122,36 +122,56 @@ it.each([false, true])(
 	}
 );
 
-it.each([false, true])("promotes a queued follow-up atomically and interrupts only once (remote=%s)", async (remote) => {
-	const { store, runtime, worker, controller, sessionId, send, waitCalls } = await setup();
-	await send("prompt", "original");
-	const draining = worker.drainSession(sessionId);
-	await waitCalls(1);
-	await send("follow_up", "later");
-	await send("follow_up", "urgent");
-	const entry = store.listQueuedFollowUps(sessionId)[1]!;
-	const target = remote ? controller : worker;
-	const input = { principalId: "user", idempotencyKey: "promote", sessionId, operationId: entry.id, expectedUpdatedAt: entry.updatedAt, sendNow: true };
-	await expect(target.mutateQueuedFollowUp({ ...input, idempotencyKey: "stale", expectedUpdatedAt: entry.updatedAt - 1 })).rejects.toThrow(/已被修改/);
-	expect(runtime.calls[0]!.signal.aborted).toBe(false);
-	await target.mutateQueuedFollowUp(input);
-	expect(store.getOperation(runtime.calls[0]!.operation.id)?.abortRequested).toBe(true);
-	await waitCalls(2);
-	expect(runtime.calls[1]!.operation.id).toBe(entry.id);
-	expect(runtime.calls[1]!.operation.payload).toEqual({ ...entry.payload, mode: "steer" });
-	expect(store.listQueuedFollowUps(sessionId).map((op) => op.payload.content)).toEqual([[{ type: "text", text: "later" }]]);
-	await target.mutateQueuedFollowUp(input);
-	expect(runtime.calls[1]!.signal.aborted).toBe(false);
-	await expect(target.mutateQueuedFollowUp({ ...input, idempotencyKey: "duplicate" })).rejects.toThrow(/已开始/);
-	expect(runtime.calls[1]!.signal.aborted).toBe(false);
-	runtime.finish[1]!();
-	await waitCalls(3);
-	runtime.finish[2]!();
-	await expect(draining).resolves.toBe(3);
-	expect(store.loadSnapshot(sessionId)).toMatchObject({ queuedSteerCount: 0, queuedFollowUpCount: 0, session: { phase: "idle" } });
-	expect(store.loadSnapshot(sessionId)?.transcript.filter((item) => item.id === entry.payload.userItemId)).toHaveLength(1);
-	expect(store.loadSnapshot(sessionId)).toEqual(replaySessionEvents(store.loadEvents(sessionId)));
-});
+it.each([false, true])(
+	"promotes a queued follow-up atomically and interrupts only once (remote=%s)",
+	async (remote) => {
+		const { store, runtime, worker, controller, sessionId, send, waitCalls } = await setup();
+		await send("prompt", "original");
+		const draining = worker.drainSession(sessionId);
+		await waitCalls(1);
+		await send("follow_up", "later");
+		await send("follow_up", "urgent");
+		const entry = store.listQueuedFollowUps(sessionId)[1]!;
+		const target = remote ? controller : worker;
+		const input = {
+			principalId: "user",
+			idempotencyKey: "promote",
+			sessionId,
+			operationId: entry.id,
+			expectedUpdatedAt: entry.updatedAt,
+			sendNow: true,
+		};
+		await expect(
+			target.mutateQueuedFollowUp({ ...input, idempotencyKey: "stale", expectedUpdatedAt: entry.updatedAt - 1 })
+		).rejects.toThrow(/已被修改/);
+		expect(runtime.calls[0]!.signal.aborted).toBe(false);
+		await target.mutateQueuedFollowUp(input);
+		expect(store.getOperation(runtime.calls[0]!.operation.id)?.abortRequested).toBe(true);
+		await waitCalls(2);
+		expect(runtime.calls[1]!.operation.id).toBe(entry.id);
+		expect(runtime.calls[1]!.operation.payload).toEqual({ ...entry.payload, mode: "steer" });
+		expect(store.listQueuedFollowUps(sessionId).map((op) => op.payload.content)).toEqual([
+			[{ type: "text", text: "later" }],
+		]);
+		await target.mutateQueuedFollowUp(input);
+		expect(runtime.calls[1]!.signal.aborted).toBe(false);
+		await expect(target.mutateQueuedFollowUp({ ...input, idempotencyKey: "duplicate" })).rejects.toThrow(/已开始/);
+		expect(runtime.calls[1]!.signal.aborted).toBe(false);
+		runtime.finish[1]!();
+		await waitCalls(3);
+		runtime.finish[2]!();
+		await expect(draining).resolves.toBe(3);
+		expect(store.loadSnapshot(sessionId)).toMatchObject({
+			queuedSteerCount: 0,
+			queuedFollowUpCount: 0,
+			session: { phase: "idle" },
+		});
+		expect(
+			store.loadSnapshot(sessionId)?.transcript.filter((item) => item.id === entry.payload.userItemId)
+		).toHaveLength(1);
+		expect(store.loadSnapshot(sessionId)).toEqual(replaySessionEvents(store.loadEvents(sessionId)));
+	}
+);
 
 it("runs follow-ups only after completion, in acceptance order even at identical timestamps", async () => {
 	const { store, runtime, worker, sessionId, send, waitCalls } = await setup();
@@ -244,6 +264,54 @@ it("force-terminates an uncooperative turn before starting the immediate input",
 	await expect(draining).resolves.toBe(2);
 	// A late result from the cancelled request cannot replace the new result.
 	runtime.finish[0]!();
+});
+
+it("does not let a replayed stop request cancel the next turn", async () => {
+	const { runtime, worker, sessionId, send, waitCalls } = await setup();
+	await send("prompt", "first");
+	const first = worker.drainSession(sessionId);
+	await waitCalls(1);
+	const stop = { principalId: "user", idempotencyKey: "one-stop", sessionId };
+	await worker.abortTurn(stop);
+	await first;
+	await send("prompt", "second");
+	const second = worker.drainSession(sessionId);
+	await waitCalls(2);
+	await worker.abortTurn(stop);
+	expect(runtime.calls[1]!.signal.aborted).toBe(false);
+	runtime.finish[1]!();
+	await second;
+});
+
+it("interrupts without waiting for a stalled session command", async () => {
+	const { runtime, worker, controller, sessionId, send, waitCalls } = await setup();
+	let started!: () => void;
+	let release!: () => void;
+	const ready = new Promise<void>((resolve) => {
+		started = resolve;
+	});
+	Object.assign(runtime, {
+		branchSession: () => {
+			started();
+			return new Promise<void>((resolve) => {
+				release = resolve;
+			});
+		},
+	});
+	const fork = worker.forkSession({ principalId: "user", idempotencyKey: "fork", sessionId });
+	const forkResult = expect(fork).rejects.toThrow("source conversation changed");
+	await ready;
+	await send("prompt", "started by another connection", controller);
+	const draining = worker.drainSession(sessionId);
+	await waitCalls(1);
+	try {
+		await worker.abortTurn({ principalId: "user", idempotencyKey: "priority-stop", sessionId });
+		expect(runtime.calls[0]!.signal.aborted).toBe(true);
+		await draining;
+	} finally {
+		release();
+		await forkResult;
+	}
 });
 
 it.each(["steer", "follow_up"] as const)(

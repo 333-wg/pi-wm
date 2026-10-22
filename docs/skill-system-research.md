@@ -34,6 +34,28 @@ to risk, keep discovery precise and load conditional detail as needed.
 L2: Installation refuses existing destinations. Download failure can lead to
 another retrieval method. This is a concrete fallback, not a universal retry rule.
 
+## User-global skills follow-up (2026-10-21)
+
+Read the current official [Build skills documentation](https://learn.chatgpt.com/docs/build-skills.md)
+after the original Codex skills URL redirected there. It documents repository
+`.agents/skills` directories from CWD to repository root, user-wide
+`$HOME/.agents/skills`, admin `/etc/codex/skills`, and bundled system skills.
+Same-name Codex skills are not merged and may both appear in selectors. Codex
+supports symlinked folders and path-based disable entries in `~/.codex/config.toml`.
+
+Pi-Wm borrows the repository/user/system separation, not every behavior:
+
+- Keep existing `.wuming/skills` compatibility and add `~/.wuming/skills`.
+- Preserve ID-based resolution: workspace > global > builtin. A disabled winner
+  still shadows lower layers. Only uninstall exposes the next layer.
+- Default installation to user-global scope unless the user explicitly requests
+  a particular project or rules out global installation. Keep explicit global
+  scope on enable/disable and uninstall, per-scope state/locking, and local-device-only
+  discovery. No automatic migration, account sync, Codex directory import or ancestor scan.
+- Keep existing junction/symlink rejection rather than relaxing filesystem safety.
+- Keep bounded summary discovery and on-demand loading; global scope grants no
+  additional execution permissions.
+
 ## Reusable Launch Recipes
 
 A1 was fetched again on 2026-09-06 for the run/verify workflow. Its public

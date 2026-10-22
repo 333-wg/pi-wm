@@ -74,28 +74,43 @@ describe("LocalProcessSandbox", () => {
 		const sandbox = new LocalProcessSandbox({ workspaceRoot: process.cwd() });
 		const controller = new AbortController();
 		let output = "";
+		let abortedAt = 0;
+		let lateOutput = 0;
 		const command = `"${process.execPath}" -e "const p=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'});console.log('CHILD='+p.pid);setInterval(()=>{},1000)"`;
 		await expect(
 			sandbox.exec(command, {
 				signal: controller.signal,
 				onOutput: (chunk) => {
+					if (controller.signal.aborted) lateOutput++;
 					output += chunk;
-					if (/CHILD=\d+/.test(output)) controller.abort(new Error("user stopped command"));
+					if (/CHILD=\d+/.test(output) && !controller.signal.aborted) {
+						abortedAt = performance.now();
+						controller.abort(new Error("user stopped command"));
+					}
 				},
 			})
 		).rejects.toThrow("user stopped command");
+		const commandStoppedMs = performance.now() - abortedAt;
+		expect(commandStoppedMs).toBeLessThan(500);
 		const pid = Number(output.match(/CHILD=(\d+)/)?.[1]);
 		expect(pid).toBeGreaterThan(0);
 		await expect
-			.poll(() => {
-				try {
-					process.kill(pid, 0);
-					return true;
-				} catch {
-					return false;
-				}
-			})
+			.poll(
+				() => {
+					try {
+						process.kill(pid, 0);
+						return true;
+					} catch {
+						return false;
+					}
+				},
+				{ interval: 10 }
+			)
 			.toBe(false);
+		expect(lateOutput).toBe(0);
+		console.log(
+			`Command cancellation: ${commandStoppedMs.toFixed(1)}ms; child exited: ${(performance.now() - abortedAt).toFixed(1)}ms`
+		);
 	}, 10000);
 	it("preserves quoted commands, executable paths, and file paths with spaces", async () => {
 		const workspaceRoot = await mkdtemp(join(tmpdir(), "wuming process "));

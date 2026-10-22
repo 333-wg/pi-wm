@@ -906,7 +906,7 @@ export class SessionOrchestrator {
 		this.#idempotencyTtlMs = options.idempotencyTtlMs ?? 24 * 60 * 60 * 1000;
 		this.#leaseTtlMs = options.leaseTtlMs ?? 30_000;
 		this.#turnTimeoutMs = options.turnTimeoutMs ?? 0;
-		this.#abortGraceMs = options.abortGraceMs ?? 5_000;
+		this.#abortGraceMs = options.abortGraceMs ?? 1_000;
 		this.#forceTerminateTimeoutMs = options.forceTerminateTimeoutMs ?? 2_000;
 		this.#defaultCostBudgetUsd = options.defaultCostBudgetUsd;
 		this.#maxRetries = Math.max(0, Math.floor(options.maxRetries ?? 0));
@@ -4399,60 +4399,75 @@ export class SessionOrchestrator {
 	}
 
 	async abortTurn(input: AbortTurnInput): Promise<Extract<CommandResult, { type: "turn.abort_requested" }>> {
-		return this.#serializeCommand(input.sessionId, () => {
-			const now = this.#clock();
-			const current = this.store.loadSnapshot(input.sessionId);
-			if (!current) throw new OrchestratorError("not_found", `Session ${input.sessionId} does not exist`);
-			const hash = commandHash({ type: "turn.abort", sessionId: input.sessionId });
-			const result = {
-				type: "turn.abort_requested",
-				sessionId: input.sessionId,
-				revision: current.revision,
-			} as const;
-			const committed = this.store.requestOperationAbort({
-				principalId: input.principalId,
-				idempotencyKey: input.idempotencyKey,
-				commandHash: hash,
-				sessionId: input.sessionId,
-				result,
-				now,
-				expiresAt: now + this.#idempotencyTtlMs,
-			});
-			const active = this.#activeTurns.get(input.sessionId);
-			active?.controller.abort(new Error("Turn aborted by user"));
-			if (!active) {
-				const operation = this.store.getRunningOperation(input.sessionId);
-				const approvalExecutions = operation ? this.store.listApprovalExecutionsForOperation(operation.id) : [];
-				if (
-					operation?.abortRequested &&
-					approvalExecutions.some((approval) => approval.state === "waiting" || approval.state === "approved")
-				) {
-					for (const approval of approvalExecutions) this.store.interruptApprovalExecution(approval.approvalId, now);
-					const lease = this.store.acquireWriterLease(
-						input.sessionId,
-						`approval-abort:${this.#idFactory()}`,
-						now,
-						this.#leaseTtlMs
+		// Cancellation must not queue behind session work that may itself be stalled.
+		const now = this.#clock();
+		const current = this.store.loadSnapshot(input.sessionId);
+		if (!current) throw new OrchestratorError("not_found", `Session ${input.sessionId} does not exist`);
+		const hash = commandHash({ type: "turn.abort", sessionId: input.sessionId });
+		const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
+		if (existing) return existing as Extract<CommandResult, { type: "turn.abort_requested" }>;
+		const result = {
+			type: "turn.abort_requested",
+			sessionId: input.sessionId,
+			revision: current.revision,
+		} as const;
+		const committed = this.store.requestOperationAbort({
+			principalId: input.principalId,
+			idempotencyKey: input.idempotencyKey,
+			commandHash: hash,
+			sessionId: input.sessionId,
+			result,
+			now,
+			expiresAt: now + this.#idempotencyTtlMs,
+		});
+		const active = this.#activeTurns.get(input.sessionId);
+		active?.controller.abort(new Error("Turn aborted by user"));
+		if (!active) {
+			const operation = this.store.getRunningOperation(input.sessionId);
+			const approvalExecutions = operation ? this.store.listApprovalExecutionsForOperation(operation.id) : [];
+			if (
+				operation?.abortRequested &&
+				approvalExecutions.some((approval) => approval.state === "waiting" || approval.state === "approved")
+			) {
+				for (const approval of approvalExecutions) this.store.interruptApprovalExecution(approval.approvalId, now);
+				const lease = this.store.acquireWriterLease(
+					input.sessionId,
+					`approval-abort:${this.#idFactory()}`,
+					now,
+					this.#leaseTtlMs
+				);
+				try {
+					this.#commitRuntimeFailure(
+						operation,
+						lease,
+						"Turn aborted by user",
+						true,
+						true,
+						undefined,
+						undefined,
+						undefined,
+						"user_abort"
 					);
-					try {
-						this.#commitRuntimeFailure(
-							operation,
-							lease,
-							"Turn aborted by user",
-							true,
-							true,
-							undefined,
-							undefined,
-							undefined,
-							"user_abort"
-						);
-					} finally {
-						this.store.releaseWriterLease(lease);
-					}
+				} finally {
+					this.store.releaseWriterLease(lease);
 				}
 			}
-			return committed as Extract<CommandResult, { type: "turn.abort_requested" }>;
-		});
+		}
+		return committed as Extract<CommandResult, { type: "turn.abort_requested" }>;
+	}
+
+	async backgroundTasks(
+		sessionId: string,
+		cancelTaskId?: string
+	): Promise<Extract<CommandResult, { type: "background.tasks" }>> {
+		const snapshot = this.store.loadSnapshot(sessionId);
+		if (!snapshot) throw new OrchestratorError("not_found", "Session does not exist");
+		if (cancelTaskId) {
+			if (!this.runtime.cancelBackgroundTask)
+				throw new OrchestratorError("conflict", "Background tasks are unavailable");
+			await this.runtime.cancelBackgroundTask(snapshot, cancelTaskId);
+		}
+		return { type: "background.tasks", sessionId, tasks: (await this.runtime.backgroundTasks?.(snapshot)) ?? [] };
 	}
 
 	async drainSession(sessionId: string, workerId = this.#idFactory(), traceId?: string): Promise<number> {
@@ -4756,20 +4771,36 @@ export class SessionOrchestrator {
 					});
 					planSnapshot = next;
 				}
-				operation = await this.#ensureCapabilityPlan(operation, planSnapshot, abortController.signal, durableTraceId);
-				operation = await this.#ensureContextPlan(operation, planSnapshot, abortController.signal, durableTraceId);
-				await this.#dispatchOperationHooks(
-					"operation.before_execute",
+				operation = await this.#withAbortFallback(
+					(async () => {
+						let prepared = await this.#ensureCapabilityPlan(
+							operation,
+							planSnapshot,
+							abortController.signal,
+							durableTraceId
+						);
+						abortController.signal.throwIfAborted();
+						prepared = await this.#ensureContextPlan(prepared, planSnapshot, abortController.signal, durableTraceId);
+						abortController.signal.throwIfAborted();
+						await this.#dispatchOperationHooks(
+							"operation.before_execute",
+							prepared,
+							{
+								mode: operation.payload.mode,
+								attempt: operation.attempt,
+								model: planSnapshot.model,
+								sandboxMode: planSnapshot.sandboxMode,
+								approvalPolicy: planSnapshot.approvalPolicy,
+								capabilityPlanDigest: prepared.capabilityPlan?.digest ?? "",
+								contextPlanDigest: prepared.contextPlan?.digest ?? "",
+							},
+							abortController.signal,
+							durableTraceId
+						);
+						abortController.signal.throwIfAborted();
+						return prepared;
+					})(),
 					operation,
-					{
-						mode: operation.payload.mode,
-						attempt: operation.attempt,
-						model: planSnapshot.model,
-						sandboxMode: planSnapshot.sandboxMode,
-						approvalPolicy: planSnapshot.approvalPolicy,
-						capabilityPlanDigest: operation.capabilityPlan?.digest ?? "",
-						contextPlanDigest: operation.contextPlan?.digest ?? "",
-					},
 					abortController.signal,
 					durableTraceId
 				);
@@ -5029,20 +5060,21 @@ export class SessionOrchestrator {
 						? "provider_timeout"
 						: "unknown";
 			try {
-				await this.#dispatchOperationHooks(
-					"operation.on_error",
-					operation,
-					{
-						mode: operation.payload.mode,
-						attempt: operation.attempt,
-						failureKind,
-						error: (aborted ? interruptionMessage : errorMessage(error)).slice(0, 1000),
-						willRetry: false,
-					},
-					abortController.signal,
-					durableTraceId,
-					false
-				);
+				if (!aborted)
+					await this.#dispatchOperationHooks(
+						"operation.on_error",
+						operation,
+						{
+							mode: operation.payload.mode,
+							attempt: operation.attempt,
+							failureKind,
+							error: (aborted ? interruptionMessage : errorMessage(error)).slice(0, 1000),
+							willRetry: false,
+						},
+						abortController.signal,
+						durableTraceId,
+						false
+					);
 			} catch (hookError) {
 				this.#logger.log("warn", "orchestrator.hook.error_dispatch_failed", {
 					sessionId: operation.sessionId,
@@ -5089,23 +5121,44 @@ export class SessionOrchestrator {
 		signal: AbortSignal,
 		traceId?: string
 	): Promise<RuntimeTurnResult> {
-		const execution = this.runtime.executeTurn(input);
+		signal.throwIfAborted();
+		return this.#withAbortFallback(this.runtime.executeTurn(input), input.operation, signal, traceId);
+	}
+
+	async #withAbortFallback<T>(
+		execution: Promise<T>,
+		operation: DurableOperation,
+		signal: AbortSignal,
+		traceId?: string
+	): Promise<T> {
 		let graceTimer: ReturnType<typeof setTimeout> | undefined;
 		let terminateTimer: ReturnType<typeof setTimeout> | undefined;
 		let onAbort: (() => void) | undefined;
 		const forced = new Promise<never>((_resolve, reject) => {
 			onAbort = () => {
+				if (this.store.getOperation(operation.id)?.abortRequested) {
+					// User stop is an interrupt, not a graceful shutdown. Fence the old
+					// runtime now; draining resources must not hold the conversation open.
+					try {
+						void this.runtime.forceTerminate?.(operation.sessionId).catch(() => {});
+					} catch (error) {
+						this.#logger.log("warn", "orchestrator.runtime.cleanup_failed", { sessionId: operation.sessionId, error });
+					} finally {
+						reject(signal.reason ?? new Error("Turn aborted"));
+					}
+					return;
+				}
 				graceTimer = setTimeout(() => {
 					void (async () => {
 						this.#logger.log("warn", "orchestrator.runtime.force_terminate", {
-							sessionId: input.operation.sessionId,
-							operationId: input.operation.id,
+							sessionId: operation.sessionId,
+							operationId: operation.id,
 							graceMs: this.#abortGraceMs,
 							...(traceId === undefined ? {} : { traceId }),
 						});
 						if (this.runtime.forceTerminate) {
 							await Promise.race([
-								this.runtime.forceTerminate(input.operation.sessionId).catch(() => {}),
+								this.runtime.forceTerminate(operation.sessionId).catch(() => {}),
 								new Promise<void>((resolve) => {
 									terminateTimer = setTimeout(resolve, this.#forceTerminateTimeoutMs);
 								}),
