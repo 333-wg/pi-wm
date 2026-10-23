@@ -836,7 +836,7 @@ button {
 	grid-template-columns: 15px 19px minmax(0, 1fr);
 	align-items: center;
 	gap: 6px;
-	padding: 6px 34px 6px 8px;
+	padding: 6px 63px 6px 8px;
 	border: 0;
 	border-radius: 6px;
 	background: transparent;
@@ -869,6 +869,7 @@ button {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.project-new-chat,
 .project-more {
 	position: absolute;
 	top: 6px;
@@ -886,23 +887,34 @@ button {
 	opacity: 0;
 	pointer-events: none;
 }
+.project-more {
+	right: 34px;
+}
+.project-new-chat {
+	right: 6px;
+}
 @media (hover: none) {
+	.project-new-chat,
 	.project-more {
 		opacity: 1;
 		pointer-events: auto;
 	}
 }
+.project-row-wrap:hover .project-new-chat,
+.project-row-wrap:focus-within .project-new-chat,
 .project-row-wrap:hover .project-more,
 .project-row-wrap:focus-within .project-more,
 .project-more[aria-expanded="true"] {
 	opacity: 1;
 	pointer-events: auto;
 }
+.project-new-chat:hover:not(:disabled),
 .project-more:hover:not(:disabled),
 .project-more[aria-expanded="true"] {
 	background: var(--surface-hover);
 	color: var(--text);
 }
+.project-new-chat:disabled,
 .project-more:disabled {
 	cursor: not-allowed;
 	opacity: 0.35;
@@ -3434,6 +3446,26 @@ button {
 	display: flex;
 	align-items: center;
 	gap: 6px;
+}
+.prompt-optimize-button { flex-shrink: 0; }
+.prompt-optimize-spinner { animation: prompt-optimize-spin 1s linear infinite; }
+@keyframes prompt-optimize-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .prompt-optimize-spinner { animation: none; } }
+.prompt-optimizer-status {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 4px 14px 8px;
+	font-size: 12px;
+	color: var(--muted);
+}
+.prompt-optimizer-status button {
+	font: inherit;
+	color: inherit;
+	background: transparent;
+	border: 0;
+	text-decoration: underline;
+	cursor: pointer;
 }
 .stop-button {
 	width: 31px;

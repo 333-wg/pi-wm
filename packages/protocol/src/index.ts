@@ -98,6 +98,18 @@ export const ThinkingLevelSchema = Type.Union([
 ]);
 export type ThinkingLevel = Static<typeof ThinkingLevelSchema>;
 
+/** A draft-only request: never starts a conversation turn or executes tools. */
+export const PromptOptimizeRequestSchema = StrictObject({
+	workspaceId: Id,
+	text: Type.String({ minLength: 1, maxLength: 16000 }),
+	model: ModelRefSchema,
+	thinkingLevel: ThinkingLevelSchema,
+});
+export type PromptOptimizeRequest = Static<typeof PromptOptimizeRequestSchema>;
+export interface PromptOptimizeResult {
+	text: string;
+}
+
 export const ModelMetadataSchema = StrictObject({
 	model: ModelRefSchema,
 	name: Type.String({ minLength: 1, maxLength: 500 }),

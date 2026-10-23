@@ -28,11 +28,10 @@ export function BackgroundTaskPanel({
 		const timer = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(timer);
 	}, [running]);
-	if (!tasks.length) return null;
-	const visible = [
-		...tasks.filter((task) => task.status === "running"),
-		...tasks.filter((task) => task.status !== "running").slice(-4),
-	];
+	// This is a live-progress panel above the composer, not a task-history list.
+	// Keep terminal results in the runtime journal without pinning them here.
+	const visible = tasks.filter((task) => task.status === "running");
+	if (!visible.length) return null;
 	return (
 		<section className="background-tasks" aria-label={t("backgroundTasks")}>
 			{visible.map((task) => {

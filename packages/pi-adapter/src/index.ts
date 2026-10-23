@@ -5,3 +5,4 @@ export { parsePiCacheRetention } from "./prompt-cache.js";
 export * from "./pi-agent-runtime.js";
 export * from "./system-prompt.js";
 export * from "./types.js";
+export * from "./prompt-optimizer.js";

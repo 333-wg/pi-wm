@@ -1,3 +1,4 @@
+import { usePromptOptimizer } from "./lib/use-prompt-optimizer.js";
 import { GoalPlanEditor, GoalPlanView, newGoalPlan } from "./components/GoalPlan";
 import clover from "./assets/wuming-clover.png";
 import { findToolSubagent } from "./lib/subagent-navigation.js";
@@ -2014,6 +2015,21 @@ function Composer({
 	const [searching, setSearching] = useState(false);
 	const [searchError, setSearchError] = useState<string>();
 	const [caret, setCaret] = useState<number>();
+	const optimizer = usePromptOptimizer({
+		token,
+		workspaceId,
+		model: selectedModel?.model,
+		thinkingLevel,
+		disabled: disabled || sending || uploading || selectingSkill || branchBusy,
+		text,
+		editKey: editRequest,
+		onApply: (value) => {
+			setText(value);
+			setCaret(value.length);
+			setTrigger(undefined);
+		},
+		failureMessage: t("optimizeFailed"),
+	});
 	const currentDraft = useRef({ text, attachments });
 	currentDraft.current = { text, attachments };
 	const savedDraft = useRef<typeof currentDraft.current | undefined>(undefined);
@@ -2157,7 +2173,15 @@ function Composer({
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
 		const value = text.trim();
-		if ((!value && attachments.length === 0) || disabled || branchBusy || sending || uploading || selectingSkill)
+		if (
+			(!value && attachments.length === 0) ||
+			disabled ||
+			branchBusy ||
+			sending ||
+			uploading ||
+			selectingSkill ||
+			optimizer.busy
+		)
 			return;
 		// A prompt that is nothing but a local command runs here instead of being
 		// sent to the runtime; anything after the name is passed as its argument.
@@ -2383,6 +2407,21 @@ function Composer({
 					)}
 				</div>
 			)}
+			{(optimizer.busy || optimizer.error || optimizer.canUndo) && (
+				<div className="prompt-optimizer-status" role={optimizer.error ? "alert" : "status"}>
+					<span>{optimizer.busy ? t("optimizingPrompt") : (optimizer.error ?? t("promptOptimized"))}</span>
+					{optimizer.busy && (
+						<button type="button" onClick={optimizer.cancel}>
+							{t("cancelOptimize")}
+						</button>
+					)}
+					{optimizer.canUndo && (
+						<button type="button" onClick={optimizer.undo}>
+							{t("undoOptimize")}
+						</button>
+					)}
+				</div>
+			)}
 			<textarea
 				aria-label={t("message")}
 				ref={input}
@@ -2450,8 +2489,8 @@ function Composer({
 					}
 				}}
 				disabled={disabled}
-				readOnly={selectingSkill}
-				aria-busy={selectingSkill}
+				readOnly={selectingSkill || optimizer.busy}
+				aria-busy={selectingSkill || optimizer.busy}
 				rows={2}
 			/>
 			<div className="composer-actions">
@@ -2494,6 +2533,36 @@ function Composer({
 					{!uploading && contextUsage && <ContextPill usage={contextUsage} />}
 				</div>
 				<div className="composer-submit">
+					<button
+						type="button"
+						className="icon-button prompt-optimize-button"
+						aria-label={t("optimizePrompt")}
+						aria-busy={optimizer.busy}
+						title={
+							!text.trim()
+								? t("optimizeEmpty")
+								: text.length > 16000
+									? t("optimizeTooLong")
+									: text.trimStart().startsWith("/")
+										? t("optimizeCommand")
+										: t("optimizeHint")
+						}
+						disabled={
+							disabled ||
+							!selectedModel ||
+							!text.trim() ||
+							text.length > 16000 ||
+							text.trimStart().startsWith("/") ||
+							optimizer.busy ||
+							sending ||
+							uploading ||
+							selectingSkill ||
+							branchBusy
+						}
+						onClick={() => void optimizer.optimize()}
+					>
+						{optimizer.busy ? <LoaderCircle size={17} className="prompt-optimize-spinner" /> : <Sparkles size={17} />}
+					</button>
 					<ThinkingPicker
 						level={thinkingLevel}
 						supported={thinkingSupported}
@@ -2537,6 +2606,7 @@ function Composer({
 							branchBusy ||
 							(sendDisabled && !localActionDraft) ||
 							sending ||
+							optimizer.busy ||
 							uploading ||
 							selectingSkill ||
 							(!text.trim() && attachments.length === 0)
@@ -4730,6 +4800,7 @@ function ProjectNavigationItem({
 	selected,
 	expanded,
 	disabled,
+	newSessionDisabled,
 	removeDisabled,
 	openFolderDisabled,
 	onToggle,
@@ -4748,6 +4819,7 @@ function ProjectNavigationItem({
 	selected: boolean;
 	expanded: boolean;
 	disabled: boolean;
+	newSessionDisabled: boolean;
 	removeDisabled: boolean;
 	openFolderDisabled: boolean;
 	onToggle: () => void;
@@ -4804,6 +4876,7 @@ function ProjectNavigationItem({
 	};
 
 	const runNewSession = async () => {
+		if (disabled || busy || newSessionDisabled) return;
 		setMenuOpen(false);
 		setBusy(true);
 		setError(undefined);
@@ -4916,6 +4989,16 @@ function ProjectNavigationItem({
 							<span>{workspaceName(workspace.name)}</span>
 						</button>
 						<button
+							className="project-new-chat"
+							type="button"
+							aria-label={`${workspaceName(workspace.name)} · ${t("newProjectChat")}`}
+							title={t("newProjectChat")}
+							disabled={disabled || busy || newSessionDisabled}
+							onClick={() => void runNewSession()}
+						>
+							<SquarePen size={16} />
+						</button>
+						<button
 							className="project-more"
 							type="button"
 							aria-label={`${workspaceName(workspace.name)} 项目菜单`}
@@ -4933,9 +5016,14 @@ function ProjectNavigationItem({
 				)}
 				{menuOpen && (
 					<div className="project-menu" role="menu">
-						<button type="button" role="menuitem" onClick={() => void runNewSession()}>
+						<button
+							type="button"
+							role="menuitem"
+							disabled={disabled || busy || newSessionDisabled}
+							onClick={() => void runNewSession()}
+						>
 							<Plus size={14} />
-							<span>在此项目中新建对话</span>
+							<span>{t("newProjectChat")}</span>
 						</button>
 						<button
 							type="button"
@@ -6344,6 +6432,7 @@ export function App() {
 									selected={selected}
 									expanded={expanded}
 									disabled={client.connection !== "connected"}
+									newSessionDisabled={!canCreateChat || newChatBusy}
 									removeDisabled={selected && active}
 									openFolderDisabled={client.executionEnvironment?.placement !== "local_device"}
 									onToggle={() => {
@@ -6355,7 +6444,14 @@ export function App() {
 										});
 										if (!selected) void client.selectWorkspace(workspace.id);
 									}}
-									onNewSession={() => startNewChat(workspace.id)}
+									onNewSession={async () => {
+										setCollapsedProjectIds((current) => {
+											const next = new Set(current);
+											next.delete(workspace.id);
+											return next;
+										});
+										await startNewChat(workspace.id);
+									}}
 									onRename={(name) => client.renameProject(workspace.id, name)}
 									onRemove={() => client.removeProject(workspace.id)}
 									onOpenFolder={() => workspaceApi.openProjectFolder(client.token, workspace.id)}
@@ -6894,7 +6990,7 @@ export function App() {
 						</div>
 						<div className="composer-wrap">
 							<BackgroundTaskPanel
-								key={client.snapshot?.session.id}
+								key={`background:${client.snapshot?.session.id ?? "draft"}`}
 								tasks={client.backgroundTasks}
 								onCancel={client.cancelBackgroundTask}
 							/>

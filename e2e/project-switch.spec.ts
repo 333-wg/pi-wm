@@ -115,6 +115,79 @@ for (const delayedType of ["session.list", "session.attached"]) {
 	});
 }
 
+test("project row shortcut opens a draft in that project without restoring its old conversation", async ({
+	page,
+}, testInfo) => {
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await seedConversations(page);
+	const errors: string[] = [];
+	const creates: Array<{ workspaceId: string }> = [];
+	// Capture only requests after the existing conversations have been created.
+	await page.routeWebSocket("**/api/ws", (socket) => {
+		const server = socket.connectToServer();
+		socket.onMessage((message) => {
+			const value = JSON.parse(String(message));
+			if (value.command?.type === "session.create") creates.push(value.command);
+			server.send(message);
+		});
+	});
+	await page.reload();
+	await expect(page.locator(".connection")).toHaveClass(/connected/);
+	const target = projects[0]!;
+	const node = page.locator(`.project-node[data-workspace-id="${target.id}"]`);
+	const shortcut = node.getByRole("button", { name: `${target.name} · 在此项目中新建对话`, exact: true });
+	await expect(page.locator(".project-new-chat")).toHaveCount(projects.length);
+	await page.locator(".topbar").hover();
+	await expect(shortcut).toHaveCSS("opacity", "0");
+	await expect(shortcut).toHaveCSS("pointer-events", "none");
+	await node.locator(".project-row").hover();
+	await expect(shortcut).toHaveCSS("opacity", "1");
+	await expect(node.locator(".project-more")).toHaveCSS("opacity", "1");
+	// Seeded Demo conversations reproduce the existing duplicate-key warning.
+	// Observe diagnostics for the new-draft workflow, not that baseline render.
+	await expect(page.locator(".transcript")).toContainText(`Content for ${projects[1]!.name}`);
+	await shortcut.click();
+	await expect(node.locator(".project-row")).toHaveAttribute("aria-expanded", "true");
+	await expect(page.locator(".composer-project-context")).toContainText(target.name);
+	const input = page.getByRole("textbox", { name: "消息", exact: true });
+	await expect(input).toBeFocused();
+	await expect(page.locator(".message-row.user")).toHaveCount(0);
+	await expect(page.getByRole("menu")).toHaveCount(0);
+	page.on("pageerror", (error) => errors.push(error.message));
+	page.on("console", (message) => {
+		if (message.type() === "error") errors.push(message.text());
+	});
+	await node.locator(".project-row").hover();
+	await shortcut.click();
+	expect(creates).toHaveLength(0);
+	await node.locator(".project-row").hover();
+	const [buttonBox, menuBox, nameBox] = await Promise.all([
+		shortcut.boundingBox(),
+		node.locator(".project-more").boundingBox(),
+		node.locator(".project-row > span").boundingBox(),
+	]);
+	expect(nameBox!.x + nameBox!.width).toBeLessThanOrEqual(menuBox!.x);
+	expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(buttonBox!.x);
+	await page.screenshot({ path: testInfo.outputPath("project-new-chat-shortcut.png") });
+	await input.focus();
+	await page.locator(".topbar").hover();
+	await expect(shortcut).toHaveCSS("opacity", "0");
+	await page.screenshot({ path: testInfo.outputPath("project-new-chat-hidden.png") });
+	await shortcut.focus();
+	await expect(shortcut).toHaveCSS("opacity", "1");
+	expect(errors).toEqual([]);
+	await input.fill("task from project shortcut");
+	await input.press("Enter");
+	await expect(page.locator(".transcript")).toContainText("Demo runtime received: task from project shortcut");
+	expect(creates).toEqual([expect.objectContaining({ workspaceId: target.id })]);
+	await node.locator(".project-row").click();
+	await expect(node.locator(".project-row")).toHaveAttribute("aria-expanded", "false");
+	await shortcut.click();
+	await expect(node.locator(".project-row")).toHaveAttribute("aria-expanded", "true");
+	await expect(input).toHaveValue("");
+	await expect(input).toBeFocused();
+});
+
 test("a failed skill refresh does not block the selected conversation", async ({ page }) => {
 	let fail = false;
 	await page.routeWebSocket("**/api/ws", (socket) => {

@@ -20,6 +20,9 @@ import {
 } from '@wuming/orchestrator';
 import {
   clampModelThinkingLevel,
+  PromptOptimizeRequestSchema,
+  type PromptOptimizeRequest,
+  type PromptOptimizeResult,
   type Capability,
   type ArtifactRef,
   ClientMessageSchema,
@@ -74,6 +77,7 @@ import type { OfficialAccountManager } from '@wuming/pi-adapter';
 const checkClientMessage = Compile(ClientMessageSchema);
 const checkServerMessage = Compile(ServerMessageSchema);
 const checkGitAction = Compile(GitActionSchema);
+const checkPromptOptimize = Compile(PromptOptimizeRequestSchema);
 
 interface ConnectionState {
   ws: WebSocket;
@@ -200,6 +204,7 @@ export interface GatewayEvaluationService {
 import type { AgentTeamService } from './agent-teams.js';
 
 export interface GatewayServerOptions {
+  optimizePrompt?: (input: PromptOptimizeRequest, signal: AbortSignal) => Promise<PromptOptimizeResult>;
   phoneAccess?: PhoneAccessOptions;
   teams?: AgentTeamService;
   auth: GatewayAuth;
@@ -316,6 +321,8 @@ function protocolError(error: unknown): ProtocolError {
 }
 
 export class GatewayServer implements AsyncDisposable {
+  readonly #optimizePrompt: GatewayServerOptions['optimizePrompt'];
+  readonly #optimizations = new Map<string, AbortController>();
   readonly #auth: GatewayAuth;
   readonly #orchestrator: SessionOrchestrator;
   readonly #store: SqliteOrchestratorStore;
@@ -362,6 +369,7 @@ export class GatewayServer implements AsyncDisposable {
   readonly #unsubscribeProgress: () => void;
 
   constructor(options: GatewayServerOptions) {
+    this.#optimizePrompt = options.optimizePrompt;
     this.#auth = options.auth;
     this.#orchestrator = options.orchestrator;
     this.#store = options.store;
@@ -495,6 +503,7 @@ export class GatewayServer implements AsyncDisposable {
       const directoryAttachment = /^\/api\/workspaces\/([^/]+)\/directory-attachments$/.exec(url.pathname);
       const upload = /^\/api\/workspaces\/([^/]+)\/artifacts$/.exec(url.pathname);
       const download = /^\/api\/artifacts\/([^/]+)$/.exec(url.pathname);
+      const promptOptimize = url.pathname === '/api/prompt/optimize';
       const projectCreate = url.pathname === '/api/projects';
       const projectPick = url.pathname === '/api/projects/pick';
       const projectOpenFolder = /^\/api\/projects\/([^/]+)\/open-folder$/.exec(url.pathname);
@@ -510,6 +519,7 @@ export class GatewayServer implements AsyncDisposable {
       const gitAction = /^\/api\/workspaces\/([^/]+)\/git\/action$/.exec(url.pathname);
       const computerPath = /^\/api\/computer-use(?:\/(enable|install|stop))?$/.exec(url.pathname);
       if (
+        !promptOptimize &&
         !directoryAttachment &&
         !upload &&
         !download &&
@@ -535,6 +545,36 @@ export class GatewayServer implements AsyncDisposable {
       if (!principal) {
         response.setHeader('WWW-Authenticate', 'Bearer');
         this.#json(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (promptOptimize) {
+        if (request.method !== 'POST') throw Object.assign(new Error('Method not allowed'), { httpStatus: 405 });
+        this.#requirePrincipalPermission(principal, 'workspace.write');
+        if (principal.remoteDeviceId) throw Object.assign(new Error('Prompt optimization is not available on phone access'), { httpStatus: 403 });
+        let input: unknown;
+        try { input = JSON.parse((await this.#readRequestBody(request, 128000)).toString('utf8')); }
+        catch { throw Object.assign(new Error('Invalid optimization request'), { httpStatus: 400 }); }
+        if (!checkPromptOptimize.Check(input) || !input.text.trim() || input.text.trimStart().startsWith('/'))
+          throw Object.assign(new Error('请输入非命令的提示词（最多 16000 字符）'), { httpStatus: 400 });
+        this.#requirePrincipalWorkspace(principal, input.workspaceId);
+        const model = this.#availableModels().find(entry => entry.model.provider === input.model.provider && entry.model.id === input.model.id);
+        if (!model || (!model.custom && !model.authenticated)) throw Object.assign(new Error('所选模型不可用'), { httpStatus: 400 });
+        if (!this.#optimizePrompt) throw Object.assign(new Error('当前运行模式不支持提示词优化'), { httpStatus: 503 });
+        if (this.#optimizations.has(principal.id)) throw Object.assign(new Error('已有提示词正在优化，请稍后再试'), { httpStatus: 409 });
+        const controller = new AbortController();
+        this.#optimizations.set(principal.id, controller);
+        const abort = () => controller.abort();
+        const timeout = setTimeout(abort, 120000);
+        response.once('close', abort);
+        try {
+          const result = await this.#optimizePrompt({ ...input, thinkingLevel: clampModelThinkingLevel(model, input.thinkingLevel) }, controller.signal);
+          controller.signal.throwIfAborted();
+          this.#json(response, 200, result);
+        } finally {
+          clearTimeout(timeout);
+          response.off('close', abort);
+          this.#optimizations.delete(principal.id);
+        }
         return;
       }
       if (directoryAttachment) {
@@ -2647,6 +2687,7 @@ export class GatewayServer implements AsyncDisposable {
 
   beginShutdown(): void {
     this.#shuttingDown = true;
+    for (const controller of this.#optimizations.values()) controller.abort();
     for (const connection of this.#connections) connection.ws.close(1001, 'Server shutting down');
   }
 

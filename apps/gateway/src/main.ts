@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { ArtifactStore } from "@wuming/artifacts";
 import { fileAttachmentLimit } from "./attachment-limits.js";
 import { DirectoryAttachments } from "./directory-attachments.js";
-import { OfficialAccountManager, OfficialCredentialStore } from "@wuming/pi-adapter";
+import { OfficialAccountManager, OfficialCredentialStore, createPromptOptimizer } from "@wuming/pi-adapter";
 import { HookPipeline, type CapabilityManifest } from "@wuming/capability-kernel";
 import type { ContextFragment } from "@wuming/context-engine";
 import { AttestationSigner, EvaluationStore } from "@wuming/evaluation";
@@ -1477,8 +1477,20 @@ async function main(): Promise<void> {
 	if (configuredAuth) {
 		auth = new StaticTokenMapAuth(parseGatewayTokenEntries(configuredAuth, workspaces));
 	}
+	const optimizerAgentDir = envPath(process.env.WUMING_AGENT_DIR, join(homedir(), ".pi", "agent"));
 	const server = new GatewayServer({
 		auth,
+		...(runtimeMode === "pi"
+			? {
+					optimizePrompt: createPromptOptimizer({
+						agentDir: optimizerAgentDir,
+						registerProviders: () => customModels?.registrations() ?? [],
+						...(officialAccounts
+							? { createRuntime: (provider: string) => officialAccounts.createRuntime(optimizerAgentDir, provider) }
+							: {}),
+					}),
+				}
+			: {}),
 		...(localUserCapabilities
 			? {
 					phoneAccess: {
