@@ -1,5 +1,5 @@
 import type { TranscriptItem, Usage, UsageToolSummary } from "@wuming/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionOrchestrator, SqliteOrchestratorStore } from "../src/index.js";
 import type { AgentRuntime } from "../src/types.js";
 
@@ -50,14 +50,17 @@ describe("Verification Guard", () => {
 	let orchestrator: SessionOrchestrator;
 	let runtime: FakeRuntime;
 	let sequence: number;
+	const log = vi.fn();
 
 	beforeEach(() => {
 		sequence = 0;
+		log.mockClear();
 		store = new SqliteOrchestratorStore(":memory:");
 		runtime = new FakeRuntime();
 		orchestrator = new SessionOrchestrator(store, runtime, {
 			clock: () => 1_700_000_000_000,
 			idFactory: () => `test-${++sequence}`,
+			logger: { log },
 		});
 	});
 
@@ -122,6 +125,19 @@ describe("Verification Guard", () => {
 	it("recognizes screenshot inspection evidence after an edit", async () => {
 		const { snapshot } = await runTurn([tool("edit"), tool("browser_screenshot")]);
 		expect(snapshot.verificationWarnings).toEqual([]);
+		expect(log).toHaveBeenCalledWith(
+			"info",
+			"orchestrator.runtime.completed",
+			expect.objectContaining({
+				verification: {
+					browserCallCount: 1,
+					browserBatchCallCount: 0,
+					browserObservationCallCount: 1,
+					previewStartCallCount: 0,
+					postEditToolCallCount: 1,
+				},
+			})
+		);
 	});
 
 	it("recognizes edit as a code change tool", async () => {

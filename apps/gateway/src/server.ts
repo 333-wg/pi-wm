@@ -23,6 +23,7 @@ import {
   PromptOptimizeRequestSchema,
   type PromptOptimizeRequest,
   type PromptOptimizeResult,
+  type Usage,
   type Capability,
   type ArtifactRef,
   ClientMessageSchema,
@@ -204,7 +205,7 @@ export interface GatewayEvaluationService {
 import type { AgentTeamService } from './agent-teams.js';
 
 export interface GatewayServerOptions {
-  optimizePrompt?: (input: PromptOptimizeRequest, signal: AbortSignal) => Promise<PromptOptimizeResult>;
+  optimizePrompt?: (input: PromptOptimizeRequest, signal: AbortSignal, onUsage?: (usage: Usage) => void) => Promise<PromptOptimizeResult>;
   phoneAccess?: PhoneAccessOptions;
   teams?: AgentTeamService;
   auth: GatewayAuth;
@@ -555,21 +556,33 @@ export class GatewayServer implements AsyncDisposable {
         try { input = JSON.parse((await this.#readRequestBody(request, 128000)).toString('utf8')); }
         catch { throw Object.assign(new Error('Invalid optimization request'), { httpStatus: 400 }); }
         if (!checkPromptOptimize.Check(input) || !input.text.trim() || input.text.trimStart().startsWith('/'))
-          throw Object.assign(new Error('请输入非命令的提示词（最多 16000 字符）'), { httpStatus: 400 });
+          throw Object.assign(new Error('请输入非命令的提示词（最多 16000 字符）'), { httpStatus: 400, promptOptimizeCode: 'invalid_request' });
         this.#requirePrincipalWorkspace(principal, input.workspaceId);
         const model = this.#availableModels().find(entry => entry.model.provider === input.model.provider && entry.model.id === input.model.id);
-        if (!model || (!model.custom && !model.authenticated)) throw Object.assign(new Error('所选模型不可用'), { httpStatus: 400 });
-        if (!this.#optimizePrompt) throw Object.assign(new Error('当前运行模式不支持提示词优化'), { httpStatus: 503 });
-        if (this.#optimizations.has(principal.id)) throw Object.assign(new Error('已有提示词正在优化，请稍后再试'), { httpStatus: 409 });
+        if (!model || (!model.custom && !model.authenticated)) throw Object.assign(new Error('所选模型不可用'), { httpStatus: 400, promptOptimizeCode: 'model_unavailable' });
+        if (!this.#optimizePrompt) throw Object.assign(new Error('当前运行模式不支持提示词优化'), { httpStatus: 503, promptOptimizeCode: 'unavailable' });
+        if (this.#optimizations.has(principal.id)) throw Object.assign(new Error('已有提示词正在优化，请稍后再试'), { httpStatus: 409, promptOptimizeCode: 'busy' });
         const controller = new AbortController();
         this.#optimizations.set(principal.id, controller);
         const abort = () => controller.abort();
-        const timeout = setTimeout(abort, 120000);
+        let timedOut = false;
+        const timeout = setTimeout(() => { timedOut = true; abort(); }, 120000);
         response.once('close', abort);
         try {
-          const result = await this.#optimizePrompt({ ...input, thinkingLevel: clampModelThinkingLevel(model, input.thinkingLevel) }, controller.signal);
+          const requestId = this.#idFactory();
+          const result = await this.#optimizePrompt({ ...input, thinkingLevel: clampModelThinkingLevel(model, input.thinkingLevel) }, controller.signal, (usage) => {
+            if (!this.#store.recordAuxiliaryUsage({ requestId, workspaceId: input.workspaceId, purpose: 'prompt_optimization', model: input.model, usage, timestamp: this.#clock() })) return;
+            for (const connection of this.#connections) {
+              if (connection.hello && (connection.principal.allWorkspaceUsage || connection.principal.workspaces.some(workspace => workspace.id === input.workspaceId)))
+                this.#send(connection, { type: 'usage.invalidated', workspaceId: input.workspaceId });
+            }
+          });
           controller.signal.throwIfAborted();
           this.#json(response, 200, result);
+        } catch (error) {
+          const code = timedOut ? 'timeout' : error && typeof error === 'object' && 'promptOptimizeCode' in error ? error.promptOptimizeCode : 'provider_failed';
+          // Never forward provider responses, URLs or credential details to the composer.
+          throw Object.assign(new Error('提示词优化未完成，原文已保留'), { httpStatus: code === 'timeout' ? 504 : 502, promptOptimizeCode: code });
         } finally {
           clearTimeout(timeout);
           response.off('close', abort);
@@ -916,6 +929,7 @@ export class GatewayServer implements AsyncDisposable {
       if (!response.headersSent)
         this.#json(response, status, {
           error: error instanceof Error ? error.message : 'Request failed',
+          ...(error && typeof error === 'object' && 'promptOptimizeCode' in error ? { code: error.promptOptimizeCode } : {}),
         });
       else response.destroy();
     }
@@ -1835,6 +1849,7 @@ export class GatewayServer implements AsyncDisposable {
         });
       case 'session.model.set': {
         this.#requireSession(connection, command.sessionId);
+        if (this.#teams?.get(command.sessionId)?.modelPolicy) throw new OrchestratorError('conflict', '请在团队页面修改成员模型');
         const model = this.#availableModels().find(
           (candidate) =>
             candidate.model.provider === command.model.provider &&
@@ -2161,27 +2176,32 @@ export class GatewayServer implements AsyncDisposable {
       case 'team.start': {
         this.#requireSession(connection, command.sessionId);
         if (!this.#teams) throw new OrchestratorError('conflict', 'Agent Teams are unavailable');
-        const team = await this.#teams.start(command.sessionId, command.objective, command.name, true, `rpc:${connection.principal.id}:${idempotencyKey}`);
+        const team = await this.#teams.start(command.sessionId, command.objective, command.name, true, `rpc:${connection.principal.id}:${idempotencyKey}`, [], true);
         return { type: 'team.snapshot', team };
       }
+      case 'team.models.configure':
+      case 'team.models.assign':
       case 'team.get':
       case 'team.message':
       case 'team.stop':
       case 'team.retry': {
         if (!this.#teams) throw new OrchestratorError('conflict', 'Agent Teams are unavailable');
-        if (Boolean(command.teamId) === Boolean(command.sessionId))
+        const legacySessionId = 'sessionId' in command ? command.sessionId : undefined;
+        if (Boolean(command.teamId) === Boolean(legacySessionId))
           throw new OrchestratorError('conflict', 'Provide exactly one teamId or legacy sessionId');
-        if (command.sessionId) this.#requireSession(connection, command.sessionId);
-        const team = command.teamId ? this.#teams.store.get(command.teamId) : this.#teams.get(command.sessionId!);
+        if (legacySessionId) this.#requireSession(connection, legacySessionId);
+        const team = command.teamId ? this.#teams.store.get(command.teamId) : this.#teams.get(legacySessionId!);
         if (!team || (command.teamId && team.id !== command.teamId)) {
-          if (command.type === 'team.get' && command.sessionId) return { type: 'team.snapshot', team: null };
+          if (command.type === 'team.get' && legacySessionId) return { type: 'team.snapshot', team: null };
           throw new OrchestratorError('not_found', 'Team not found');
         }
         const workspaceId = team.workspaceId ?? this.#store.loadSnapshot(team.sessionId)?.session.workspaceId;
         if (!workspaceId) throw new OrchestratorError('not_found', 'Team workspace not found');
         this.#requireWorkspace(connection, workspaceId);
-        if (command.sessionId && command.type !== 'team.get' && command.sessionId !== team.sessionId)
+        if (legacySessionId && command.type !== 'team.get' && legacySessionId !== team.sessionId)
           throw new OrchestratorError('conflict', 'Use teamId to control the team');
+        if (command.type === 'team.models.configure') this.#teams.configureModels(team.id, command.expectedVersion, command.mode, command.leaderModel, `rpc:${connection.principal.id}:${idempotencyKey}`);
+        if (command.type === 'team.models.assign') this.#teams.assignModels(team.id, command.expectedVersion, command.assignments, `rpc:${connection.principal.id}:${idempotencyKey}`);
         if (command.type === 'team.message') this.#teams.send(team.sessionId, command.recipient, command.text, `rpc:${connection.principal.id}:${idempotencyKey}`, true);
         if (command.type === 'team.stop') await this.#teams.stop(team.id);
         if (command.type === 'team.retry') this.#teams.retry(team.sessionId, command.memberId, `rpc:${connection.principal.id}:${idempotencyKey}`);
@@ -2396,6 +2416,9 @@ export class GatewayServer implements AsyncDisposable {
       case 'turn.steer':
       case 'turn.follow_up':
         const session = this.#requireSession(connection, command.sessionId);
+        const memberTeam = this.#teams?.get(command.sessionId);
+        if (memberTeam?.modelPolicy?.awaitingConfiguration || memberTeam?.members.some((member) => member.sessionId === command.sessionId && (member.state === 'awaiting_model' || member.pendingModel)))
+          throw new OrchestratorError('conflict', '请先在团队页面确认模型分配并等待生效');
         let selectedSkillIds = command.skills;
 		const teamGoal = teamCommandGoal(command.content);
 		const explicitTeam = command.skills?.includes('team') || teamGoal !== undefined;

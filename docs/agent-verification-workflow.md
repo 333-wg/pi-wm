@@ -8,10 +8,21 @@ as one task. This is a behavior policy, not a guarantee of model compliance.
 1. Inspect the relevant code and existing tests; identify a focused acceptance check.
 2. Implement the change without disturbing unrelated user edits.
 3. Review the diff for correctness, regressions, error paths, and unintended changes.
-4. Discover and run the project's own typecheck/build and affected tests. Add a regression test for a bug fix.
-5. For visual work, open the actual page at desktop (1440x900) and mobile (390x844) sizes, exercise the affected states, inspect diagnostics, and capture screenshots.
-6. Inspect the returned images for clipping, overlap, text fit, scrolling, missing assets, and blank or misframed canvas/3D content. Fix defects and rerun affected checks, including fresh screenshots after the last edit.
-7. Report what changed, which checks actually ran, their results, and remaining gaps. Retain final screenshots and relevant test reports.
+4. Follow explicit repository checks and select tests for the affected behavior. For executable logic, run relevant tests and an applicable typecheck or build; do not run both for equivalent evidence. Add a regression test only when existing coverage does not protect the behavior. Prose and formatting changes normally need only diff or formatting review.
+5. Use a browser for changed rendering or interactions with missing coverage or a concrete browser-specific concern. Nonvisual frontend logic does not automatically require one. Default to desktop (1440x900); add mobile only when the task or affected product behavior requires it. Reuse valid automated interaction evidence instead of replaying it manually.
+6. For visual changes, inspect the affected rendered images for clipping, overlap, text fit, scrolling, missing assets, and blank or misframed canvas/3D content. For a known interaction workflow, default to one supported batch with an explicit result wait and final evidence. Fix relevant defects and rerun only invalidated checks, including new screenshots after relevant visual edits.
+7. Finish immediately when required checks pass and no relevant concern remains. Report the checked behavior and material gaps concisely, retaining final screenshots and test reports. Do not expand into another review, browser route or full suite merely for reassurance.
+
+Reuse healthy matching previews and passing evidence while relevant source, tests,
+dependencies, configuration and environment remain unchanged. An unrelated prose
+edit or a commit does not require repeating successful checks. Unknown impact,
+authentication, permissions, migrations, installers, updates and shared dependencies
+require broader risk-based checks. A selection with zero tests is not a pass.
+
+Routine browser verification targets about 60 seconds. After about 90 seconds,
+stop adding optional checks; report pending required checks as unverified. These
+are planning limits, not an automatic timeout or permission to ignore regressions.
+See [verification efficiency](verification-efficiency.md) for tool budgets and scope.
 
 Review-only requests produce severity-ordered findings with file/line references,
 not unsolicited edits. Missing browser support, model image support, dependencies,
@@ -58,6 +69,13 @@ do not interrupt active user work solely to load the change.
 Regression coverage includes prompt instructions, PNG image delivery, stale checks
 before the final edit, failed checks, and false verification from preview startup.
 These tests validate implementation contracts, not real-provider adherence. A
-real-model acceptance run should request a small responsive UI change, then check
-the tool trace for tests, both viewport screenshots, concrete visual observations,
-repairs where needed, and an honest final report.
+real-model acceptance sample should distinguish prose, nonvisual logic, local style,
+interaction and high-risk changes. Check the trace for appropriately selected
+checks, batching of known workflows, necessary visual inspection, repairs and an
+honest final report. Include both viewports only in a sample that requires them.
+
+Completed runtime logs now include numeric browser/preview counters under
+`verification`, alongside existing request and tool timing. They describe observed
+tool families, not verified correctness or a precise verification phase; see
+[observability](observability.md). No new model call, completion-blocking hook,
+database schema or cross-turn verification cache is introduced.

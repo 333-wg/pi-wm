@@ -7,6 +7,13 @@ const Text = Type.String({ minLength: 1, maxLength: 20_000 });
 const ObjectSchema = <T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
 	Type.Object(properties, { additionalProperties: false });
 
+export const TeamModelModeSchema = Type.Union([Type.Literal("shared"), Type.Literal("manual")]);
+export const TeamModelPolicySchema = ObjectSchema({
+	mode: TeamModelModeSchema,
+	awaitingConfiguration: Type.Boolean(),
+	version: Type.Integer({ minimum: 0 }),
+	sourceModel: AgentTemplateModelSchema,
+});
 export const AgentTeamTaskSchema = ObjectSchema({
 	id: Id,
 	title: Type.String({ minLength: 1, maxLength: 500 }),
@@ -31,6 +38,7 @@ export const AgentTeamMemberSchema = ObjectSchema({
 	role: Text,
 	template: Type.Optional(AgentTemplateSchema),
 	model: Type.Optional(AgentTemplateModelSchema),
+	pendingModel: Type.Optional(AgentTemplateModelSchema),
 	thinkingLevel: Type.Optional(AgentTemplateThinkingSchema),
 	sessionId: Id,
 	deliveryId: Type.Optional(Id),
@@ -40,6 +48,7 @@ export const AgentTeamMemberSchema = ObjectSchema({
 		Type.Literal("idle"),
 		Type.Literal("working"),
 		Type.Literal("awaiting_approval"),
+		Type.Literal("awaiting_model"),
 		Type.Literal("error"),
 		Type.Literal("stopped"),
 	]),
@@ -52,6 +61,8 @@ export const AgentTeamMessageSchema = ObjectSchema({
 	from: Id,
 	to: Id,
 	text: Text,
+	summary: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
+	taskId: Type.Optional(Id),
 	artifacts: Type.Optional(Type.Array(ArtifactRefSchema, { maxItems: 31 })),
 	createdAt: Type.Integer(),
 	kind: Type.Union([
@@ -79,6 +90,7 @@ export const AgentTeamSchema = ObjectSchema({
 	endedAt: Type.Optional(Type.Integer()),
 	tasks: Type.Array(AgentTeamTaskSchema),
 	messages: Type.Array(AgentTeamMessageSchema),
+	modelPolicy: Type.Optional(TeamModelPolicySchema),
 	startup: Type.Optional(ObjectSchema({ reminders: Type.Integer({ minimum: 0, maximum: 1 }) })),
 	result: Type.Optional(Text),
 });
@@ -100,6 +112,22 @@ export const AgentTeamSummarySchema = ObjectSchema({
 export type AgentTeamSummary = Static<typeof AgentTeamSummarySchema>;
 
 export const AgentTeamCommandSchemas = [
+	ObjectSchema({
+		type: Type.Literal("team.models.configure"),
+		teamId: Id,
+		expectedVersion: Type.Integer({ minimum: 0 }),
+		mode: TeamModelModeSchema,
+		leaderModel: AgentTemplateModelSchema,
+	}),
+	ObjectSchema({
+		type: Type.Literal("team.models.assign"),
+		teamId: Id,
+		expectedVersion: Type.Integer({ minimum: 0 }),
+		assignments: Type.Array(ObjectSchema({ memberId: Id, model: AgentTemplateModelSchema }), {
+			minItems: 1,
+			maxItems: 5,
+		}),
+	}),
 	ObjectSchema({ type: Type.Literal("team.list"), workspaceId: Id }),
 	ObjectSchema({
 		type: Type.Literal("team.get"),

@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
 import { useFocusTrap } from "../use-focus-trap.js";
-import { modifierLabel } from "./CommandPalette.js";
+import { modifierLabel } from "../lib/keyboard.js";
 
 interface ShortcutRow {
 	keys: readonly string[];

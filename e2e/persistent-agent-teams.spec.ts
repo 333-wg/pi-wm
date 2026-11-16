@@ -12,6 +12,7 @@ test("shows a tool-created project team from another conversation, replays histo
 		await seedRunningAgentTeam(join(workspace, "..", "data"));
 	});
 	await openApp(page, url);
+	await page.locator(".session-entry").filter({ hasText: "Explicit team request" }).first().click();
 	await expect(page.locator(".session-entry.selected")).toContainText("Explicit team request");
 	await expect(page.getByText(/Demo runtime received:.*team-delivery/s)).toHaveCount(0);
 	await page.getByRole("button", { name: "新对话", exact: true }).click();
@@ -25,12 +26,15 @@ test("shows a tool-created project team from another conversation, replays histo
 	await expect(team.locator(".persistent-team-member")).toHaveCount(1);
 	await expect(team.locator(".persistent-team-messages article").first()).toContainText("已投递");
 	// Demo cannot staff a team: one bounded reminder, then attention rather than silent idle.
-	await expect(team.locator(".persistent-team-member.member-error")).toContainText("startup incomplete");
+	await expect(
+		team.locator(".persistent-team-member.member-error").getByRole("button", { name: "重试", exact: true })
+	).toHaveAttribute("title", /startup incomplete/);
 	await expect(team.locator(".persistent-team-messages article")).toHaveCount(2);
 	await team.getByRole("textbox", { name: "团队消息", exact: true }).fill("Please verify the API contract first");
 	await team.getByRole("button", { name: "发送消息", exact: true }).click();
 	await expect(team.locator(".persistent-team-messages article")).toHaveCount(3);
 	await expect(team.locator(".persistent-team-messages article").last()).toContainText("待投递");
+	await team.getByRole("button", { name: "历史回放", exact: true }).click();
 	await team.getByRole("slider", { name: "历史版本" }).fill("1");
 	await expect(team.getByRole("button", { name: "停止团队" })).toBeDisabled();
 	await expect(team.locator(".persistent-team-messages article")).toHaveCount(1);
@@ -52,17 +56,17 @@ test("opening Teams without a conversation or after ordinary chat does not creat
 	await openApp(page, url);
 	await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
 	const team = page.locator(".persistent-teams");
-	await expect(team.getByText("此项目暂无团队", { exact: true })).toBeVisible();
+	await expect(team.getByText("从对话开启团队协作", { exact: true })).toBeVisible();
 	await expect(team.getByRole("button", { name: "启动团队", exact: true })).toHaveCount(0);
 	await page.screenshot({ path: testInfo.outputPath("project-teams-empty.png") });
-	await team.getByRole("button", { name: "对话", exact: true }).click();
+	await team.getByRole("button", { name: "前往对话", exact: true }).click();
 	await page.getByRole("textbox", { name: "消息", exact: true }).fill("Ordinary project task");
 	await page.getByRole("button", { name: "发送", exact: true }).click();
 	await expect(page.getByText(/Demo runtime received: Ordinary project task/)).toBeVisible();
 	await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
-	await expect(team.getByText("此项目暂无团队", { exact: true })).toBeVisible();
+	await expect(team.getByText("从对话开启团队协作", { exact: true })).toBeVisible();
 	await page.setViewportSize({ width: 390, height: 844 });
-	await expect(team.getByText("此项目暂无团队", { exact: true })).toBeVisible();
+	await expect(team.getByText("从对话开启团队协作", { exact: true })).toBeVisible();
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 	await page.screenshot({ path: testInfo.outputPath("project-teams-empty-mobile.png") });
 });
@@ -106,11 +110,19 @@ test("renders actual scripted team records, dependencies and persistent replay a
 	await expect(team.locator(".teams-task-enhanced.state-completed")).toHaveCount(3);
 	await expect(team.locator("[data-dependency]")).toHaveCount(2);
 	await expect(team.locator(".persistent-team-messages")).toContainText("接口契约已就绪");
-	await expect(team.locator(".persistent-team-detail")).toContainText("负责人验收");
+	await team.locator(".teams-task-enhanced").filter({ hasText: "集成验证" }).click();
+	await expect(team.locator(".persistent-team-detail")).toContainText("契约校验通过");
+	await team.locator(".studio-team-result summary").click();
+	await expect(team.locator(".studio-team-result")).toContainText("隔离验收通过");
+	await team.locator(".studio-team-result summary").click();
+	await page.keyboard.press("Escape");
 	await team.getByRole("button", { name: "查看成员 后端工程师", exact: true }).click();
 	await expect(team.getByRole("region", { name: "成员详情", exact: true })).toContainText("接口契约与服务实现");
 	await expect(team.getByRole("region", { name: "成员详情", exact: true })).toContainText("Tokens");
-	await team.getByRole("button", { name: "关闭成员详情", exact: true }).click();
+	await team
+		.getByRole("region", { name: "成员详情", exact: true })
+		.getByRole("button", { name: "关闭", exact: true })
+		.click();
 	await team.getByRole("button", { name: "查看成员 后端工程师", exact: true }).click();
 	await page.keyboard.press("Escape");
 	await expect(team.getByRole("region", { name: "成员详情", exact: true })).toHaveCount(0);
@@ -120,6 +132,7 @@ test("renders actual scripted team records, dependencies and persistent replay a
 			.evaluateAll((images) => images.every((image) => (image as HTMLImageElement).naturalWidth > 0))
 	).toBe(true);
 	await page.screenshot({ path: testInfo.outputPath("persistent-teams-desktop.png") });
+	await team.getByRole("button", { name: "历史回放", exact: true }).click();
 	await team.getByRole("combobox", { name: "回放速度", exact: true }).selectOption("4");
 	await team.getByRole("button", { name: "播放回放", exact: true }).click();
 	await expect(team.getByRole("button", { name: "暂停回放", exact: true })).toBeVisible();
@@ -136,13 +149,14 @@ test("renders actual scripted team records, dependencies and persistent replay a
 	await expect(team.locator(".teams-task-enhanced.state-completed")).toHaveCount(0);
 	await page.reload();
 	await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
+	await team.getByRole("button", { name: "历史回放", exact: true }).click();
 	await team.getByRole("slider", { name: "历史版本" }).fill("5");
 	await expect(team.locator(".teams-task-enhanced")).toHaveCount(2);
 	await team.getByRole("button", { name: "回到实时" }).click();
 	await page.getByRole("button", { name: "切换深浅主题", exact: true }).click();
 	await page.screenshot({ path: testInfo.outputPath("persistent-teams-dark.png") });
 	await page.setViewportSize({ width: 390, height: 844 });
-	await expect(team.getByRole("region", { name: "依赖泳道" })).toBeVisible();
+	await expect(team.getByRole("region", { name: "任务流程画布" })).toBeVisible();
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 	await page.screenshot({ path: testInfo.outputPath("persistent-teams-mobile.png") });
 	await team.getByRole("button", { name: "任务列表", exact: true }).click();
@@ -150,6 +164,7 @@ test("renders actual scripted team records, dependencies and persistent replay a
 	await expect(team.locator(".persistent-team-detail").first()).toContainText("写入范围");
 	await page.keyboard.press("Escape");
 	await expect(team.locator(".persistent-team-detail").filter({ hasText: "写入范围" })).toHaveCount(0);
+	await team.getByRole("button", { name: "任务流程", exact: true }).click();
 	await team.locator(".persistent-team-task-list button").first().click();
 	await team.locator(".persistent-team-detail").getByRole("button", { name: "关闭", exact: true }).click();
 	await expect(team.locator(".persistent-team-detail").filter({ hasText: "写入范围" })).toHaveCount(0);

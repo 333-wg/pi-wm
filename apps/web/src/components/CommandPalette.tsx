@@ -1,3 +1,4 @@
+import { modifierLabel } from "../lib/keyboard.js";
 import { ChevronRight, CircleAlert, Command, CornerDownLeft } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cycleIndex, rankBy } from "../lib/suggest.js";
@@ -20,15 +21,6 @@ export interface PaletteEntry {
 	/** When set the row asks for an argument before running. */
 	argumentHint?: string | undefined;
 	run: (argument: string) => void | Promise<void>;
-}
-
-/** True when the platform labels the primary chord `⌘` instead of `Ctrl`. */
-export function isAppleKeyboard(): boolean {
-	return /mac|iphone|ipad|ipod/i.test(navigator.userAgent);
-}
-
-export function modifierLabel(): string {
-	return isAppleKeyboard() ? "⌘" : "Ctrl";
 }
 
 /**

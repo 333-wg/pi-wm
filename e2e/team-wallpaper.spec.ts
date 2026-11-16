@@ -5,10 +5,12 @@ import { seedAgentTeam } from "./fixtures/agent-team-fixture.js";
 
 test.afterEach(stopWebApp);
 
-test("team reading surfaces and objective disclosure work with and without wallpaper", async ({ page }, info) => {
+test("keeps wallpaper continuous with readable local surfaces across themes", async ({ page }, info) => {
+	let sessionId = "";
 	const url = await startWebApp({}, async (workspace) => {
-		await seedAgentTeam(join(workspace, "..", "data"));
+		sessionId = await seedAgentTeam(join(workspace, "..", "data"));
 	});
+	await page.addInitScript((id) => localStorage.setItem("wuming.sessionId.local-workspace", id), sessionId);
 	const errors: string[] = [];
 	page.on("pageerror", (error) => errors.push(error.message));
 	await page.setViewportSize({ width: 1440, height: 900 });
@@ -18,118 +20,86 @@ test("team reading surfaces and objective disclosure work with and without wallp
 	await page.getByRole("slider", { name: "背景强度", exact: true }).fill("100");
 	await page.getByRole("button", { name: "关闭", exact: true }).click();
 	await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
-	const team = page.locator(".persistent-teams");
-	const details = team.locator(".persistent-team-objective-copy");
-	await expect(details).not.toHaveAttribute("open", "");
-	await details.locator("summary").focus();
+	const team = page.locator(".team-studio");
+	const objective = team.locator(".persistent-team-objective-copy");
+	await expect(objective).not.toHaveAttribute("open", "");
+	await objective.locator("summary").focus();
 	await page.keyboard.press("Enter");
-	await expect(details).toHaveAttribute("open", "");
-	await expect(details.locator("p")).toContainText("隔离测试：后端定义接口契约");
+	await expect(objective.locator("p")).toContainText("隔离测试：后端定义接口契约");
 	await page.keyboard.press("Enter");
-	await expect(details).not.toHaveAttribute("open", "");
-	const surfaces = [
-		".persistent-team-member",
-		".persistent-team-messages article",
-		".teams-task-enhanced",
-		".persistent-team-detail",
-	];
-	for (const mode of ["light", "dark"]) {
-		if (mode === "dark") await page.getByRole("button", { name: "切换深浅主题", exact: true }).click();
-		await expect(team.locator(".teams-canvas-scroll")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+	await expect(objective).not.toHaveAttribute("open", "");
+	for (const palette of ["light", "dark", "ink-night", "ink-blue"]) {
+		await page.evaluate((palette) => {
+			localStorage.setItem("wuming.theme", palette === "light" ? "light" : "dark");
+			localStorage.setItem(
+				"wuming.theme.palettes",
+				JSON.stringify({ light: "light", dark: palette === "light" ? "dark" : palette })
+			);
+		}, palette);
+		await page.reload();
+		await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
+		await expect(page.locator("html")).toHaveAttribute("data-theme", palette);
 		for (const selector of [
 			".persistent-team-board",
+			".studio-canvas-scroll",
 			".persistent-team-mailbox",
 			".persistent-team-members",
 			".teams-heading",
-		]) {
+			".studio-title",
+			".persistent-team-toolbar",
+			".team-stage-strip",
+			".studio-canvas-controls",
+		])
 			await expect(team.locator(selector)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-			await expect(team.locator(selector)).toHaveCSS("backdrop-filter", "none");
+		for (const selector of [".studio-task", ".persistent-team-mailbox form"]) {
+			await expect(team.locator(selector).first()).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 		}
-		await page.mouse.move(0, 0);
-		for (const selector of surfaces) {
-			const surface = team.locator(selector).first();
-			await expect(surface).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-			await expect(surface).toHaveCSS("background-image", "none");
-			await expect(surface).toHaveCSS("box-shadow", "none");
-			const size = await surface.boundingBox();
-			await surface.hover();
-			const alpha = await surface.evaluate((element) => {
-				const ctx = document.createElement("canvas").getContext("2d")!;
-				ctx.fillStyle = getComputedStyle(element).backgroundColor;
-				ctx.fillRect(0, 0, 1, 1);
-				return ctx.getImageData(0, 0, 1, 1).data[3]! / 255;
-			});
-			expect(alpha, selector).toBeGreaterThan(0);
-			expect(alpha, selector).toBeLessThanOrEqual(0.33);
-			await expect(surface).toHaveCSS("box-shadow", "none");
-			const hoveredSize = await surface.boundingBox();
-			// Hover translation can introduce subpixel floating-point rounding.
-			expect(hoveredSize!.width).toBeCloseTo(size!.width, 2);
-			expect(hoveredSize!.height).toBeCloseTo(size!.height, 2);
-			await page.mouse.move(0, 0);
-			await expect(surface).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-		}
-		const card = team.locator(".teams-task-enhanced").first();
+		// A transparent root is insufficient if its pseudo-element paints a veil.
+		expect(
+			await team.evaluate((node) => {
+				const before = getComputedStyle(node, "::before");
+				return { content: before.content, background: before.backgroundColor, blur: before.backdropFilter };
+			})
+		).toEqual({ content: "none", background: "rgba(0, 0, 0, 0)", blur: "none" });
+
+		const card = team.locator(".studio-task").first();
+		const before = await card.boundingBox();
+		await card.hover();
 		await card.focus();
-		await expect(card).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 		await expect(card).toHaveCSS("box-shadow", "none");
-		await details.locator("summary").focus();
-		await expect(team.locator(".teams-task-enhanced").first()).toHaveCSS(
-			"transition-property",
-			"box-shadow, transform"
-		);
-		await page.screenshot({ path: info.outputPath(`team-${mode}.png`), animations: "disabled" });
+		const after = await card.boundingBox();
+		expect(after!.width).toBeCloseTo(before!.width, 2);
+		expect(after!.height).toBeCloseTo(before!.height, 2);
+		if (palette === "light" || palette === "dark")
+			await page.screenshot({ path: info.outputPath(`team-${palette}.png`) });
+		await page.locator(".session-entry").filter({ hasText: "团队协作隔离验收" }).first().click();
 		await page.getByRole("tab", { name: "子任务", exact: true }).click();
 		const subtasks = page.getByRole("region", { name: "对话子任务", exact: true });
-		await expect(subtasks).toBeVisible();
-		for (const selector of [".teams-main", ".teams-formation", ".teams-heading", ".teams-timeline"]) {
+		for (const selector of [".teams-main", ".teams-formation", ".teams-heading", ".teams-timeline"])
 			await expect(subtasks.locator(selector)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-			await expect(subtasks.locator(selector)).toHaveCSS("backdrop-filter", "none");
-		}
-		await page.screenshot({ path: info.outputPath(`subtasks-${mode}.png`), animations: "disabled" });
 		await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
 	}
-	for (const palette of ["ink-night", "ink-blue", "dark"]) {
-		await page.evaluate((value) => {
-			localStorage.setItem("wuming.theme.palettes", JSON.stringify({ light: "light", dark: value }));
-		}, palette);
-		await page.reload();
-		await expect(page.locator("html")).toHaveAttribute("data-theme", palette);
-		await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
-		for (const selector of surfaces) {
-			await expect(team.locator(selector).first()).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-			await expect(team.locator(selector).first()).toHaveCSS("box-shadow", "none");
-		}
-	}
-	await team.getByRole("textbox", { name: "搜索任务", exact: true }).fill("集成验证");
-	await expect(team.locator(".teams-task-enhanced")).toHaveCount(1);
-	await team.locator(".teams-task-enhanced").click();
-	await expect(team.locator(".persistent-team-detail").first()).toContainText("写入范围");
-	await page.keyboard.press("Escape");
-	await team.getByRole("textbox", { name: "搜索任务", exact: true }).clear();
 	await page.setViewportSize({ width: 390, height: 844 });
-	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-	await page.screenshot({ path: info.outputPath("team-mobile.png"), animations: "disabled" });
 	await team.getByRole("button", { name: "任务列表", exact: true }).click();
 	await expect(team.locator(".persistent-team-task-list button")).toHaveCount(3);
-	await team.getByRole("textbox", { name: "搜索任务", exact: true }).focus();
-	await expect(team.locator(".persistent-team-task-list button").first()).toHaveCSS(
-		"background-color",
-		"rgba(0, 0, 0, 0)"
-	);
+	await team.locator(".persistent-team-task-list button").first().click();
+	await expect(team.getByRole("region", { name: "任务详情", exact: true })).toContainText("写入范围");
+	await expect(team.locator(".persistent-team-mailbox")).toBeVisible();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+	await page.keyboard.press("Escape");
+	await team.getByRole("button", { name: "任务流程", exact: true }).click();
 	await page.getByRole("button", { name: "打开导航", exact: true }).click();
 	await page.getByRole("button", { name: "设置", exact: true }).click();
 	await page.getByRole("button", { name: "无背景", exact: true }).click();
 	await page.getByRole("button", { name: "关闭", exact: true }).click();
 	await team.getByRole("button", { name: "依赖泳道", exact: true }).click();
-	await expect(team.locator(".teams-canvas-scroll")).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-	await expect(team.locator(".persistent-team-member").first()).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+	await expect(team.locator(".studio-canvas-scroll")).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 	expect(errors).toEqual([]);
 });
 
 test.describe("touch team wallpaper", () => {
 	test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-	test("uses a light reading tint without card shadows", async ({ page }, info) => {
+	test("keeps the wallpaper visible on touch devices", async ({ page }, info) => {
 		const url = await startWebApp({}, async (workspace) => {
 			await seedAgentTeam(join(workspace, "..", "data"));
 		});
@@ -139,25 +109,12 @@ test.describe("touch team wallpaper", () => {
 		});
 		await openApp(page, url);
 		await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
-		for (const selector of [
-			".persistent-team-member",
-			".teams-task-enhanced",
-			".persistent-team-messages article",
-			".persistent-team-detail",
-		]) {
-			const surface = page.locator(selector).first();
-			await expect(surface).toHaveCSS("box-shadow", "none");
-			await expect(surface).toHaveCSS("background-image", "none");
-			const alpha = await surface.evaluate((element) => {
-				const ctx = document.createElement("canvas").getContext("2d")!;
-				ctx.fillStyle = getComputedStyle(element).backgroundColor;
-				ctx.fillRect(0, 0, 1, 1);
-				return ctx.getImageData(0, 0, 1, 1).data[3]! / 255;
-			});
-			expect(alpha).toBeGreaterThan(0);
-			expect(alpha).toBeLessThanOrEqual(0.33);
-		}
+		const card = page.locator(".studio-task").first();
+		await expect(card).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+		await expect(card).toHaveCSS("box-shadow", "none");
+		await card.click();
+		await expect(page.getByRole("region", { name: "任务详情", exact: true })).toBeVisible();
 		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-		await page.screenshot({ path: info.outputPath("team-touch.png"), animations: "disabled" });
+		await page.screenshot({ path: info.outputPath("team-touch.png") });
 	});
 });

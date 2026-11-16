@@ -109,8 +109,16 @@ export class AgentTeamService {
 			const snapshot = this.runner.store.loadSnapshot(member.sessionId);
 			member.costUsd = snapshot?.usage.costUsd ?? 0;
 			member.totalTokens = snapshot?.usage.totalTokens ?? 0;
-			if (team.status !== "running") member.state = "stopped";
-			else if (snapshot?.session.phase === "awaiting_approval") member.state = "awaiting_approval";
+			if (snapshot) {
+				member.model = snapshot.model;
+				member.thinkingLevel = snapshot.thinkingLevel;
+			}
+			if (team.status !== "running") {
+				member.state = "stopped";
+				continue;
+			}
+			if (member.state === "awaiting_model" || team.modelPolicy?.awaitingConfiguration) continue;
+			if (snapshot?.session.phase === "awaiting_approval") member.state = "awaiting_approval";
 			else if (snapshot?.session.phase !== "idle" && snapshot) member.state = "working";
 		}
 		return team;
@@ -122,6 +130,8 @@ export class AgentTeamService {
 		const member = team.members.find((value) => value.sessionId === sessionId);
 		if (!member) return fail("Team tools require an authenticated member execution session");
 		if (team.status !== "running") return fail("Team is no longer running");
+		if (team.modelPolicy?.awaitingConfiguration || member.state === "awaiting_model")
+			return fail("请先在团队页面确认模型分配");
 		const parent = this.runner.store.loadSnapshot(team.sessionId);
 		if (!parent || parent.session.archivedAt !== undefined) return fail("Team conversation is archived or missing");
 		return { team, member };
@@ -156,7 +166,9 @@ export class AgentTeamService {
 		name?: string,
 		enqueue = true,
 		actionId: string = randomUUID(),
-		artifacts: ArtifactRef[] = []
+		artifacts: ArtifactRef[] = [],
+		prepareModels = false,
+		sourceModel?: ModelRef
 	): Promise<AgentTeam> {
 		if (this.#closed) return fail("Team scheduler is shutting down");
 		if (this.get(sessionId)) return fail("Team members cannot create nested teams");
@@ -172,7 +184,9 @@ export class AgentTeamService {
 			name ? text(name, 80) : "Agent Team",
 			enqueue,
 			launchId,
-			artifacts
+			artifacts,
+			prepareModels,
+			sourceModel
 		);
 		this.#launching.set(launchId, operation);
 		try {
@@ -187,7 +201,9 @@ export class AgentTeamService {
 		name: string,
 		enqueue: boolean,
 		launchId: string,
-		artifacts: ArtifactRef[]
+		artifacts: ArtifactRef[],
+		prepareModels: boolean,
+		sourceModel?: ModelRef
 	): Promise<AgentTeam> {
 		const parent = this.runner.store.loadSnapshot(sessionId);
 		if (!parent || parent.session.archivedAt !== undefined) return fail("Conversation is missing or archived");
@@ -196,7 +212,7 @@ export class AgentTeamService {
 			idempotencyKey: `launch:${launchId}`,
 			workspaceId: parent.session.workspaceId,
 			name: `${name} / Lead`,
-			model: parent.model,
+			model: sourceModel ?? parent.model,
 			thinkingLevel: parent.thinkingLevel,
 			sandboxMode: parent.sandboxMode,
 			approvalPolicy: parent.approvalPolicy,
@@ -209,6 +225,7 @@ export class AgentTeamService {
 		const lead: AgentTeamMember = {
 			id: "lead",
 			name: "Lead",
+			model: created.snapshot.model,
 			role: "Decompose, delegate, integrate and verify the final result",
 			sessionId: created.snapshot.session.id,
 			lead: true,
@@ -232,6 +249,16 @@ export class AgentTeamService {
 			members: [lead],
 			tasks: [],
 			messages: [],
+			...(prepareModels
+				? {
+						modelPolicy: {
+							mode: "shared" as const,
+							awaitingConfiguration: true,
+							version: 0,
+							sourceModel: created.snapshot.model,
+						},
+					}
+				: {}),
 		};
 		if (enqueue) {
 			team.startup = { reminders: 0 };
@@ -271,7 +298,10 @@ export class AgentTeamService {
 		const template = options.templateName
 			? this.templates.resolve(parent.session.workspaceId, options.templateName)
 			: undefined;
-		const model = options.model ?? template?.model ?? parent.model;
+		const leader = team.members.find((value) => value.lead)!;
+		const model = team.modelPolicy
+			? (leader.pendingModel ?? leader.model ?? parent.model)
+			: (options.model ?? template?.model ?? parent.model);
 		const metadata = this.availableModels?.().find(
 			(item) => item.model.provider === model.provider && item.model.id === model.id
 		);
@@ -308,11 +338,30 @@ export class AgentTeamService {
 					sessionId: created.snapshot.session.id,
 					lead: false,
 					activated: false,
-					state: "idle",
+					state: current.modelPolicy?.mode === "manual" ? "awaiting_model" : "idle",
+					...(current.modelPolicy?.mode === "shared"
+						? {
+								pendingModel:
+									current.members.find((value) => value.lead)!.pendingModel ??
+									current.members.find((value) => value.lead)!.model ??
+									model,
+							}
+						: {}),
 					costUsd: 0,
 					totalTokens: 0,
 				};
 				current.members.push(member);
+				if (current.modelPolicy) {
+					const id = this.#message(
+						current,
+						"scheduler",
+						"lead",
+						`Created member ${name}. ${member.state === "awaiting_model" ? "Waiting for the user to assign a model. Assign its first task with pending status and continue independent work; do not poll or replace this member." : "Assign its first task."}`,
+						"system"
+					);
+					const notice = current.messages.find((value) => value.id === id)!;
+					notice.summary = `${name}：${member.state === "awaiting_model" ? "等待你选择模型，确认后开始工作。" : "已加入团队，等待分配任务。"}`;
+				}
 				return member;
 			},
 			actionId
@@ -386,17 +435,22 @@ export class AgentTeamService {
 		)
 			return fail("Task is owned, blocked, already started, or member is busy");
 		task.owner = member.id;
+		// An explicit assignment reserves work without claiming it before model consent.
+		if (member.state === "awaiting_model") return;
 		task.status = "in_progress";
 		task.updatedAt = Date.now();
 		member.activated = true;
 		if (!member.lead) delete team.startup;
-		this.#message(
+		const assignmentId = this.#message(
 			team,
 			"scheduler",
 			member.id,
 			`Task ${task.id}: ${task.title}\n${task.description.slice(0, 12_000)}\nUse TaskGet for the full objective and write scope.`,
 			"assignment"
 		);
+		const assignment = team.messages.find((value) => value.id === assignmentId)!;
+		assignment.summary = `开始处理：${task.title}`;
+		assignment.taskId = task.id;
 	}
 	updateTask(
 		sessionId: string,
@@ -441,14 +495,18 @@ export class AgentTeamService {
 					if (task.status !== "in_progress") return fail("Only a claimed task can be finished");
 					task.result = text(input.result ?? "");
 					task.status = input.status;
-					if (!member.lead)
-						this.#message(
+					if (!member.lead) {
+						const resultId = this.#message(
 							current,
 							member.id,
 							"lead",
 							`${task.title}: ${task.status}\n${task.result.slice(0, 18_000)}\nFull result: TaskGet ${task.id}\nCollaboration checkpoint: inspect this result against the team objective and refresh TaskList. ${task.status === "failed" ? "Route diagnosis and repair to the responsible teammate or a suitable specialist; do not automatically take over the failed work." : "Assign the next implementation, repair or verification task to a suitable retained teammate, or create a member if capacity or expertise is missing. Research completion is not project completion."} If useful work remains, delegate it before starting substantial local work. If the objective is satisfied, verify the actual deliverables before TeamFinish. Do not invent extra work or send acknowledgement-only messages.`,
 							"result"
 						);
+						const event = current.messages.find((value) => value.id === resultId)!;
+						event.summary = `${task.status === "completed" ? "已完成" : "未能完成"}：${task.title}。${task.status === "completed" ? "结果已交给负责人检查。" : "需要负责人安排排查。"}`;
+						event.taskId = task.id;
+					}
 				} else if (input.status === "pending") {
 					if (!member.lead || task.status !== "failed") return fail("Only the lead may reopen a failed task");
 					task.status = "pending";
@@ -460,7 +518,14 @@ export class AgentTeamService {
 			actionId
 		);
 	}
-	send(sessionId: string, recipient: string, content: string, actionId: string, fromUser = false): string[] {
+	send(
+		sessionId: string,
+		recipient: string,
+		content: string,
+		actionId: string,
+		fromUser = false,
+		summary?: string
+	): string[] {
 		const { team, member } = fromUser ? this.#lead(sessionId) : this.#actor(sessionId);
 		return this.store.change(
 			team.id,
@@ -471,7 +536,11 @@ export class AgentTeamService {
 						? current.members.filter((value) => fromUser || value.id !== member.id)
 						: current.members.filter((value) => value.id === recipient);
 				if (!recipients.length) return fail("Unknown recipient");
-				return recipients.map((value) => this.#message(current, fromUser ? "user" : member.id, value.id, content));
+				return recipients.map((value) => {
+					const id = this.#message(current, fromUser ? "user" : member.id, value.id, content);
+					if (summary) current.messages.find((message) => message.id === id)!.summary = text(summary, 1000);
+					return id;
+				});
 			},
 			actionId
 		);
@@ -539,6 +608,78 @@ export class AgentTeamService {
 			if (this.runner.store.loadSnapshot(sessionId)?.session.phase !== "idle") throw error;
 		}
 	}
+	#validateModel(model: ModelRef): ModelMetadata | undefined {
+		const metadata = this.availableModels?.().find(
+			(entry) => entry.model.provider === model.provider && entry.model.id === model.id
+		);
+		if (this.availableModels && !metadata?.authenticated) return fail("模型不可用或未完成认证，请重新选择已配置的模型");
+		return metadata;
+	}
+	configureModels(
+		teamId: string,
+		expectedVersion: number,
+		mode: "shared" | "manual",
+		leaderModel: ModelRef,
+		actionId: string
+	): void {
+		this.#validateModel(leaderModel);
+		this.store.change(
+			teamId,
+			(team) => {
+				if (this.#closed || team.status !== "running") return fail("团队已结束，无法修改模型");
+				if ((team.modelPolicy?.version ?? 0) !== expectedVersion) return fail("模型配置已更新，请重新打开设置");
+				const leader = team.members.find((member) => member.lead)!;
+				team.modelPolicy = {
+					mode,
+					awaitingConfiguration: false,
+					version: expectedVersion + 1,
+					sourceModel:
+						team.modelPolicy?.sourceModel ?? leader.model ?? this.runner.store.loadSnapshot(team.sessionId)!.model,
+				};
+				for (const member of team.members) {
+					if (member.lead || mode === "shared") {
+						member.pendingModel = leaderModel;
+						if (member.state === "awaiting_model") member.state = "idle";
+					}
+				}
+				return null;
+			},
+			actionId
+		);
+	}
+	assignModels(
+		teamId: string,
+		expectedVersion: number,
+		assignments: Array<{ memberId: string; model: ModelRef }>,
+		actionId: string
+	): void {
+		if (
+			!assignments.length ||
+			assignments.length > MAX_TEAM_MEMBERS ||
+			new Set(assignments.map((entry) => entry.memberId)).size !== assignments.length
+		)
+			return fail("请选择不同的成员并分配模型");
+		for (const entry of assignments) this.#validateModel(entry.model);
+		this.store.change(
+			teamId,
+			(team) => {
+				if (this.#closed || team.status !== "running" || team.modelPolicy?.awaitingConfiguration)
+					return fail("请先完成团队模型设置");
+				if (team.modelPolicy?.mode !== "manual") return fail("请先切换为自主选择模式");
+				if (team.modelPolicy.version !== expectedVersion) return fail("模型配置已更新，请刷新后重试");
+				for (const entry of assignments) {
+					const member = team.members.find((value) => value.id === entry.memberId);
+					if (!member) return fail("成员不存在");
+					member.pendingModel = entry.model;
+					if (member.state === "awaiting_model") member.state = "idle";
+				}
+				team.modelPolicy.version++;
+				return null;
+			},
+			actionId
+		);
+	}
+
 	retry(sessionId: string, memberId: string, actionId: string): void {
 		const { team } = this.#lead(sessionId);
 		this.store.change(
@@ -627,14 +768,17 @@ export class AgentTeamService {
 	}
 	tick(): void {
 		if (this.#closed) return;
-		for (const team of this.store.list().filter((value) => value.status === "running")) {
+		for (const team of this.store
+			.list()
+			.filter((value) => value.status === "running" && !value.modelPolicy?.awaitingConfiguration)) {
 			const parent = this.runner.store.loadSnapshot(team.sessionId);
 			if (!parent || parent.session.archivedAt !== undefined) {
 				void this.stop(team.sessionId).catch(this.onError);
 				continue;
 			}
 			for (const member of team.members) {
-				if (this.#running.has(member.sessionId) || member.state === "error") continue;
+				if (this.#running.has(member.sessionId) || member.state === "error" || member.state === "awaiting_model")
+					continue;
 				const promise = this.#pump(team.id, member.id)
 					.catch(this.onError)
 					.finally(() => this.#running.delete(member.sessionId));
@@ -645,6 +789,11 @@ export class AgentTeamService {
 	/** A launch gets one durable corrective turn, never an unbounded idle polling loop. */
 	#checkStartup(team: AgentTeam, member: AgentTeamMember): void {
 		if (!member.lead || !team.startup || member.state !== "idle") return;
+		if (
+			team.modelPolicy?.awaitingConfiguration ||
+			team.members.some((candidate) => candidate.state === "awaiting_model")
+		)
+			return;
 		if (team.messages.some((message) => message.to === member.id && message.delivery === "pending")) return;
 		if (!team.messages.some((message) => message.to === member.id && message.delivery === "delivered")) return;
 		// Give the normal scheduler time to claim a ready, explicitly assigned first task.
@@ -682,6 +831,7 @@ export class AgentTeamService {
 		let team = this.store.get(teamId)!;
 		let member = team.members.find((value) => value.id === memberId)!;
 		const sessionId = member.sessionId;
+		if (team.modelPolicy?.awaitingConfiguration || member.state === "awaiting_model") return;
 		try {
 			const snapshot = this.runner.store.loadSnapshot(sessionId);
 			if (!snapshot || snapshot.session.archivedAt !== undefined) return;
@@ -707,6 +857,34 @@ export class AgentTeamService {
 				team = this.store.get(teamId)!;
 				member = team.members.find((value) => value.id === memberId)!;
 				if (member.state === "error") return;
+			}
+			if (member.pendingModel) {
+				const desired = member.pendingModel;
+				const metadata = this.#validateModel(desired);
+				if (snapshot.model.provider !== desired.provider || snapshot.model.id !== desired.id) {
+					await this.runner.setSessionModel({
+						principalId: `team:${teamId}`,
+						idempotencyKey: `model:${team.modelPolicy?.version ?? 0}:${memberId}`,
+						sessionId,
+						model: desired,
+						...(metadata
+							? {
+									thinkingLevels: metadata.reasoning
+										? (metadata.thinkingLevels ?? ["off", "minimal", "low", "medium", "high", "xhigh", "max"])
+										: ["off"],
+								}
+							: {}),
+					});
+				}
+				this.store.change(teamId, (current) => {
+					const target = current.members.find((value) => value.id === memberId)!;
+					target.model = desired;
+					if (target.pendingModel?.provider === desired.provider && target.pendingModel.id === desired.id)
+						delete target.pendingModel;
+				});
+				team = this.store.get(teamId)!;
+				member = team.members.find((value) => value.id === memberId)!;
+				if (member.pendingModel || team.modelPolicy?.awaitingConfiguration || member.state === "awaiting_model") return;
 			}
 			this.#checkStartup(team, member);
 			team = this.store.get(teamId)!;
@@ -854,6 +1032,14 @@ export class AgentTeamService {
 		return [
 			`You are ${member.name} (member ID ${member.id}) in persistent Agent Team ${team.id}. Role: ${member.role}. Team status: ${team.status}. This is a dedicated team execution context, independent of the conversation that launched it.`,
 			`User objective: ${team.objective}`,
+			"Communication: write concise plain-language updates in the user's language. Explain what changed, what is next and any blocker. SendMessage summary is for the user: 1-2 short sentences, no protocol dumps; retain necessary technical details in text. Never summarize pending work as completed.",
+			...(team.modelPolicy
+				? [
+						team.modelPolicy.mode === "manual"
+							? "Model assignment is controlled by the user. Agent creates an awaiting_model member; assign its first task as pending. It cannot run until the user confirms its model in Teams. Do not poll, replace it, or take over its work because it is waiting; continue independent work or end the turn."
+							: "All team members must use the user's shared Leader model. Agent model/template overrides cannot change this. Only the user can switch model policy.",
+					]
+				: []),
 			...(member.template
 				? [
 						`Agent template: ${member.template.name} (${member.template.scope}, revision ${member.template.revision}). Frozen at member creation.`,

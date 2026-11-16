@@ -18,6 +18,8 @@ import {
 	type SessionSnapshot,
 	SessionSnapshotSchema,
 	type Usage,
+	UsageSchema,
+	type ModelRef,
 	type UsageOverview,
 	type UsageRequestSummary,
 } from "@wuming/protocol";
@@ -49,6 +51,7 @@ import type {
 } from "./types.js";
 
 const checkEvent = Compile(SessionEventSchema);
+const checkUsage = Compile(UsageSchema);
 const checkSnapshot = Compile(SessionSnapshotSchema);
 const checkCommandResult = Compile(CommandResultSchema);
 const GoalReviewStateSchema = Type.Object(
@@ -765,6 +768,15 @@ export class SqliteOrchestratorStore implements Disposable {
 		this.#db.exec("PRAGMA foreign_keys = ON");
 		this.#db.exec("PRAGMA journal_mode = WAL");
 		this.#db.exec(`
+			CREATE TABLE IF NOT EXISTS auxiliary_usage (
+				request_id TEXT PRIMARY KEY,
+				workspace_id TEXT NOT NULL,
+				purpose TEXT NOT NULL,
+				model_json TEXT NOT NULL,
+				usage_json TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS auxiliary_usage_workspace_time ON auxiliary_usage(workspace_id, created_at);
 			CREATE TABLE IF NOT EXISTS session_snapshots (
 				session_id TEXT PRIMARY KEY,
 				workspace_id TEXT NOT NULL,
@@ -1588,6 +1600,34 @@ export class SqliteOrchestratorStore implements Disposable {
 		return this.#search.search(workspaceId, options);
 	}
 
+	recordAuxiliaryUsage(input: {
+		requestId: string;
+		workspaceId: string;
+		purpose: "prompt_optimization";
+		model: ModelRef;
+		usage: Usage;
+		timestamp: number;
+	}): boolean {
+		if (!checkUsage.Check(input.usage)) throw new OrchestratorError("conflict", "Invalid auxiliary usage");
+		const result = this.#db
+			.prepare(
+				`
+			INSERT INTO auxiliary_usage(request_id, workspace_id, purpose, model_json, usage_json, created_at)
+			VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(request_id) DO NOTHING
+		`
+			)
+			.run(
+				input.requestId,
+				input.workspaceId,
+				input.purpose,
+				JSON.stringify(input.model),
+				JSON.stringify(input.usage),
+				input.timestamp
+			);
+		if (result.changes) this.#usageOverviewCache.clear();
+		return Number(result.changes) > 0;
+	}
+
 	usageOverview(workspaceIds: string | readonly string[] | undefined, now: number, requestedDays = 7): UsageOverview {
 		const workspaceId = typeof workspaceIds === "string" ? workspaceIds : undefined;
 		const allowedIds = typeof workspaceIds === "string" ? [workspaceIds] : workspaceIds;
@@ -1661,7 +1701,35 @@ export class SqliteOrchestratorStore implements Disposable {
 			bucket.turnCount += 1;
 			bucket.requestCount += event.requests.length;
 		}
+		const auxiliary = { usage: { ...EMPTY_USAGE }, requestCount: 0 };
+		const auxiliaryRows = this.#db
+			.prepare(
+				`
+			SELECT usage_json, created_at FROM auxiliary_usage
+			WHERE ${allowedIds === undefined ? "1 = 1" : "workspace_id IN (SELECT value FROM json_each(?))"}
+				AND created_at < ?
+		`
+			)
+			.all(...(allowedIds === undefined ? [] : [JSON.stringify(allowedIds)]), tomorrowStart) as unknown as Array<{
+			usage_json: string;
+			created_at: number;
+		}>;
+		for (const row of auxiliaryRows) {
+			const usage = parseChecked<Usage>(row.usage_json, checkUsage, "Auxiliary usage");
+			auxiliary.usage = addUsage(auxiliary.usage, usage);
+			auxiliary.requestCount++;
+			total = addUsage(total, usage);
+			totalRequestCount++;
+			if (row.created_at >= monthStart) month = addUsage(month, usage);
+			if (row.created_at >= todayStart) today = addUsage(today, usage);
+			const bucket = byDate.get(localDateKey(row.created_at));
+			if (bucket) {
+				bucket.usage = addUsage(bucket.usage, usage);
+				bucket.requestCount++;
+			}
+		}
 		const overview: UsageOverview = {
+			auxiliary,
 			...(workspaceId === undefined ? {} : { workspaceId }),
 			generatedAt: now,
 			total,

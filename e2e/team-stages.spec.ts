@@ -5,9 +5,7 @@ import { seedTeamStages } from "./fixtures/team-stage-fixture.js";
 
 test.afterEach(stopWebApp);
 
-test("keeps later stages through search, navigation, zoom and replay with accessible execution links", async ({
-	page,
-}, testInfo) => {
+test("keeps declared stages accessible through search, navigation, zoom and replay", async ({ page }, info) => {
 	const errors: string[] = [];
 	page.on("pageerror", (error) => errors.push(error.message));
 	const url = await startWebApp({}, async (workspace) => {
@@ -16,43 +14,47 @@ test("keeps later stages through search, navigation, zoom and replay with access
 	await page.setViewportSize({ width: 1440, height: 900 });
 	await openApp(page, url);
 	await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
-	const team = page.locator(".persistent-teams");
+	const team = page.locator(".team-studio");
 	const nav = team.getByRole("navigation", { name: "阶段导航" });
-	await expect(nav.getByRole("button")).toHaveCount(4);
-	await expect(team.locator('[data-link-kind="continuation"]')).toHaveCount(1);
-	await expect(team.locator(".teams-link-pulse")).toHaveCount(1);
+	// Stage numbers reflect explicit dependencies only, never an inferred same-member handoff.
+	await expect(nav.getByRole("button")).toHaveCount(3);
+	await expect(team.locator("[data-dependency]")).toHaveCount(4);
 	const review = team.locator('[data-task-id="stage-review"]');
-	await expect(review).toHaveAttribute("data-stage", "3");
-	await nav.getByRole("button", { name: /阶段 3/ }).click();
-	await expect(review).toBeFocused();
-	await expect.poll(() => team.locator(".teams-canvas-scroll").evaluate((node) => node.scrollLeft)).toBeGreaterThan(0);
+	await expect(review).toHaveAttribute("data-stage", "2");
+	await nav.getByRole("button", { name: /阶段 2/ }).click();
+	await expect(review).toBeInViewport();
 	await review.click();
-	await expect(team.locator(".teams-flow-link.highlighted")).toHaveCount(2);
+	await expect(team.getByRole("region", { name: "任务详情", exact: true })).toContainText("后续修复");
 	await page.keyboard.press("Escape");
 	await nav.getByRole("button", { name: /阶段 1/ }).click();
-	await team.getByRole("textbox", { name: "搜索任务", exact: true }).fill("复核后续修复成果");
-	await expect(team.locator(".teams-task-enhanced")).toHaveCount(1);
-	await expect(review).toHaveAttribute("data-stage", "3");
+	const search = team.getByRole("textbox", { name: "搜索任务", exact: true });
+	await search.fill("复核后续修复成果");
+	await expect(team.locator(".studio-task")).toHaveCount(1);
 	await expect(review).toBeInViewport();
-	await expect(team.getByRole("textbox", { name: "搜索任务", exact: true })).toBeFocused();
+	await expect(search).toBeFocused();
 	await expect(nav.getByRole("button", { name: /阶段 1/ })).toBeDisabled();
-	await team.getByRole("textbox", { name: "搜索任务", exact: true }).clear();
-	await team.getByRole("button", { name: "缩小", exact: true }).click();
+	await search.clear();
+	await nav.getByRole("button", { name: "全部阶段", exact: true }).click();
+	await team.getByRole("button", { name: "放大", exact: true }).click();
 	await team.getByRole("button", { name: "定位执行中", exact: true }).click();
-	await expect(review).toBeFocused();
-	await page.screenshot({ path: testInfo.outputPath("team-stages-desktop.png") });
-	await page.emulateMedia({ reducedMotion: "reduce" });
-	await expect(team.locator(".teams-link-pulse")).toHaveCSS("animation-name", "none");
+	await expect(review).toBeInViewport();
+	await team.getByRole("button", { name: "全屏画布", exact: true }).click();
+	await expect(team.locator(".team-studio-canvas")).toHaveClass(/is-expanded/);
+	await page.keyboard.press("Escape");
+	await expect(team.locator(".team-studio-canvas")).not.toHaveClass(/is-expanded/);
+	await page.screenshot({ path: info.outputPath("team-stages-desktop.png") });
+	await team.getByRole("button", { name: "历史回放", exact: true }).click();
 	await team.getByRole("slider", { name: "历史版本" }).fill("5");
 	await expect(nav.getByRole("button")).toHaveCount(1);
 	await team.getByRole("button", { name: "回到实时", exact: true }).click();
-	await expect(nav.getByRole("button")).toHaveCount(4);
+	await expect(nav.getByRole("button")).toHaveCount(3);
 	await page.setViewportSize({ width: 390, height: 844 });
-	await nav.getByRole("button", { name: /阶段 4/ }).click();
-	await expect(team.locator('[data-task-id="stage-release"]')).toBeFocused();
+	await team.getByRole("button", { name: "任务流程", exact: true }).click();
+	await nav.getByRole("button", { name: /阶段 3/ }).click();
+	await expect(team.locator('[data-task-id="stage-release"]')).toBeInViewport();
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-	await page.screenshot({ path: testInfo.outputPath("team-stages-mobile.png") });
-	await team.getByRole("textbox", { name: "搜索任务", exact: true }).fill("不存在的任务");
-	await expect(team.getByText("暂无任务", { exact: true })).toBeVisible();
+	await page.screenshot({ path: info.outputPath("team-stages-mobile.png") });
+	await search.fill("不存在的任务");
+	await expect(team.locator(".studio-task")).toHaveCount(0);
 	expect(errors).toEqual([]);
 });

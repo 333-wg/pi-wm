@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ModelRef, PromptOptimizeRequest, PromptOptimizeResult, ThinkingLevel } from "@wuming/protocol";
+import { useT } from "./locale.js";
+import { optimizerErrorKey } from "./prompt-optimizer-error.js";
 
 export function usePromptOptimizer(options: {
 	token: string;
@@ -10,8 +12,8 @@ export function usePromptOptimizer(options: {
 	text: string;
 	editKey: unknown;
 	onApply: (text: string) => void;
-	failureMessage: string;
 }) {
+	const t = useT();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string>();
 	const [undo, setUndo] = useState<{ original: string; optimized: string }>();
@@ -65,7 +67,7 @@ export function usePromptOptimizer(options: {
 			controller.abort();
 			request.current = undefined;
 			setBusy(false);
-			setError(snapshot.failureMessage);
+			setError(t("optimizeTimeout"));
 		}, 125000);
 		try {
 			const input: PromptOptimizeRequest = {
@@ -80,8 +82,20 @@ export function usePromptOptimizer(options: {
 				body: JSON.stringify(input),
 				signal: controller.signal,
 			});
-			if (!response.ok) throw new Error(snapshot.failureMessage);
-			const result = (await response.json()) as PromptOptimizeResult;
+			const body: unknown = await response.json().catch(() => undefined);
+			if (!response.ok) {
+				if (request.current === controller && !controller.signal.aborted)
+					setError(
+						t(
+							optimizerErrorKey(
+								body && typeof body === "object" && "code" in body ? body.code : undefined,
+								response.status
+							)
+						)
+					);
+				return;
+			}
+			const result = body as PromptOptimizeResult | undefined;
 			const current = latest.current;
 			if (
 				request.current !== controller ||
@@ -93,12 +107,14 @@ export function usePromptOptimizer(options: {
 				current.model?.provider !== snapshot.model?.provider
 			)
 				return;
-			if (typeof result.text !== "string" || !result.text.trim() || result.text.length > 32000)
-				throw new Error(snapshot.failureMessage);
+			if (!result || typeof result.text !== "string" || !result.text.trim() || result.text.length > 32000) {
+				setError(t("optimizeInvalidOutput"));
+				return;
+			}
 			setUndo({ original: snapshot.text, optimized: result.text });
 			current.onApply(result.text);
 		} catch {
-			if (request.current === controller && !controller.signal.aborted) setError(snapshot.failureMessage);
+			if (request.current === controller && !controller.signal.aborted) setError(t("optimizeNetwork"));
 		} finally {
 			clearTimeout(timeout);
 			if (request.current === controller) {

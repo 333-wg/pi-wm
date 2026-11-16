@@ -1,3 +1,4 @@
+import { RefreshRequests, startVisiblePolling } from "./lib/visible-polling.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mergeUsageRequests, sessionUsageRequests } from "@wuming/protocol";
 import type {
@@ -256,6 +257,7 @@ export function useWumingClient() {
 			}),
 		[token, usageGateway]
 	);
+	const refreshRequests = useMemo(() => new RefreshRequests(), [token]);
 	const snapshotRef = useRef<SessionSnapshot | undefined>(undefined);
 	const restoringSession = useRef(false);
 	const goalMutationVersion = useRef(0);
@@ -808,45 +810,75 @@ export function useWumingClient() {
 		[refreshMemories]
 	);
 
-	const refreshSubagents = useCallback(async (sessionId: string) => {
-		const result = await requestRef.current?.({ type: "subagent.list", sessionId, limit: 100 });
-		if (result?.type === "subagent.list" && snapshotRef.current?.session.id === sessionId) {
-			setState((current) => ({
-				...current,
-				subagents: result.subagents,
-				subagentDepth: result.depth,
-				canCreateSubagent: result.canCreate,
-			}));
-		}
-		return result?.type === "subagent.list" ? result.subagents : [];
-	}, []);
+	const refreshSubagents = useCallback(
+		async (sessionId: string) => {
+			const navigation = navigationRevision.current;
+			const result = await refreshRequests.run(
+				`subagent.list:${sessionId}:${navigation}`,
+				() => requestRef.current?.({ type: "subagent.list", sessionId, limit: 100 }) ?? Promise.resolve(undefined)
+			);
+			if (
+				result?.type === "subagent.list" &&
+				navigationRevision.current === navigation &&
+				snapshotRef.current?.session.id === sessionId
+			) {
+				setState((current) => ({
+					...current,
+					subagents: result.subagents,
+					subagentDepth: result.depth,
+					canCreateSubagent: result.canCreate,
+				}));
+			}
+			return result?.type === "subagent.list" ? result.subagents : [];
+		},
+		[refreshRequests]
+	);
 
-	const refreshGoals = useCallback(async (sessionId: string) => {
-		const requestVersion = goalMutationVersion.current;
-		const result = await requestRef.current?.({ type: "goal.list", sessionId, limit: 100 });
-		if (
-			result?.type === "goal.list" &&
-			goalMutationVersion.current === requestVersion &&
-			snapshotRef.current?.session.id === sessionId
-		) {
-			setState((current) => {
-				const liveGoalActivities = { ...current.liveGoalActivities };
-				for (const goal of result.goals) {
-					if (["completed", "failed", "cancelled"].includes(goal.status)) delete liveGoalActivities[goal.id];
-				}
-				return { ...current, goals: result.goals, liveGoalActivities };
-			});
-		}
-		return result?.type === "goal.list" ? result.goals : [];
-	}, []);
+	const refreshGoals = useCallback(
+		async (sessionId: string) => {
+			const requestVersion = goalMutationVersion.current;
+			const navigation = navigationRevision.current;
+			const result = await refreshRequests.run(
+				`goal.list:${sessionId}:${navigation}:${requestVersion}`,
+				() => requestRef.current?.({ type: "goal.list", sessionId, limit: 100 }) ?? Promise.resolve(undefined)
+			);
+			if (
+				result?.type === "goal.list" &&
+				goalMutationVersion.current === requestVersion &&
+				navigationRevision.current === navigation &&
+				snapshotRef.current?.session.id === sessionId
+			) {
+				setState((current) => {
+					const liveGoalActivities = { ...current.liveGoalActivities };
+					for (const goal of result.goals) {
+						if (["completed", "failed", "cancelled"].includes(goal.status)) delete liveGoalActivities[goal.id];
+					}
+					return { ...current, goals: result.goals, liveGoalActivities };
+				});
+			}
+			return result?.type === "goal.list" ? result.goals : [];
+		},
+		[refreshRequests]
+	);
 
-	const refreshAutomations = useCallback(async (sessionId: string) => {
-		const result = await requestRef.current?.({ type: "automation.list", sessionId, limit: 100 });
-		if (result?.type === "automation.list" && snapshotRef.current?.session.id === sessionId) {
-			setState((current) => ({ ...current, automations: result.automations }));
-		}
-		return result?.type === "automation.list" ? result.automations : [];
-	}, []);
+	const refreshAutomations = useCallback(
+		async (sessionId: string) => {
+			const navigation = navigationRevision.current;
+			const result = await refreshRequests.run(
+				`automation.list:${sessionId}:${navigation}`,
+				() => requestRef.current?.({ type: "automation.list", sessionId, limit: 100 }) ?? Promise.resolve(undefined)
+			);
+			if (
+				result?.type === "automation.list" &&
+				navigationRevision.current === navigation &&
+				snapshotRef.current?.session.id === sessionId
+			) {
+				setState((current) => ({ ...current, automations: result.automations }));
+			}
+			return result?.type === "automation.list" ? result.automations : [];
+		},
+		[refreshRequests]
+	);
 
 	const attachSession = useCallback(
 		async (sessionId: string, revision = ++navigationRevision.current) => {
@@ -1107,6 +1139,10 @@ export function useWumingClient() {
 			}
 			if (message.type === "hello_error") {
 				setState((current) => ({ ...current, connection: "error", error: message.error.message }));
+				return;
+			}
+			if (message.type === "usage.invalidated") {
+				usageCache.invalidate();
 				return;
 			}
 			if (message.type === "response") {
@@ -1574,14 +1610,16 @@ export function useWumingClient() {
 		usageCache,
 	]);
 
+	const hasActiveSubagents = state.subagents.some((agent) =>
+		["queued", "running", "awaiting_approval", "cancelling"].includes(agent.status)
+	);
+	const subagentPollMs =
+		hasActiveSubagents || (state.snapshot && state.snapshot.session.phase !== "idle") ? 1500 : 30_000;
 	useEffect(() => {
 		const sessionId = state.snapshot?.session.id;
 		if (state.connection !== "connected" || !sessionId || !state.capabilities.includes("subagents")) return;
-		const refresh = () => void refreshSubagents(sessionId).catch(() => undefined);
-		refresh();
-		const timer = setInterval(refresh, 1500);
-		return () => clearInterval(timer);
-	}, [refreshSubagents, state.capabilities, state.connection, state.snapshot?.session.id]);
+		return startVisiblePolling(() => refreshSubagents(sessionId), subagentPollMs);
+	}, [refreshSubagents, subagentPollMs, state.capabilities, state.connection, state.snapshot?.session.id]);
 
 	const hasActiveGoals = state.goals.some((goal) =>
 		["pending", "queued", "running", "awaiting_approval", "cancelling"].includes(goal.status)
@@ -1589,21 +1627,15 @@ export function useWumingClient() {
 	useEffect(() => {
 		const sessionId = state.snapshot?.session.id;
 		if (state.connection !== "connected" || !sessionId || !state.capabilities.includes("goals")) return;
-		const refresh = () => void refreshGoals(sessionId).catch(() => undefined);
-		refresh();
-		if (!hasActiveGoals) return;
-		const timer = setInterval(refresh, 1500);
-		return () => clearInterval(timer);
+		return startVisiblePolling(() => refreshGoals(sessionId), hasActiveGoals ? 1500 : 30_000);
 	}, [hasActiveGoals, refreshGoals, state.capabilities, state.connection, state.snapshot?.session.id]);
 
+	const hasEnabledAutomations = state.automations.some((automation) => automation.status === "active");
 	useEffect(() => {
 		const sessionId = state.snapshot?.session.id;
 		if (state.connection !== "connected" || !sessionId || !state.capabilities.includes("automations")) return;
-		const refresh = () => void refreshAutomations(sessionId).catch(() => undefined);
-		refresh();
-		const timer = setInterval(refresh, 10_000);
-		return () => clearInterval(timer);
-	}, [refreshAutomations, state.capabilities, state.connection, state.snapshot?.session.id]);
+		return startVisiblePolling(() => refreshAutomations(sessionId), hasEnabledAutomations ? 10_000 : 60_000);
+	}, [hasEnabledAutomations, refreshAutomations, state.capabilities, state.connection, state.snapshot?.session.id]);
 
 	const openWorkspace = useCallback(
 		async (workspaceId: string, attachLatest = true) => {

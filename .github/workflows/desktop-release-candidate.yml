@@ -1,0 +1,101 @@
+name: Desktop Release Candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+# Apple Silicon is built and verified locally; these require native CI hosts.
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: win32
+            arch: x64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          architecture: x64
+          cache: npm
+      - name: Require native target
+        run: node -e "const a=require('node:assert/strict');a.equal(process.platform,process.env.EXPECTED_PLATFORM);a.equal(process.arch,'x64')"
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+      - run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Build installers and verify package inventory
+        run: npm run desktop:dist
+      - name: Verify Windows package outside source checkout
+        if: matrix.platform == 'win32'
+        run: node scripts/verify-desktop.mjs --packaged=release/win-unpacked/Pi-Wm.exe
+      - name: Verify Mac archives, signature, runtime and packaged app
+        if: matrix.platform == 'darwin'
+        run: node scripts/verify-desktop-macos.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/Pi-Wm-*-Setup-x64.exe
+            release/Pi-Wm-*-Setup-x64.exe.blockmap
+            release/latest.yml
+            release/Pi-Wm-*-mac-x64.dmg
+            release/Pi-Wm-*-mac-x64.zip
+            release/Pi-Wm-*-mac-x64.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Keep package verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-evidence-${{ matrix.platform }}-${{ matrix.arch }}
+          path: test-results/desktop-packaged
+          if-no-files-found: warn
+          retention-days: 14
+
+  upload:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: candidate-*
+          path: artifacts
+      - name: Attach verified files to matching draft only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          repository=$(node -p "require('./apps/desktop/package.json').desktopUpdateRepository")
+          [[ "$repository" == "$GITHUB_REPOSITORY" ]]
+          tag="v$version"
+          [[ "$(gh release view "$tag" --repo "$repository" --json isDraft --jq .isDraft)" == "true" ]]
+          [[ "$(gh release view "$tag" --repo "$repository" --json targetCommitish --jq .targetCommitish)" == "$GITHUB_SHA" ]]
+          mac="artifacts/candidate-darwin-x64"
+          win="artifacts/candidate-win32-x64"
+          (cd "$mac" && sha256sum --check "Pi-Wm-$version-mac-x64.sha256")
+          gh release upload "$tag" --repo "$repository" \
+            "$win/Pi-Wm-$version-Setup-x64.exe" \
+            "$win/Pi-Wm-$version-Setup-x64.exe.blockmap" \
+            "$win/latest.yml" \
+            "$mac/Pi-Wm-$version-mac-x64.dmg" \
+            "$mac/Pi-Wm-$version-mac-x64.zip" \
+            "$mac/Pi-Wm-$version-mac-x64.sha256"

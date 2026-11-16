@@ -1,7 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,7 +65,9 @@ export async function startWebApp(
 	gatewayEnvironment: Record<string, string> = {},
 	prepareWorkspace?: (workspace: string) => Promise<void>
 ): Promise<string> {
-	temporaryRoot = await mkdtemp(join(tmpdir(), "wuming-web-e2e-"));
+	// macOS exposes /var through a symlink; use the real root so skill safety
+	// checks exercise the fixture itself, not an OS-level temporary-directory alias.
+	temporaryRoot = await realpath(await mkdtemp(join(tmpdir(), "wuming-web-e2e-")));
 	const workspace = join(temporaryRoot, "workspace");
 	const data = join(temporaryRoot, "data");
 	await Promise.all([mkdir(workspace), mkdir(data)]);

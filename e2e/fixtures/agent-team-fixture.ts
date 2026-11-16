@@ -46,6 +46,8 @@ export async function seedRunningAgentTeam(
 			undefined,
 			undefined as never
 		);
+		const team = store.list().at(-1)!;
+		service.configureModels(team.id, 0, "shared", snapshot.model, randomUUID());
 		if (options.archiveSource)
 			await runner.archiveSession({
 				principalId: "fixture",
@@ -179,6 +181,81 @@ export async function seedAgentTeam(data: string, template?: AgentTemplateConfig
 			"finish"
 		);
 		return lead;
+	} finally {
+		service.pause();
+		await service.settled();
+		store.close();
+		sessions.close();
+	}
+}
+
+/** User-controlled member provisioning; no paid model or live project is involved. */
+export async function seedModelAssignmentTeam(data: string): Promise<string> {
+	await mkdir(data, { recursive: true });
+	const sessions = new SqliteOrchestratorStore(join(data, "wuming.db"));
+	const store = new AgentTeamStore(join(data, "agent-teams.db"));
+	const runner = new SessionOrchestrator(sessions, {
+		async executeTurn() {
+			throw new Error("Fixture must not execute");
+		},
+	});
+	const service = new AgentTeamService(store, runner);
+	try {
+		const model = { provider: "demo", id: "wuming-demo" };
+		const source = await runner.createSession({
+			principalId: "fixture",
+			idempotencyKey: "model-source",
+			workspaceId: "local-workspace",
+			name: "团队模型配置",
+			model,
+			thinkingLevel: "off",
+			sandboxMode: "read_only",
+			approvalPolicy: "on_risk",
+		});
+		const team = await service.start(
+			source.snapshot.session.id,
+			"搭建旅游体验，场景与界面分别推进。",
+			"3D 旅游体验 · 模型分配测试",
+			false,
+			"manual-team",
+			[],
+			true
+		);
+		service.configureModels(team.id, 0, "manual", model, "manual-mode");
+		const plan = service.createTask(
+			team.sessionId,
+			{ title: "需求分析", description: "拆分任务并分配责任", owner: "lead" },
+			"plan"
+		);
+		service.updateTask(team.sessionId, { taskId: plan.id, status: "in_progress" }, "plan-start");
+		service.updateTask(
+			team.sessionId,
+			{ taskId: plan.id, status: "completed", result: "场景与界面可并行推进。" },
+			"plan-done"
+		);
+		const scene = await service.addMember(
+			team.sessionId,
+			"场景开发",
+			"搭建 3D 场景与镜头交互，可与界面开发并行推进。",
+			"scene"
+		);
+		const ui = await service.addMember(team.sessionId, "界面开发", "实现城市选择与页面交互。", "ui");
+		const a = service.createTask(
+			team.sessionId,
+			{ title: "场景搭建", description: scene.role, owner: scene.id, dependsOn: [plan.id], writePaths: ["scene"] },
+			"scene-task"
+		);
+		const b = service.createTask(
+			team.sessionId,
+			{ title: "界面实现", description: ui.role, owner: ui.id, dependsOn: [plan.id], writePaths: ["ui"] },
+			"ui-task"
+		);
+		service.createTask(
+			team.sessionId,
+			{ title: "整体验收", description: "检查场景与界面的交互", owner: "lead", dependsOn: [a.id, b.id] },
+			"verify"
+		);
+		return team.id;
 	} finally {
 		service.pause();
 		await service.settled();

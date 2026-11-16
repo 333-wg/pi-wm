@@ -130,3 +130,32 @@ it("cancels a pending provider response without accepting partial text", async (
 	controller.abort();
 	await expect(pending).rejects.toThrow();
 });
+
+it.each(["stop", "length", "error", "aborted"] as const)(
+	"reports available usage before terminal validation: %s",
+	async (stopReason) => {
+		const onUsage = vi.fn();
+		const result = fixture({ ...message, stopReason, content: [{ type: "text", text: "invalid json" }] });
+		await expect(result.optimize(input, new AbortController().signal, onUsage)).rejects.toThrow();
+		expect(onUsage).toHaveBeenCalledOnce();
+		expect(onUsage).toHaveBeenCalledWith({
+			inputTokens: 1,
+			outputTokens: 1,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			totalTokens: 2,
+			costUsd: 0,
+		});
+	}
+);
+
+it.each([
+	["HTTP 401: secret", "provider_auth"],
+	["HTTP 429: rate limited", "rate_limited"],
+	["Model response idle timeout", "timeout"],
+	["HTTP 500: secret", "provider_failed"],
+])("classifies provider failures without forwarding their details: %s", async (errorMessage, code) => {
+	await expect(
+		fixture({ ...message, stopReason: "error", errorMessage }).optimize(input, new AbortController().signal)
+	).rejects.toMatchObject({ promptOptimizeCode: code, message: "提示词优化未完整完成，请检查模型服务；原文已保留" });
+});

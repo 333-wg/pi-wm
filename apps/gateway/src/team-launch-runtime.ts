@@ -101,7 +101,9 @@ export function withTeamLaunch(
 					launch.name,
 					true,
 					toolCallId,
-					launch.artifacts
+					launch.artifacts,
+					true,
+					input.snapshot.model
 				);
 				if (input.signal.aborted) {
 					await teams.stop(team.id);

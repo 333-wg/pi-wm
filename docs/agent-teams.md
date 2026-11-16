@@ -186,7 +186,7 @@ lanes, task results, sender/recipient messages and delivery status. User message
 can target one member or all members. Conversation navigation opens the member's
 normal conversation, including approval controls. Failed members have a retry
 action; the team can be stopped directly from its independent workbench. Selecting
-a member shows its role, state, tokens, cost, assigned tasks and filtered messages.
+a member shows its role, state, tokens, cost and assigned tasks. The communication feed has a separate member filter.
 Template-backed members also show their frozen template revision, model, effort
 and domain-tool policy. Settings > Agents manages the reusable definitions without
 creating a team or binding them to a conversation.
@@ -231,3 +231,20 @@ deduplication, failure/retry, stopping, recovery and lead acceptance. Browser
 tests cover team commands, persistent history, recorded scripted team output,
 desktop/mobile layout, and legacy subagent/goal workflows. The scripted fixture
 is explicitly labelled as test data and is not used by the production runtime.
+
+## 模型分配与新版工作台
+
+新建团队最初只有 Leader，默认继承调用 team 技能或 `/team` 时对话中选定的模型。进入团队后先完成模型分配弹窗；关闭弹窗返回对话，配置状态会持久保存，确认前不会调度 Leader。
+
+- **使用对话默认模型**：Leader 模型可切换，已有和后续成员统一跟随 Leader。成员由 Leader 按实际任务创建，分配任务后自动运行。
+- **自主选择**：Leader 先开始规划，后续成员显示“待选模型”。用户可在画布卡片逐一选择已配置且可用的模型，也可批量确认。确认前该成员不会产生模型调用；已分配的任务、消息保留等待。
+- 修改模型不会打断正在执行的轮次；界面显示“待生效”，空闲后应用到下一轮。失败成员仍需点击“重试”。切换到自主选择保留已有成员的模型，只对后续新成员启用等待；切换到统一模型会启动待选成员。
+- 模型配置有版本冲突检查和原子批量验证，过期配置要求刷新。只读账户、历史回放及已结束团队不能修改。旧团队不自动进入首次配置流程，仍可显式打开模型设置。
+
+工作台采用浅色工作室布局：紧凑标题、可调宽度的流程／通信分栏、底部成员栏。依赖画布支持阶段筛选、平移、缩放、适应画布、定位执行中和全屏；任务多于 18 项时默认阶段概览，用户手动展开后保留选择。阶段和连线仅反映显式任务依赖，不将同一成员先后接手工作推断为依赖。手机端使用流程／通信切换，任务详情在通信侧打开，不在画布下追加长面板。
+
+通信默认显示简洁摘要；任务分配、成员待选模型和完成／失败事件具有结构化说明及任务入口，模型消息可附带面向用户的简短摘要。原文可随时展开；旧自由文本不改写成推测进度。团队最终交付结果提供独立折叠入口，历史回放保留只读。
+
+壁纸直接贯穿工作台：页面、标题、工具栏、通信区、成员栏、任务卡片和输入框保持透明，不增加 Team 专属遮罩、底色或模糊。仅使用边框、选中态和操作按钮建立层次；遵循用户已有的全局壁纸强度设置。模型弹窗保留独立底色。不固定纯白或深色配色，不要求用户切换壁纸后再修改团队页面。
+
+针对本次行为的验证使用隔离数据库和 Demo／脚本运行时，不调用收费模型：`e2e/team-studio.spec.ts` 覆盖首次选择、恢复、批量分配、壁纸、手机与只读回放；`apps/gateway/test/agent-teams.test.ts` 覆盖调用门禁、模式切换、原子验证、权限与活动轮次后的模型切换。

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import WebSocket from "ws";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 async function fixture(script?: (sessionId: string, content: string, signal: AbortSignal) => Promise<void>) {
-	const directory = mkdtempSync(join(tmpdir(), "wuming-agent-team-"));
+	const directory = realpathSync(mkdtempSync(join(tmpdir(), "wuming-agent-team-")));
 	const sessions = new SqliteOrchestratorStore(join(directory, "sessions.db"));
 	const store = new AgentTeamStore(join(directory, "teams.db"));
 	const calls: Array<{ sessionId: string; content: string; runtimeContent: string }> = [];
@@ -111,6 +111,143 @@ const taskInput = (owner?: string) => ({
 });
 
 describe("persistent Agent Teams", () => {
+	it("persists the setup gate across recovery and snapshots the launching model", async () => {
+		const f = await fixture();
+		const sourceModel = { provider: "test", id: "selected-at-launch" };
+		const team = await f.service.start(f.source, "Build", "Prepared", true, "prepared", [], true, sourceModel);
+		expect(team.members).toHaveLength(1);
+		expect(team.members[0]?.model).toEqual(sourceModel);
+		await rounds(f.service, 4);
+		expect(f.calls).toHaveLength(0);
+		f.service.pause();
+		const recovered = new AgentTeamService(f.store, f.runner);
+		cleanups.push(async () => {
+			recovered.pause();
+			await recovered.settled();
+		});
+		await recovered.recover();
+		await rounds(recovered, 3);
+		expect(f.calls).toHaveLength(0);
+		expect(() => recovered.send(team.sessionId, "lead", "bypass", "bypass", true)).toThrow("确认模型");
+		recovered.configureModels(team.id, 0, "shared", sourceModel, "confirmed");
+		recovered.configureModels(team.id, 0, "shared", sourceModel, "confirmed");
+		expect(recovered.get(team.id)?.modelPolicy?.version).toBe(1);
+		await rounds(recovered);
+		expect(f.calls.filter((call) => call.sessionId === team.sessionId)).toHaveLength(1);
+	});
+
+	it("holds manual members, tasks and mail without model calls until explicit assignment", async () => {
+		const f = await fixture();
+		const id = f.service.get(f.lead)!.id;
+		f.service.configureModels(id, 0, "manual", { provider: "test", id: "scripted" }, "manual");
+		const worker = await f.service.addMember(f.lead, "scene", "Build scene", "scene", {
+			model: { provider: "ignored", id: "agent-choice" },
+		});
+		expect(worker.state).toBe("awaiting_model");
+		const task = f.service.createTask(f.lead, taskInput(worker.id), "task");
+		f.service.updateTask(f.lead, { taskId: task.id, status: "in_progress" }, "claim-pending");
+		f.service.send(f.lead, worker.id, "Start when ready", "mail");
+		await rounds(f.service, 5);
+		expect(f.calls.some((call) => call.sessionId === worker.sessionId)).toBe(false);
+		expect(f.service.get(id)?.tasks[0]?.status).toBe("pending");
+		expect(f.service.get(id)?.members[0]?.state).not.toBe("error");
+		const selected = { provider: "test", id: "user-choice" };
+		f.service.assignModels(id, 1, [{ memberId: worker.id, model: selected }], "assign");
+		f.service.assignModels(id, 1, [{ memberId: worker.id, model: selected }], "assign");
+		await rounds(f.service, 3);
+		expect(f.sessions.loadSnapshot(worker.sessionId)?.model).toEqual(selected);
+		expect(f.calls.some((call) => call.sessionId === worker.sessionId)).toBe(true);
+		expect(f.service.get(id)?.tasks[0]?.status).toBe("in_progress");
+		expect(f.service.get(id)?.modelPolicy?.version).toBe(2);
+	});
+
+	it("enforces a shared model on new members and preserves choices when switching to manual", async () => {
+		const f = await fixture();
+		const id = f.service.get(f.lead)!.id;
+		const shared = { provider: "test", id: "shared-model" };
+		f.service.configureModels(id, 0, "shared", shared, "shared");
+		const worker = await f.service.addMember(f.lead, "worker", "Implement", "worker", {
+			model: { provider: "ignored", id: "override" },
+		});
+		expect(worker.model).toEqual(shared);
+		await rounds(f.service);
+		expect(f.sessions.loadSnapshot(f.lead)?.model).toEqual(shared);
+		expect(f.sessions.loadSnapshot(worker.sessionId)?.model).toEqual(shared);
+		f.service.configureModels(id, 1, "manual", shared, "manual");
+		const waiting = await f.service.addMember(f.lead, "review", "Review", "review");
+		expect(waiting.state).toBe("awaiting_model");
+		expect(f.service.get(id)?.members.find((member) => member.id === worker.id)?.state).not.toBe("awaiting_model");
+		expect(() => f.service.assignModels(id, 1, [{ memberId: waiting.id, model: shared }], "stale")).toThrow("已更新");
+		f.service.configureModels(id, 2, "shared", shared, "shared-again");
+		await rounds(f.service);
+		expect(f.service.get(id)?.members.find((member) => member.id === waiting.id)?.state).toBe("idle");
+	});
+
+	it("validates a model batch atomically and rejects stopped teams", async () => {
+		const f = await fixture();
+		const id = f.service.get(f.lead)!.id;
+		const model = { provider: "test", id: "scripted" };
+		f.service.configureModels(id, 0, "manual", model, "manual");
+		const worker = await f.service.addMember(f.lead, "worker", "Implement", "worker");
+		const before = f.service.get(id)!;
+		expect(() =>
+			f.service.assignModels(
+				id,
+				1,
+				[
+					{ memberId: worker.id, model },
+					{ memberId: "missing", model },
+				],
+				"invalid"
+			)
+		).toThrow("成员不存在");
+		expect(f.service.get(id)).toEqual(before);
+		const validating = new AgentTeamService(
+			f.store,
+			f.runner,
+			() => {},
+			() => []
+		);
+		expect(() => validating.assignModels(id, 1, [{ memberId: worker.id, model }], "unavailable")).toThrow("模型不可用");
+		await f.service.stop(id);
+		expect(() => f.service.assignModels(id, 1, [{ memberId: worker.id, model }], "stopped")).toThrow("请先完成");
+	});
+
+	it("queues a model switch without interrupting an active member turn", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const active = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let workerSession = "";
+		const f = await fixture(async (sessionId) => {
+			if (sessionId === workerSession) {
+				started();
+				await gate;
+			}
+		});
+		const id = f.service.get(f.lead)!.id;
+		const original = { provider: "test", id: "scripted" };
+		f.service.configureModels(id, 0, "shared", original, "shared");
+		const worker = await f.service.addMember(f.lead, "worker", "Implement", "worker");
+		workerSession = worker.sessionId;
+		f.service.createTask(f.lead, taskInput(worker.id), "task");
+		f.service.tick();
+		await active;
+		const next = { provider: "test", id: "next" };
+		f.service.configureModels(id, 1, "shared", next, "switch");
+		expect(f.sessions.loadSnapshot(workerSession)?.model).toEqual(original);
+		expect(f.service.get(id)?.members.find((member) => member.id === worker.id)?.pendingModel).toEqual(next);
+		release();
+		await f.service.settled();
+		await rounds(f.service);
+		expect(f.sessions.loadSnapshot(workerSession)?.model).toEqual(next);
+		expect(f.service.get(id)?.members.find((member) => member.id === worker.id)?.pendingModel).toBeUndefined();
+	});
+
 	it("caps teams at five including the lead and keeps creation retries idempotent at capacity", async () => {
 		const f = await fixture();
 		const members: AgentTeamMember[] = [];
@@ -345,6 +482,8 @@ describe("persistent Agent Teams", () => {
 			f.service.updateTask(member.sessionId, input, "result");
 			const results = f.service.get(f.lead)!.messages.filter((message) => message.kind === "result");
 			expect(results).toHaveLength(1);
+			expect(results[0]!.taskId).toBe(task.id);
+			expect(results[0]!.summary).toContain(status === "failed" ? "未能完成" : "已完成");
 			expect(results[0]!.text.length).toBeLessThanOrEqual(20_000);
 			expect(results[0]!.text).toContain("Collaboration checkpoint");
 			expect(results[0]!.text).toContain(
@@ -477,6 +616,10 @@ describe("persistent Agent Teams", () => {
 			onProgress: () => {},
 		});
 		expect(f.service.list("workspace")).toHaveLength(2);
+		await rounds(f.service, 3);
+		expect(f.calls).toHaveLength(0);
+		expect(f.service.get(team.id)?.modelPolicy?.awaitingConfiguration).toBe(true);
+		f.service.configureModels(team.id, 0, "shared", snapshot.model, "choose-models");
 		await rounds(f.service);
 		expect(f.calls).toEqual([
 			expect.objectContaining({
@@ -511,6 +654,7 @@ describe("persistent Agent Teams", () => {
 		const team = f.store.list().find((value) => value.name === "Implement the requested change")!;
 		expect(team.objective).toContain("Do not modify the authentication module");
 		expect(team.messages[0]?.artifacts).toEqual([artifact]);
+		f.service.configureModels(team.id, 0, "shared", team.members[0]!.model!, "choose-models");
 		await f.runner.archiveSession({
 			principalId: "test",
 			idempotencyKey: "archive",
@@ -771,6 +915,9 @@ describe("persistent Agent Teams", () => {
 		expect(execution.session.parentSessionId).toBeUndefined();
 		expect(execution.transcript).toHaveLength(0);
 		await rounds(f.service, 2);
+		expect(f.calls.map((call) => call.sessionId)).toEqual([f.source]);
+		f.service.configureModels(team.id, 0, "shared", source.model, "choose-models");
+		await rounds(f.service, 2);
 		expect(f.calls.map((call) => call.sessionId)).toEqual([f.source, team.sessionId, team.sessionId]);
 		expect(f.calls[2]?.content).toContain("only automatic startup reminder");
 		expect(f.service.get(launched)!.members[0]?.costUsd).toBe(0.01);
@@ -828,6 +975,13 @@ describe("persistent Agent Teams", () => {
 			sessionId: f.source,
 			archived: true,
 		});
+		await rounds(f.service, 2);
+		expect(f.calls).toHaveLength(0);
+		for (const summary of teams) {
+			const team = f.service.get(summary.id)!;
+			if (team.modelPolicy?.awaitingConfiguration)
+				f.service.configureModels(team.id, 0, "shared", team.members[0]!.model!, `choose:${team.id}`);
+		}
 		await rounds(f.service, 2);
 		expect(f.calls).toHaveLength(4);
 		expect(f.calls.every((call) => call.sessionId !== f.source)).toBe(true);
@@ -1420,6 +1574,19 @@ describe("persistent Agent Teams", () => {
 			{ type: "team.stop", sessionId: f.lead },
 			{ type: "team.message", sessionId: f.lead, recipient: "lead", text: "unauthorized" },
 			{ type: "team.retry", sessionId: f.lead, memberId: "lead" },
+			{
+				type: "team.models.configure",
+				teamId,
+				expectedVersion: 0,
+				mode: "shared",
+				leaderModel: { provider: "test", id: "scripted" },
+			},
+			{
+				type: "team.models.assign",
+				teamId,
+				expectedVersion: 0,
+				assignments: [{ memberId: "lead", model: { provider: "test", id: "scripted" } }],
+			},
 		] satisfies Command[])
 			expect(await viewer(command)).toMatchObject({ ok: false, error: { code: "forbidden" } });
 		const outsider = await connect("outsider");

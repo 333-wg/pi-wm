@@ -17,13 +17,8 @@ import { AgentTeamsWorkbench } from "./components/AgentTeamsWorkbench.js";
 import { PersistentAgentTeams } from "./components/PersistentAgentTeams.js";
 import { CompactionActivity } from "./components/CompactionActivity.js";
 import { GoalActivityCard } from "./components/GoalActivityCard";
-import { SkillManagerDialog } from "./components/SkillManagerDialog.js";
 import { McpView } from "./components/McpView.js";
-import { PhoneAccessSettings } from "./components/PhoneAccessSettings.js";
-import { MediaModelSettings } from "./components/MediaModelSettings.js";
 import { ComputerUseSettings, useComputerUse } from "./components/ComputerUseSettings.js";
-import { OfficialAccountSettings } from "./components/OfficialAccountSettings.js";
-import { AgentTemplateSettings } from "./components/AgentTemplateSettings.js";
 import { TeamLaunchNotice } from "./components/TeamLaunchNotice.js";
 import { BackgroundTaskPanel } from "./components/BackgroundTasks.js";
 import { FollowUpQueue } from "./components/FollowUpQueue.js";
@@ -97,7 +92,6 @@ import {
 	X,
 } from "lucide-react";
 import {
-	lazy,
 	Suspense,
 	type ChangeEvent,
 	type CSSProperties,
@@ -183,11 +177,22 @@ import {
 	SuggestMenu,
 	type SuggestItem,
 } from "./components/ComposerSuggest.js";
-import { CommandPalette, modifierLabel, type PaletteEntry } from "./components/CommandPalette.js";
+import type { PaletteEntry } from "./components/CommandPalette.js";
+import { modifierLabel } from "./lib/keyboard.js";
+import { LazyContent } from "./components/LazyContent.js";
+import {
+	TerminalWorkbench,
+	CommandPalette,
+	ShortcutsDialog,
+	EvaluationDialog,
+	SkillManagerDialog,
+	PhoneAccessSettings,
+	AgentTemplateSettings,
+	MediaModelSettings,
+	OfficialAccountSettings,
+} from "./App.lazy.js";
 import { MessageActions } from "./components/MessageActions.js";
-import { ShortcutsDialog } from "./components/ShortcutsDialog.js";
 import { ContextMeter, ContextPill } from "./components/ContextMeter.js";
-import { EvaluationDialog } from "./components/EvaluationDialog.js";
 import { PermissionPicker, type PermissionValue } from "./components/PermissionPicker.js";
 import { ThinkingPicker, thinkingLabel, modelThinkingDescription } from "./components/ThinkingPicker.js";
 import { readStoredPermission, writeStoredPermission } from "./lib/permission-preference.js";
@@ -224,9 +229,6 @@ import { useWallpaper } from "./use-wallpaper.js";
 import { wallpaperStyle } from "./lib/wallpaper.js";
 import { WallpaperLayer } from "./components/WallpaperLayer.js";
 import { applyCompletion, cycleIndex, detectTrigger, quoteMention, type Trigger } from "./lib/suggest.js";
-const TerminalWorkbench = lazy(() =>
-	import("./terminal-view.js").then((module) => ({ default: module.TerminalWorkbench }))
-);
 
 function formatMoney(value: number): string {
 	if (value === 0) return "$0.00";
@@ -2028,7 +2030,6 @@ function Composer({
 			setCaret(value.length);
 			setTrigger(undefined);
 		},
-		failureMessage: t("optimizeFailed"),
 	});
 	const currentDraft = useRef({ text, attachments });
 	currentDraft.current = { text, attachments };
@@ -3903,6 +3904,15 @@ function UsageSettings({
 			</div>
 
 			{error && <div className="usage-settings-error">{error}</div>}
+			{data?.auxiliary && data.auxiliary.requestCount > 0 && (
+				<p className="settings-hint">
+					{t("usageAuxiliary", {
+						requests: data.auxiliary.requestCount,
+						tokens: formatTokens(data.auxiliary.usage.totalTokens),
+						cost: formatMoney(data.auxiliary.usage.costUsd),
+					})}
+				</p>
+			)}
 			<div className="usage-metric-grid">
 				{metrics.map((metric) => (
 					<div className="usage-metric-card" key={metric.label}>
@@ -5173,6 +5183,14 @@ export function App() {
 	);
 	const [welcomeError, setWelcomeError] = useState<string>();
 	const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
+	const [visitedSettings, setVisitedSettings] = useState<Set<SettingsSection>>(() => new Set());
+	useEffect(() => {
+		if (!settingsOpen) {
+			setVisitedSettings(new Set());
+			return;
+		}
+		setVisitedSettings((current) => (current.has(settingsSection) ? current : new Set([...current, settingsSection])));
+	}, [settingsOpen, settingsSection]);
 	const [projectDialogOpen, setProjectDialogOpen] = useState(false);
 	const [paletteOpen, setPaletteOpen] = useState(false);
 	const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -7168,6 +7186,7 @@ export function App() {
 						<PersistentAgentTeams
 							key={selectedWorkspace.id}
 							workspaceId={selectedWorkspace.id}
+							models={client.models}
 							connected={client.connection === "connected"}
 							available={client.capabilities.includes("agent.teams")}
 							listTeams={client.listTeams}
@@ -7303,12 +7322,14 @@ export function App() {
 					/>
 				)}
 				{workbenchView === "skills" && selectedWorkspace && skillManagerOpen && (
-					<SkillManagerDialog
-						key={selectedWorkspace.id}
-						workspaceId={selectedWorkspace.id}
-						onCommand={client.manageSkills}
-						onClose={() => setSkillManagerOpen(false)}
-					/>
+					<LazyContent onClose={() => setSkillManagerOpen(false)}>
+						<SkillManagerDialog
+							key={selectedWorkspace.id}
+							workspaceId={selectedWorkspace.id}
+							onCommand={client.manageSkills}
+							onClose={() => setSkillManagerOpen(false)}
+						/>
+					</LazyContent>
 				)}
 				{workbenchView === "mcp" && selectedWorkspace && (
 					<McpView
@@ -7366,8 +7387,16 @@ export function App() {
 			{mobileNav && (
 				<button className="mobile-scrim" aria-label={t("closeNavigation")} onClick={() => setMobileNav(false)} />
 			)}
-			{paletteOpen && <CommandPalette entries={paletteEntries} onClose={() => setPaletteOpen(false)} />}
-			{shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+			{paletteOpen && (
+				<LazyContent onClose={() => setPaletteOpen(false)}>
+					<CommandPalette entries={paletteEntries} onClose={() => setPaletteOpen(false)} />
+				</LazyContent>
+			)}
+			{shortcutsOpen && (
+				<LazyContent onClose={() => setShortcutsOpen(false)}>
+					<ShortcutsDialog onClose={() => setShortcutsOpen(false)} />
+				</LazyContent>
+			)}
 			{projectDialogOpen && (
 				<ProjectImportDialog
 					local={localGateway}
@@ -7377,21 +7406,23 @@ export function App() {
 				/>
 			)}
 			{evaluationRun && client.snapshot && (
-				<EvaluationDialog
-					run={evaluationRun}
-					workspaceId={client.snapshot.session.workspaceId}
-					datasets={client.evaluationDatasets}
-					artifacts={evaluationArtifacts}
-					enabled={client.capabilities.includes("evaluation")}
-					onRefreshDatasets={client.refreshEvaluationDatasets}
-					onCreateDataset={client.createEvaluationDataset}
-					onDeleteDataset={client.deleteEvaluationDataset}
-					onListEvaluations={client.listRunEvaluations}
-					onEvaluate={client.runEvaluation}
-					onAttest={client.createRunAttestation}
-					onCopyDiagnostic={() => writeClipboardText(runDiagnostic(client.snapshot, evaluationRun))}
-					onClose={() => setEvaluationRun(undefined)}
-				/>
+				<LazyContent onClose={() => setEvaluationRun(undefined)}>
+					<EvaluationDialog
+						run={evaluationRun}
+						workspaceId={client.snapshot.session.workspaceId}
+						datasets={client.evaluationDatasets}
+						artifacts={evaluationArtifacts}
+						enabled={client.capabilities.includes("evaluation")}
+						onRefreshDatasets={client.refreshEvaluationDatasets}
+						onCreateDataset={client.createEvaluationDataset}
+						onDeleteDataset={client.deleteEvaluationDataset}
+						onListEvaluations={client.listRunEvaluations}
+						onEvaluate={client.runEvaluation}
+						onAttest={client.createRunAttestation}
+						onCopyDiagnostic={() => writeClipboardText(runDiagnostic(client.snapshot, evaluationRun))}
+						onClose={() => setEvaluationRun(undefined)}
+					/>
+				</LazyContent>
 			)}
 
 			{settingsOpen && (
@@ -7536,22 +7567,28 @@ export function App() {
 												<div className="settings-page-header">
 													<h3>{t("officialAccountSettings")}</h3>
 												</div>
-												<OfficialAccountSettings
-													request={client.officialAccounts}
-													onModelsChanged={client.refreshModels}
-												/>
+												{(settingsSection === "official" || visitedSettings.has("official")) && (
+													<LazyContent>
+														<OfficialAccountSettings
+															request={client.officialAccounts}
+															onModelsChanged={client.refreshModels}
+														/>
+													</LazyContent>
+												)}
 											</section>
 										)}
 										{settingsSection === "agents" && selectedWorkspace && (
 											<section id="settings-panel-agents" className="settings-pane">
-												<AgentTemplateSettings
-													key={selectedWorkspace.id}
-													workspaceId={selectedWorkspace.id}
-													connected={client.connection === "connected"}
-													models={client.models}
-													tools={client.tools}
-													request={client.agentTemplates}
-												/>
+												<LazyContent>
+													<AgentTemplateSettings
+														key={selectedWorkspace.id}
+														workspaceId={selectedWorkspace.id}
+														connected={client.connection === "connected"}
+														models={client.models}
+														tools={client.tools}
+														request={client.agentTemplates}
+													/>
+												</LazyContent>
 											</section>
 										)}
 										<section id="settings-panel-models" className="settings-pane" hidden={settingsSection !== "models"}>
@@ -7560,23 +7597,26 @@ export function App() {
 												<p>{t("modelSettingsDescription")}</p>
 											</div>
 											{customModelSettings}
-											{client.capabilities.includes("model.media") && (
-												<MediaModelSettings
-													onSetDefaultVideo={client.setDefaultVideoModel}
-													onRemoveVideo={client.removeVideoModel}
-													onSetDefaultImage={client.setDefaultImageModel}
-													onRemoveImage={client.removeImageModel}
-													revision={client.modelSettingsRevision}
-													onListCatalog={client.listCustomMediaModels}
-													onRemoveCatalog={client.removeCustomModel}
-													onConfigureCatalog={client.configureCustomModels}
-													connected={client.connection === "connected"}
-													onList={client.listMediaModels}
-													onSave={client.setMediaModel}
-													onRemove={client.removeMediaModel}
-													onDiscover={client.discoverMediaModels}
-												/>
-											)}
+											{client.capabilities.includes("model.media") &&
+												(settingsSection === "models" || visitedSettings.has("models")) && (
+													<LazyContent>
+														<MediaModelSettings
+															onSetDefaultVideo={client.setDefaultVideoModel}
+															onRemoveVideo={client.removeVideoModel}
+															onSetDefaultImage={client.setDefaultImageModel}
+															onRemoveImage={client.removeImageModel}
+															revision={client.modelSettingsRevision}
+															onListCatalog={client.listCustomMediaModels}
+															onRemoveCatalog={client.removeCustomModel}
+															onConfigureCatalog={client.configureCustomModels}
+															connected={client.connection === "connected"}
+															onList={client.listMediaModels}
+															onSave={client.setMediaModel}
+															onRemove={client.removeMediaModel}
+															onDiscover={client.discoverMediaModels}
+														/>
+													</LazyContent>
+												)}
 										</section>
 										<section
 											id="settings-panel-computer"
@@ -7619,7 +7659,9 @@ export function App() {
 										)}
 										{settingsSection === "phone" && (
 											<section className="settings-pane" id="settings-panel-phone">
-												<PhoneAccessSettings token={client.token} />
+												<LazyContent>
+													<PhoneAccessSettings token={client.token} />
+												</LazyContent>
 											</section>
 										)}
 										<section

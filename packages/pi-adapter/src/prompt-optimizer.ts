@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { PromptOptimizeRequest, PromptOptimizeResult } from "@wuming/protocol";
+import type { PromptOptimizeRequest, PromptOptimizeResult, PromptOptimizeErrorCode, Usage } from "@wuming/protocol";
 import type { PiProviderRegistration } from "./types.js";
 import { guardedModelStream } from "./model-stream.js";
 
@@ -31,8 +31,12 @@ export const PROMPT_OPTIMIZER_SYSTEM = `你是提示词编辑器，不是原文�
 输出前检查：这是用户可以发送给 AI 的提示词，而不是你对原文任务的答复；原意和限制没有变化，也没有虚构缺失信息。
 只返回一个合法 JSON 对象，唯一字段 optimizedPrompt 的值为优化后的提示词字符串。不要 Markdown 代码围栏、解释、前缀或其他字段。`;
 
+function optimizerError(code: PromptOptimizeErrorCode, message: string): Error {
+	return Object.assign(new Error(message), { promptOptimizeCode: code });
+}
+
 function parseOptimizedPrompt(content: string): string {
-	const invalid = () => new Error("模型未返回有效的提示词改写结果；原文已保留");
+	const invalid = () => optimizerError("invalid_output", "模型未返回有效的提示词改写结果；原文已保留");
 	let value: unknown;
 	try {
 		value = JSON.parse(content);
@@ -58,7 +62,11 @@ export function createPromptOptimizer(options: {
 	registerProviders?: () => PiProviderRegistration[] | Promise<PiProviderRegistration[]>;
 	createRuntime?: (provider: string) => Promise<Pick<ModelRuntime, "getModel" | "registerProvider" | "streamSimple">>;
 }) {
-	return async (input: PromptOptimizeRequest, signal: AbortSignal): Promise<PromptOptimizeResult> => {
+	return async (
+		input: PromptOptimizeRequest,
+		signal: AbortSignal,
+		onUsage?: (usage: Usage) => void
+	): Promise<PromptOptimizeResult> => {
 		const runtime = options.createRuntime
 			? await options.createRuntime(input.model.provider)
 			: await ModelRuntime.create({
@@ -70,7 +78,7 @@ export function createPromptOptimizer(options: {
 		for (const entry of (await options.registerProviders?.()) ?? [])
 			runtime.registerProvider(entry.provider, entry.config);
 		const model = runtime.getModel(input.model.provider, input.model.id);
-		if (!model) throw new Error("所选模型不可用，请检查模型配置");
+		if (!model) throw optimizerError("model_unavailable", "所选模型不可用，请检查模型配置");
 		const stream = guardedModelStream(
 			model,
 			(requestSignal) =>
@@ -96,8 +104,30 @@ export function createPromptOptimizer(options: {
 			90_000
 		);
 		const result = await stream.result();
+		// A failed rewrite can still be billable. Record available usage before
+		// cancellation, stop-reason or output-format checks; never record the draft.
+		onUsage?.({
+			inputTokens: result.usage.input,
+			outputTokens: result.usage.output,
+			cacheReadTokens: result.usage.cacheRead,
+			cacheWriteTokens: result.usage.cacheWrite,
+			totalTokens: result.usage.totalTokens,
+			costUsd: result.usage.cost.total,
+		});
 		signal.throwIfAborted();
-		if (result.stopReason !== "stop") throw new Error("提示词优化未完整完成，请稍后重试；原文已保留");
+		if (result.stopReason === "error") {
+			const message = result.errorMessage ?? "";
+			const code: PromptOptimizeErrorCode = /timeout|timed out/i.test(message)
+				? "timeout"
+				: /\b(401|403)\b|unauthorized|invalid.{0,20}api.?key/i.test(message)
+					? "provider_auth"
+					: /\b429\b|rate.?limit/i.test(message)
+						? "rate_limited"
+						: "provider_failed";
+			throw optimizerError(code, "提示词优化未完整完成，请检查模型服务；原文已保留");
+		}
+		if (result.stopReason !== "stop")
+			throw optimizerError("incomplete_output", "提示词优化未完整完成，请稍后重试；原文已保留");
 		const text = result.content
 			.filter((part) => part.type === "text")
 			.map((part) => part.text)

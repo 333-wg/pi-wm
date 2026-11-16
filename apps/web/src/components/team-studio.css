@@ -1,0 +1,1161 @@
+/* The studio uses semantic tokens only: wallpaper palettes and dark themes own its colour. */
+.team-studio {
+	position: relative;
+	padding: 8px 20px 14px;
+	gap: 0;
+	font-size: 13px;
+	background: var(--panel);
+}
+.team-studio .teams-heading {
+	border: 0;
+	padding: 8px 0 14px;
+	gap: 8px;
+}
+.team-studio .teams-heading > div {
+	gap: 8px;
+	min-width: 0;
+}
+.team-studio .teams-heading select {
+	max-width: 220px;
+	border: 0;
+	background: transparent;
+}
+.team-studio button {
+	border-radius: 8px;
+}
+.studio-eyebrow {
+	font-size: 11px;
+	letter-spacing: 0.05em;
+}
+.studio-title {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 20px;
+	padding: 8px 0 12px;
+	flex-shrink: 0;
+}
+.studio-title > div {
+	min-width: 0;
+}
+.team-studio .studio-title h2 {
+	font-size: clamp(20px, 2.2vw, 30px);
+	line-height: 1.3;
+	font-weight: 650;
+	letter-spacing: -0.035em;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.studio-state {
+	display: flex;
+	gap: 7px;
+	align-items: center;
+	color: var(--muted);
+	margin-top: 10px;
+	font-size: 12px;
+}
+.studio-state i,
+.studio-feed-heading i,
+.studio-pending-banner i {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--muted);
+	flex-shrink: 0;
+}
+.studio-state i[data-active="true"],
+.studio-feed-heading i {
+	background: var(--green);
+}
+.studio-progress {
+	font-size: 22px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.studio-progress small {
+	font-size: 11px;
+	color: var(--muted);
+}
+.team-studio .persistent-team-objective {
+	padding: 0 0 12px;
+	gap: 16px;
+	align-items: center;
+	font-size: 11px;
+}
+.team-studio .persistent-team-objective-copy summary {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+.team-studio .persistent-team-objective-copy summary::before {
+	content: "›";
+}
+.team-studio .persistent-team-objective-copy[open] summary::before {
+	content: "⌄";
+}
+.team-studio .persistent-team-objective-copy summary strong {
+	white-space: nowrap;
+	font-weight: 500;
+}
+.team-studio .persistent-team-objective-copy summary > span {
+	margin: 0;
+}
+.team-studio .persistent-team-history {
+	padding: 8px 0;
+}
+.studio-replay-note {
+	padding: 7px 10px;
+	color: var(--amber);
+	background: var(--amber-soft);
+	flex-shrink: 0;
+}
+.team-studio .persistent-team-content {
+	padding-top: 10px;
+	flex: 1;
+	min-height: 0;
+	display: grid;
+	overflow: hidden;
+}
+.team-studio .persistent-team-board {
+	overflow: hidden;
+	min-height: 0;
+}
+.team-studio .persistent-team-toolbar {
+	padding: 0 12px 8px 0;
+	gap: 5px;
+	border: 0;
+}
+.team-studio .persistent-team-toolbar > button {
+	background: transparent;
+	border-color: transparent;
+	padding: 7px 10px;
+}
+.team-studio .persistent-team-toolbar > button[aria-pressed="true"] {
+	color: var(--green);
+	background: var(--green-soft);
+}
+.team-studio .persistent-team-toolbar label {
+	flex: 1;
+	max-width: 220px;
+	margin-left: auto;
+}
+.team-studio .persistent-team-toolbar input {
+	background: transparent;
+	border: 0;
+	font-size: 12px;
+}
+.studio-resizer {
+	cursor: col-resize;
+	position: relative;
+	touch-action: none;
+}
+.studio-resizer::before {
+	content: "";
+	position: absolute;
+	inset: 0 auto 0 3px;
+	width: 1px;
+	background: var(--line);
+}
+.studio-resizer:hover::before,
+.studio-resizer:focus-visible::before {
+	width: 2px;
+	background: var(--green);
+}
+.team-studio .persistent-team-mailbox {
+	background: transparent;
+	border: 0;
+	min-height: 0;
+	padding-left: 18px;
+}
+.studio-feed-heading,
+.studio-feed-heading > div {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.studio-feed-heading {
+	justify-content: space-between;
+	padding: 4px 0 12px;
+	flex-wrap: wrap;
+	flex-shrink: 0;
+}
+.studio-feed-heading h3 {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	font-size: 16px;
+	font-weight: 650;
+}
+.studio-feed-heading button {
+	padding: 4px 9px;
+	background: transparent;
+	border-color: transparent;
+}
+.studio-feed-heading button[aria-pressed="true"] {
+	background: var(--green-soft);
+	color: var(--green);
+	border-color: transparent;
+}
+.studio-feed-filters {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	justify-content: space-between;
+	font-size: 10px;
+	padding-bottom: 8px;
+}
+.studio-feed-filters label {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	white-space: nowrap;
+	color: var(--muted);
+}
+.team-studio .studio-feed-filters select {
+	border: 0;
+	background: transparent;
+	padding: 4px 0;
+	font-size: 11px;
+	max-width: 140px;
+}
+.team-studio .persistent-team-messages {
+	padding: 8px 0 12px;
+	min-height: 0;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+}
+.team-studio .persistent-team-messages article {
+	display: flex;
+	gap: 10px;
+	padding: 10px 8px 14px 0;
+	margin: 0;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	box-shadow: none;
+}
+.team-studio .persistent-team-messages article > div {
+	min-width: 0;
+	flex: 1;
+}
+.team-studio .persistent-team-messages header {
+	gap: 4px;
+	font-size: 11px;
+}
+.team-studio .persistent-team-messages p {
+	max-height: none;
+	overflow: visible;
+	font-size: 12px;
+	line-height: 1.8;
+	margin: 6px 0;
+}
+.team-studio .persistent-team-messages .studio-message-summary {
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.team-studio .persistent-team-messages details {
+	font-size: 11px;
+}
+.team-studio .persistent-team-messages summary {
+	color: var(--green);
+	cursor: pointer;
+	margin: 4px 0;
+}
+.team-studio .persistent-team-messages small,
+.team-studio .persistent-team-messages time {
+	color: var(--muted);
+	font-size: 10px;
+}
+.team-avatar {
+	display: inline-grid;
+	place-items: center;
+	width: 29px;
+	height: 29px;
+	flex: 0 0 29px;
+	border-radius: 50%;
+	color: var(--green);
+	background: var(--green-soft);
+	font-weight: 600;
+	font-size: 12px;
+}
+.team-studio .persistent-team-mailbox form {
+	padding: 10px;
+	margin: auto 0 0;
+	border: 1px solid var(--line);
+	border-radius: 14px;
+	background: var(--surface);
+	flex-shrink: 0;
+	align-items: end;
+}
+.team-studio .persistent-team-mailbox form select,
+.team-studio .persistent-team-mailbox form textarea {
+	border: 0;
+	background: transparent;
+	padding: 3px;
+	font-size: 12px;
+}
+.team-studio .persistent-team-mailbox form textarea {
+	min-height: 50px;
+	max-height: 120px;
+	resize: none;
+}
+.team-studio .persistent-team-mailbox form button {
+	border-radius: 50%;
+	min-height: 32px;
+	width: 32px;
+	padding: 0;
+}
+.team-studio .persistent-team-members {
+	border: 1px solid var(--line);
+	border-radius: 14px;
+	padding: 8px;
+	gap: 0;
+	margin-top: 12px;
+	background: var(--surface);
+	min-height: 70px;
+}
+.team-studio .persistent-team-member {
+	flex: 1 0 150px;
+	min-width: 0;
+	max-width: 260px;
+	gap: 8px;
+	padding: 4px 12px;
+	background: transparent;
+	border: 0;
+	border-radius: 8px;
+	box-shadow: none;
+	align-items: center;
+	flex-wrap: nowrap;
+}
+.team-studio .persistent-team-member + .persistent-team-member {
+	border-left: 1px solid var(--line);
+}
+.team-studio .persistent-team-member > div {
+	gap: 1px;
+}
+.team-studio .persistent-team-member strong {
+	font-size: 12px;
+}
+.team-studio .persistent-team-member small {
+	font-size: 10px;
+}
+.team-studio .persistent-team-member .team-avatar {
+	color: var(--green);
+}
+.team-studio .studio-model-chip {
+	justify-content: start;
+	min-height: 22px;
+	padding: 2px 0;
+	border: 0;
+	background: transparent;
+	color: var(--muted);
+	font-size: 10px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	display: block;
+	text-align: left;
+}
+.team-studio .persistent-team-detail,
+.team-studio .persistent-member-detail {
+	flex: 1;
+	min-height: 0;
+	max-height: none;
+	overflow: auto;
+	padding: 8px 0 16px;
+	border: 0;
+	font-size: 12px;
+}
+.team-studio .persistent-team-detail p,
+.team-studio .persistent-member-detail p {
+	max-height: none;
+	overflow: visible;
+	line-height: 1.8;
+}
+.studio-member-model {
+	display: grid;
+	gap: 8px;
+	margin: 12px 0;
+}
+.studio-start-state {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	text-align: center;
+	padding: 16px;
+}
+.studio-start-state .team-avatar {
+	width: 48px;
+	height: 48px;
+	flex-basis: 48px;
+	font-size: 20px;
+}
+.studio-start-state p,
+.studio-start-state small {
+	color: var(--muted);
+	margin: 0;
+}
+.studio-pending-banner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	font-size: 11px;
+	padding: 7px 12px 7px 0;
+	flex-shrink: 0;
+}
+.studio-pending-banner > span {
+	display: flex;
+	gap: 7px;
+	align-items: center;
+	color: var(--amber);
+}
+.studio-pending-banner i {
+	background: var(--amber);
+}
+.studio-pending-banner button {
+	color: var(--green);
+	background: var(--green-soft);
+	border-color: transparent;
+	font-size: 11px;
+}
+.team-studio-canvas {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+	position: relative;
+}
+.team-stage-strip {
+	display: flex;
+	overflow: auto;
+	flex-shrink: 0;
+	gap: 12px;
+	padding: 6px 8px 10px 0;
+	scrollbar-width: thin;
+}
+.team-studio .team-stage-strip button {
+	flex: 1 0 130px;
+	min-width: 0;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	justify-content: flex-start;
+	padding: 6px 4px;
+	gap: 9px;
+}
+.team-stage-strip span,
+.team-stage-strip small {
+	font-size: 10px;
+	color: var(--muted);
+}
+.team-stage-strip strong {
+	font-weight: 550;
+	font-size: 12px;
+}
+.team-studio .team-stage-strip button.selected {
+	border-bottom: 2px solid var(--green);
+}
+.team-studio .persistent-team-board .studio-canvas-scroll {
+	flex: 1 1 0;
+	min-height: 0;
+	overflow: auto;
+	background-color: var(--panel);
+	background-image: radial-gradient(var(--line) 0.7px, transparent 0.7px);
+	background-size: 22px 22px;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	cursor: grab;
+}
+.studio-canvas-size {
+	position: relative;
+	margin: auto;
+}
+.studio-canvas-nodes {
+	position: relative;
+	transform-origin: top left;
+}
+.studio-edges {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	overflow: visible;
+}
+.studio-edges path:not(defs path) {
+	fill: none;
+	stroke: var(--line-strong);
+	stroke-width: 1.4;
+}
+.studio-edges path.complete {
+	stroke: var(--green);
+	opacity: 0.7;
+}
+.team-studio .studio-task {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	justify-content: start;
+	gap: 12px;
+	padding: 16px;
+	box-sizing: border-box;
+	background: var(--surface);
+	color: var(--text);
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 4%, transparent);
+	text-align: left;
+	transform: none;
+	animation: none;
+	transition: box-shadow, transform;
+}
+.team-studio .studio-task::before,
+.team-studio .studio-task::after {
+	display: none;
+}
+.team-studio .studio-task > div {
+	min-width: 0;
+	display: grid;
+	gap: 4px;
+}
+.team-studio .studio-task strong {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+	line-height: 1.4;
+	font-size: 14px;
+	font-weight: 600;
+}
+.team-studio .studio-task span:not(.team-avatar) {
+	color: var(--muted);
+	font-size: 11px;
+}
+.team-studio .studio-task small {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--muted);
+	font-size: 10px;
+}
+.team-studio .studio-task.state-in_progress {
+	border-color: var(--green);
+	border-left-width: 3px;
+}
+.team-studio .studio-task.state-completed small {
+	color: var(--green);
+}
+.team-studio .studio-task.state-failed small {
+	color: var(--red);
+}
+.team-studio .studio-task.selected {
+	outline: 2px solid var(--green);
+	outline-offset: 2px;
+}
+.team-studio .studio-task.studio-assignment {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
+	border-color: color-mix(in srgb, var(--amber) 40%, var(--line));
+	padding: 14px;
+	cursor: default;
+}
+.studio-assignment header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.studio-assignment header strong {
+	flex: 1;
+}
+.team-studio .studio-assignment header small {
+	color: var(--amber);
+	font-size: 9px;
+}
+.studio-assignment p {
+	font-size: 11px;
+	line-height: 1.6;
+	margin: 0;
+	color: var(--muted);
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.studio-assignment-controls {
+	display: grid;
+	gap: 7px;
+	min-width: 0;
+}
+.team-studio .studio-assignment-controls select {
+	width: 100%;
+	font-size: 11px;
+	padding: 7px;
+	border-radius: 7px;
+}
+.studio-assignment-controls > button {
+	justify-self: end;
+	font-size: 11px;
+	padding: 4px 8px;
+}
+.studio-assignment-controls > small {
+	color: var(--muted);
+	font-size: 10px;
+}
+.studio-list-assignment {
+	padding: 12px;
+	border-bottom: 1px solid var(--line);
+}
+.studio-canvas-controls {
+	flex-shrink: 0;
+	display: flex;
+	gap: 3px;
+	align-items: center;
+	padding: 8px 10px 0 0;
+	font-size: 10px;
+}
+.studio-canvas-controls > span {
+	margin-right: auto;
+	color: var(--muted);
+}
+.team-studio .studio-canvas-controls button {
+	font-size: 10px;
+	background: transparent;
+	border-color: transparent;
+	padding: 4px 6px;
+	min-height: 26px;
+}
+.team-studio .team-studio-canvas.is-expanded {
+	position: fixed;
+	inset: 12px;
+	z-index: 100;
+	padding: 20px;
+	background: var(--wallpaper-solid-panel, var(--panel));
+	border: 1px solid var(--line);
+	border-radius: 16px;
+}
+.team-stage-overview {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 18px;
+	padding: 20px;
+}
+.team-studio .team-stage-overview button {
+	min-width: 175px;
+	flex: 1 0 175px;
+	max-width: 250px;
+	display: grid;
+	text-align: left;
+	justify-items: start;
+	justify-content: start;
+	padding: 22px;
+	border-radius: 12px;
+}
+.team-stage-overview span {
+	font-size: 26px;
+	color: var(--muted);
+}
+.team-stage-overview p,
+.team-stage-overview small {
+	color: var(--muted);
+}
+.studio-mobile-tabs {
+	display: none;
+}
+.team-model-dialog {
+	box-sizing: border-box;
+	width: min(880px, calc(100vw - 40px));
+	max-height: calc(100dvh - 40px);
+	padding: 30px;
+	border: 1px solid var(--line);
+	border-radius: 20px;
+	background: var(--panel);
+	color: var(--text);
+	box-shadow: 0 20px 80px color-mix(in srgb, var(--text) 16%, transparent);
+	font-size: 14px;
+}
+.team-model-dialog::backdrop {
+	background: color-mix(in srgb, var(--text) 22%, transparent);
+	backdrop-filter: blur(4px);
+}
+.team-model-dialog form > header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 16px;
+}
+.team-model-dialog header > span {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	color: var(--green);
+	font-size: 11px;
+	letter-spacing: 0.09em;
+}
+.team-model-dialog h2 {
+	font-size: clamp(22px, 2.5vw, 30px);
+	line-height: 1.4;
+	margin: 0;
+	letter-spacing: -0.025em;
+}
+.team-model-dialog form > p {
+	color: var(--muted);
+	line-height: 1.75;
+	font-size: 13px;
+}
+.team-leader-model {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 24px 0;
+	border-bottom: 1px solid var(--line);
+}
+.team-leader-model > div {
+	flex: 1;
+	min-width: 0;
+}
+.team-leader-model small {
+	display: block;
+	font-size: 11px;
+	color: var(--muted);
+	margin-top: 5px;
+}
+.team-leader-model select {
+	max-width: 280px;
+}
+.team-model-dialog select {
+	padding: 9px 12px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	min-width: 0;
+}
+.team-model-options {
+	border: 0;
+	padding: 0;
+	margin: 22px 0 14px;
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 16px;
+}
+.team-model-options > label {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 22px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	cursor: pointer;
+	line-height: 1.6;
+}
+.team-model-options > label.selected {
+	border-color: var(--green);
+	background: var(--green-soft);
+}
+.team-model-options > label > input {
+	position: absolute;
+	right: 18px;
+	top: 20px;
+	accent-color: var(--green);
+	width: 16px;
+	height: 16px;
+}
+.team-model-options > label > svg {
+	color: var(--green);
+	margin-bottom: 12px;
+}
+.team-model-options strong {
+	font-size: 19px;
+	font-weight: 600;
+}
+.team-model-options span {
+	font-size: 13px;
+}
+.team-model-options small {
+	color: var(--muted);
+	font-size: 12px;
+}
+.team-model-dialog .team-model-scope {
+	font-size: 11px;
+}
+.team-model-dialog footer {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	margin-top: 22px;
+	padding-top: 20px;
+	border-top: 1px solid var(--line);
+}
+.team-model-dialog button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 7px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	color: var(--text);
+	background: var(--surface);
+	min-height: 34px;
+	padding: 7px 12px;
+	font: inherit;
+	cursor: pointer;
+}
+.team-model-dialog button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.team-model-dialog button.teams-primary {
+	color: var(--solid-text);
+	background: var(--solid);
+	border-color: var(--solid);
+}
+.team-model-dialog :focus-visible {
+	outline: 2px solid var(--green);
+	outline-offset: 3px;
+}
+/* Keep the wallpaper continuous. Local controls inherit the user's panel concentration. */
+.app-shell[data-wallpaper="true"] .team-studio {
+	background: transparent;
+}
+.app-shell[data-wallpaper="true"]
+	.team-studio
+	:is(
+		.persistent-team-toolbar,
+		.team-stage-strip,
+		.studio-canvas-controls,
+		.studio-feed-heading,
+		.studio-feed-filters
+	) {
+	background: transparent;
+}
+.app-shell[data-wallpaper="true"] .team-model-dialog {
+	background: color-mix(in srgb, var(--wallpaper-solid-panel) 94%, transparent);
+	backdrop-filter: blur(24px);
+}
+.app-shell[data-wallpaper="true"] .team-studio .studio-assignment {
+	background: transparent;
+	box-shadow: none;
+}
+.app-shell[data-wallpaper="true"] .team-studio .persistent-team-mailbox form {
+	background: transparent;
+}
+.app-shell[data-wallpaper="true"] .team-studio .team-stage-overview button {
+	background: transparent;
+}
+@media (max-width: 1100px) {
+	.team-studio {
+		padding: 6px 12px 10px;
+	}
+	.team-studio .teams-heading select {
+		max-width: 160px;
+	}
+	.studio-eyebrow {
+		display: none;
+	}
+	.team-studio .persistent-team-mailbox {
+		padding-left: 10px;
+	}
+	.team-studio .persistent-team-member {
+		flex-basis: 135px;
+		padding: 4px 8px;
+	}
+	.studio-feed-heading h3 {
+		font-size: 14px;
+	}
+}
+@media (max-width: 760px) {
+	.team-studio {
+		padding: 6px 10px 8px;
+	}
+	.team-studio .teams-heading {
+		flex-wrap: wrap;
+		padding-bottom: 5px;
+	}
+	.team-studio .teams-heading select {
+		width: 190px;
+		max-width: 190px;
+	}
+	.team-studio .teams-heading > div {
+		flex-wrap: nowrap;
+	}
+	.team-studio .teams-heading > div:last-child {
+		gap: 4px;
+	}
+	.team-studio .teams-heading button {
+		font-size: 10px;
+		padding: 4px 7px;
+	}
+	.studio-title {
+		padding: 6px 0;
+		gap: 6px;
+	}
+	.team-studio .studio-title h2 {
+		font-size: 19px;
+	}
+	.studio-state {
+		font-size: 10px;
+		margin-top: 6px;
+	}
+	.studio-progress {
+		font-size: 18px;
+	}
+	.studio-progress small {
+		font-size: 9px;
+	}
+	.team-studio .persistent-team-objective {
+		flex-direction: row;
+		padding-bottom: 6px;
+		gap: 6px;
+		font-size: 10px;
+	}
+	.team-studio .persistent-team-objective > span {
+		display: none;
+	}
+	.studio-mobile-tabs {
+		display: flex;
+		gap: 6px;
+		padding: 6px 0;
+		flex-shrink: 0;
+	}
+	.studio-mobile-tabs button {
+		flex: 1;
+	}
+	.team-studio .persistent-team-content {
+		display: flex !important;
+		flex-direction: column;
+		overflow: hidden;
+		padding-top: 2px;
+	}
+	.team-studio .persistent-team-board,
+	.team-studio .persistent-team-mailbox {
+		flex: 1;
+		min-height: 0;
+		max-height: none;
+	}
+	.team-studio .persistent-team-content[data-panel="flow"] .persistent-team-mailbox,
+	.team-studio .persistent-team-content[data-panel="messages"] .persistent-team-board {
+		display: none;
+	}
+	.studio-resizer {
+		display: none;
+	}
+	.team-studio .persistent-team-mailbox {
+		padding: 0;
+	}
+	.team-studio .persistent-team-members {
+		padding: 5px;
+		margin-top: 6px;
+		min-height: 66px;
+	}
+	.team-studio .persistent-team-member {
+		flex: 0 0 142px;
+	}
+	.team-studio .team-stage-strip {
+		padding-bottom: 4px;
+		gap: 4px;
+	}
+	.team-studio .team-stage-strip button {
+		flex-basis: 100px;
+		gap: 5px;
+	}
+	.studio-canvas-controls {
+		padding-top: 4px;
+	}
+	.studio-canvas-controls > span {
+		font-size: 9px;
+	}
+	.studio-pending-banner {
+		flex-wrap: wrap;
+		font-size: 10px;
+		padding: 4px 0;
+	}
+	.team-model-dialog {
+		width: calc(100vw - 20px);
+		padding: 20px;
+		max-height: calc(100dvh - 24px);
+		border-radius: 16px;
+	}
+	.team-model-options {
+		grid-template-columns: 1fr;
+		gap: 10px;
+		margin-top: 12px;
+	}
+	.team-model-options > label {
+		padding: 14px;
+		gap: 5px;
+	}
+	.team-model-options > label > svg {
+		width: 20px;
+		height: 20px;
+		margin-bottom: 0;
+	}
+	.team-model-options strong {
+		font-size: 16px;
+	}
+	.team-leader-model {
+		flex-wrap: wrap;
+		padding: 14px 0;
+	}
+	.team-leader-model select {
+		width: 100%;
+		max-width: none;
+	}
+	.team-model-dialog footer {
+		margin-top: 14px;
+		padding-top: 12px;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.team-studio * {
+		scroll-behavior: auto !important;
+		transition: none !important;
+		animation: none !important;
+	}
+}
+
+/* Reserve the vertical workspace for work, including two simultaneous model requests. */
+.team-studio .studio-title {
+	padding: 4px 0 8px;
+}
+.team-studio .studio-state {
+	margin-top: 6px;
+}
+.team-studio .team-stage-strip {
+	padding-top: 2px;
+	padding-bottom: 4px;
+}
+.team-studio .team-stage-strip button {
+	min-height: 26px;
+	padding: 4px;
+}
+.team-studio .persistent-team-members {
+	box-sizing: border-box;
+	min-height: 66px;
+	padding: 6px;
+	margin-top: 8px;
+}
+.team-studio .studio-assignment {
+	gap: 6px;
+	padding: 12px;
+}
+.team-studio .studio-assignment-controls {
+	gap: 5px;
+}
+
+/* Wallpaper is the page background; Team adds no veil, tint or blur. */
+.app-shell[data-wallpaper="true"] .team-studio {
+	--studio-reading: transparent;
+	--surface: transparent;
+	--surface-hover: color-mix(in srgb, var(--green) 8%, transparent);
+	--green-soft: color-mix(in srgb, var(--green) 10%, transparent);
+	--muted: var(--text-soft);
+}
+.app-shell[data-wallpaper="true"] .team-studio::before {
+	content: none;
+	background: transparent;
+	backdrop-filter: none;
+}
+.app-shell[data-wallpaper="true"]
+	.team-studio
+	:is(
+		.teams-heading,
+		.studio-title,
+		.persistent-team-objective,
+		.persistent-team-history,
+		.persistent-team-toolbar,
+		.team-stage-strip,
+		.studio-canvas-controls,
+		.studio-pending-banner,
+		.studio-mobile-tabs,
+		.persistent-team-mailbox,
+		.persistent-team-members,
+		.studio-start-state
+	) {
+	background: transparent;
+	border-radius: 0;
+}
+.app-shell[data-wallpaper="true"] .team-studio .persistent-team-members {
+	border: 0;
+	border-top: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+}
+.app-shell[data-wallpaper="true"] .team-studio .persistent-team-mailbox {
+	padding-right: 10px;
+}
+.app-shell[data-wallpaper="true"]
+	.team-studio
+	:is(.studio-task, .team-stage-overview button, .persistent-team-task-list button, .persistent-team-mailbox form) {
+	background: var(--studio-reading);
+	box-shadow: none;
+	text-shadow: none;
+	border-color: color-mix(in srgb, var(--text) 16%, transparent);
+}
+.app-shell[data-wallpaper="true"] .team-studio .studio-assignment {
+	background: transparent;
+	border-color: color-mix(in srgb, var(--amber) 30%, transparent);
+}
+.app-shell[data-wallpaper="true"] .team-studio .studio-task.state-in_progress {
+	border-left-color: var(--green);
+}
+.app-shell[data-wallpaper="true"]
+	.team-studio
+	:is(.persistent-team-member, .persistent-team-messages article, .persistent-team-detail, .persistent-member-detail) {
+	background: transparent;
+	text-shadow: none;
+}
+.app-shell[data-wallpaper="true"]
+	.team-studio
+	:is(.teams-heading button, .studio-assignment-controls select, .studio-member-model select) {
+	background: transparent;
+}
+.app-shell[data-wallpaper="true"] .team-studio select option {
+	background: var(--wallpaper-solid-panel);
+	color: var(--text);
+}
+.team-model-dialog .sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+.studio-team-result {
+	flex-shrink: 0;
+	padding: 8px 10px;
+	font-size: 12px;
+	background: var(--studio-reading, var(--surface));
+	border-radius: 8px;
+}
+.studio-team-result summary {
+	cursor: pointer;
+	color: var(--green);
+}
+.studio-team-result p {
+	max-height: 140px;
+	overflow: auto;
+	white-space: pre-wrap;
+	line-height: 1.8;
+}
+.team-studio .studio-result-link {
+	padding: 3px 0;
+	font-size: 11px;
+	color: var(--green);
+	border: 0;
+	background: transparent;
+}

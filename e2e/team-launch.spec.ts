@@ -34,10 +34,13 @@ test("selected team skill creates a real team without a solo model turn and surv
 	await page.getByRole("button", { name: "打开团队", exact: true }).click();
 	await expect(page.locator(".persistent-teams .persistent-team-member")).toHaveCount(1);
 	await expect(page.locator(".persistent-teams")).toContainText(task);
+	await page.getByRole("button", { name: "进入团队", exact: true }).click();
 	await expect(page.locator(".persistent-team-messages article").first()).toContainText("已投递");
 	await page.getByRole("tab", { name: "对话", exact: true }).click();
 	await restartGateway();
 	await page.reload();
+	await page.getByRole("button", { name: "打开导航", exact: true }).click();
+	await page.locator(".session-entry").filter({ hasText: task }).first().click();
 	await expect(receipt.locator("code")).toHaveText(teamId);
 	await page.getByRole("button", { name: "打开团队", exact: true }).click();
 	await expect(page.getByRole("combobox", { name: "项目团队" }).locator("option")).toHaveCount(1);
@@ -77,19 +80,29 @@ test("unstaffed Demo launch exposes a durable startup error and an explicit boun
 	await expect(page.locator(".team-launch-notice")).toContainText("团队已创建");
 	await page.getByRole("button", { name: "打开团队", exact: true }).click();
 	const team = page.locator(".persistent-teams");
+	await page.getByRole("button", { name: "进入团队", exact: true }).click();
 	const failed = team.locator(".persistent-team-member.member-error");
-	await expect(failed).toContainText("startup incomplete");
+	await expect(failed.getByRole("button", { name: "重试", exact: true })).toHaveAttribute(
+		"title",
+		/startup incomplete/
+	);
 	await expect(team.locator(".persistent-team-messages article")).toHaveCount(2);
 	await failed.getByRole("button", { name: "重试", exact: true }).click();
 	await expect(team.locator(".persistent-team-messages article")).toHaveCount(4);
-	await expect(failed).toContainText("startup incomplete");
+	await expect(failed.getByRole("button", { name: "重试", exact: true })).toHaveAttribute(
+		"title",
+		/startup incomplete/
+	);
 	await failed.getByRole("button", { name: "查看成员 Lead", exact: true }).click();
 	await expect(team.getByRole("region", { name: "成员详情", exact: true })).toContainText("then retry the lead.");
 	await page.screenshot({ path: testInfo.outputPath("team-startup-attention-desktop.png") });
 	await restartGateway();
 	await page.reload();
 	await page.getByRole("tab", { name: "Agent Teams", exact: true }).click();
-	await expect(failed).toContainText("startup incomplete");
+	await expect(failed.getByRole("button", { name: "重试", exact: true })).toHaveAttribute(
+		"title",
+		/startup incomplete/
+	);
 	await expect(team.locator(".persistent-team-messages article")).toHaveCount(4);
 	await page.setViewportSize({ width: 390, height: 844 });
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);

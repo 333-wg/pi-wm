@@ -1252,7 +1252,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 				promptSnippet: "Click, type, select, scroll, navigate, wait, or manage browser tabs",
 				promptGuidelines: browser.run
 					? [
-							"For a known local verification flow, prefer browser_action action=batch with 1-12 steps using stable selector/role/text targets. End with a wait for the expected result; use screenshot=true only for needed visual evidence. The batch returns one final snapshot and diagnostics. Do not repeat equivalent checks. On failure inspect failedStep and completedSteps; never blindly replay successful side effects. Use single actions when the next step depends on inspecting an unknown page.",
+							"When browser verification is needed and the local flow is known, default to browser_action action=batch with 1-12 steps using stable selector/role/text targets. Combine actions, the expected-state wait and necessary final evidence in one call instead of observing between predictable steps. End with a wait for the expected result; use screenshot=true only for needed visual evidence. The batch returns one final snapshot and diagnostics. Do not repeat equivalent checks. On failure inspect failedStep and completedSteps; never blindly replay successful side effects. Use single actions when the next step depends on inspecting an unknown page.",
 						]
 					: [],
 				parameters: Type.Object({

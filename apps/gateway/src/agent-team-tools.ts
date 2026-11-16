@@ -28,13 +28,13 @@ export function createAgentTeamTools(sessionId: string, service: AgentTeamServic
 				"Launch an independent project-level Agent Team when the user's actual intent is to perform a task using team collaboration, including natural-language requests. Mere keywords, quotes, negation or questions about the feature do not authorize launch. Creates a dedicated lead, shared board and durable mailboxes. The lead chooses and creates suitable teammates and assigns work asynchronously, even without configured templates. This chat is only the launcher, NOT a member: after success report the team ID and return to the user; do not call Agent/TaskCreate from this chat. Include all requirements, explicit member/role assignments, exclusive-roster constraints and model choices in objective. Multiple distinct requests may launch teams; do not duplicate a successful host or tool launch.",
 			parameters: Type.Object({ objective: Text, name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })) }),
 			execute: async (id, input) =>
-				result(await service.start(sessionId, input.objective, input.name, true, `tool:${id}`)),
+				result(await service.start(sessionId, input.objective, input.name, true, `tool:${id}`, [], true)),
 		}),
 		defineTool({
 			name: "Agent",
 			label: "Agent",
 			description:
-				"Team lead: proactively create a persistent teammate whenever useful independent implementation, repair or verification needs capacity or expertise, at startup or later; do not wait for a user reminder. Reuse suitable retained members first, respect exclusive rosters and the 5-member limit including lead, and avoid duplicate roles without distinct work. Without templateName, role defines a task-specific member; no saved template or user setup is required. Optional templateName reuses a suitable configuration from AgentTemplates. Preserve explicit user member/role assignments; never replace a named template silently or bypass its tool limits. Explicit model/thinkingLevel overrides template values, otherwise inherit the lead. Template prompt, tools and color are frozen on creation. Returns immediately; create and explicitly assign the first task with TaskCreate/TaskUpdate so work can start. Members retain sessions and run concurrently; this does not wait for a report.",
+				"Team lead: proactively create a persistent teammate whenever useful independent implementation, repair or verification needs capacity or expertise, at startup or later; do not wait for a user reminder. Reuse suitable retained members first, respect exclusive rosters and the 5-member limit including lead, and avoid duplicate roles without distinct work. Without templateName, role defines a task-specific member; no saved template or user setup is required. Optional templateName reuses a suitable configuration from AgentTemplates. Preserve explicit user member/role assignments; never replace a named template silently or bypass its tool limits. The user controls model policy: shared mode enforces the Leader model; manual mode creates an awaiting_model member that cannot run before user confirmation. Assign its first task as pending and continue independent work. For legacy teams, explicit model/thinkingLevel overrides template values, otherwise inherit the lead. Template prompt, tools and color are frozen on creation. Returns immediately; create and explicitly assign the first task with TaskCreate/TaskUpdate so work can start. Members retain sessions and run concurrently; this does not wait for a report.",
 			parameters: Type.Object({
 				name: Type.String({ minLength: 1, maxLength: 80 }),
 				role: Text,
@@ -120,9 +120,29 @@ export function createAgentTeamTools(sessionId: string, service: AgentTeamServic
 			label: "SendMessage",
 			description:
 				"Send a real durable message to a member ID or 'all' for broadcast. Sender is derived from your session. Idle recipients are automatically woken; busy recipients receive mail on their next turn. Ordinary assistant text does NOT reach teammates. Avoid acknowledgement loops; send only actionable information.",
-			parameters: Type.Object({ recipient: Id, text: Text }),
+			parameters: Type.Object({
+				recipient: Id,
+				text: Text,
+				summary: Type.Optional(
+					Type.String({
+						minLength: 1,
+						maxLength: 1000,
+						description:
+							"Plain-language user-facing summary: 1-2 short sentences describing progress or blockers; retain technical details in text.",
+					})
+				),
+			}),
 			execute: async (id, input) =>
-				result({ messageIds: service.send(sessionId, input.recipient, input.text, `tool:${sessionId}:${id}`) }),
+				result({
+					messageIds: service.send(
+						sessionId,
+						input.recipient,
+						input.text,
+						`tool:${sessionId}:${id}`,
+						false,
+						input.summary
+					),
+				}),
 		}),
 		defineTool({
 			name: "TeamFinish",

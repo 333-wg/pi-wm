@@ -166,7 +166,9 @@ describe("buildWumingSystemPrompt guidelines", () => {
 		expect(withExec).toContain("Candidate links and retrieved page text are not verified facts");
 		expect(withExec).toContain("do not retry the same or alternate CDN with exec/curl");
 		expect(withExec).toContain("do not silently switch to server/Gateway downloads");
-		expect(withExec).toContain("use the browser tools after implementation");
+		expect(withExec).toContain(
+			"For implementation checks, open the actual page only when the verification policy calls for"
+		);
 		expect(withExec).toContain("browser_open requires a non-empty url argument");
 		expect(withExec).toContain("Browser refs are bound to a tab and snapshot version");
 		expect(withExec).toContain("Use preview_start, not exec");
@@ -344,7 +346,7 @@ describe("buildWumingSystemPrompt environment", () => {
 		expect(guidelines).toContain("do not add mobile work or report missing mobile coverage as incomplete");
 		expect(guidelines).not.toContain("at desktop (1440x900) and mobile (390x844) viewport sizes");
 		expect(guidelines).toContain("Inspect the returned image content yourself");
-		expect(guidelines).toContain("fresh screenshots after the last edit");
+		expect(guidelines).toContain("fresh screenshots after the last relevant visual edit");
 		expect(guidelines).toContain("visual verification as incomplete");
 		expect(section(build([]), "tool_guidelines")).not.toContain("complete a visual review loop");
 	});
@@ -490,6 +492,13 @@ describe("Pi-Wm task and permission contracts", () => {
 		expect(prompt).toContain("about 60 seconds");
 		expect(prompt).toContain("After about 90 seconds, stop adding checks");
 		expect(prompt).toContain("An evidence timeout is not a reason to replay successful interactions");
+		expect(prompt).toContain("a script being available does not make it mandatory");
+		expect(prompt).toContain("changing a frontend file alone does not require browser verification");
+		expect(prompt).toContain("only when existing coverage does not protect the changed behavior");
+		expect(prompt).toContain("A test selection that found no tests is missing evidence, not a pass");
+		expect(prompt).toContain("unrelated prose edits, committing or preparing a final answer do not invalidate it");
+		expect(prompt).toContain("Do not add a second review, browser route, full suite or model-driven verification loop");
+		expect(prompt).toContain("A required check still pending is unverified, not passed");
 	});
 
 	it("reuses ready previews and limits unrelated environment repairs", () => {
@@ -499,6 +508,14 @@ describe("Pi-Wm task and permission contracts", () => {
 		expect(guidelines).toContain("Do not restart a healthy preview");
 		expect(guidelines).toContain("do not request another snapshot or diagnostics that duplicate the batch result");
 		expect(guidelines).toContain("static text or styling changed");
+		expect(guidelines).toContain("Default to a bounded batch");
+		expect(guidelines).toContain("without intermediate observations unless the next step depends on them");
+		for (const blanketRule of [
+			"For frontend changes, verify",
+			"For frontend or visual changes, complete",
+			"For frontend work, use the browser tools after implementation",
+		])
+			expect(guidelines).not.toContain(blanketRule);
 	});
 
 	it("prefers active usable browser skills without assuming installation or bypassing activation", () => {
@@ -543,7 +560,7 @@ describe("Pi-Wm task and permission contracts", () => {
 		const browserLines = guidelines
 			.split("\n")
 			.filter((line) =>
-				/For frontend changes|complete a visual review loop|browser_open requires|Use browser_action action=batch|Inspect the image content returned by browser_screenshot/.test(
+				/When browser verification is needed|When changed interactions|complete a visual review loop|browser_open requires|Use browser_action action=batch|Inspect the image content returned by browser_screenshot/.test(
 					line
 				)
 			);
@@ -615,8 +632,8 @@ describe("restricted tool guidance", () => {
 		);
 		expect(guidelines).toContain("Exercise the affected interaction with browser_action");
 		expect(guidelines).toContain("Check browser_diagnostics");
-		expect(guidelines).toContain("repeat the affected workflow after the last edit");
-		expect(guidelines).toContain("recheck after the last edit");
+		expect(guidelines).toContain("repeat the affected workflow after the last relevant edit");
+		expect(guidelines).toContain("recheck after the last relevant edit");
 		expect(guidelines).not.toContain("browser_screenshot");
 	});
 

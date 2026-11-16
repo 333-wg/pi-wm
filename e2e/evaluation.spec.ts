@@ -12,15 +12,17 @@ test.afterAll(async () => {
 });
 
 async function completeRun(page: Page): Promise<void> {
-	const sessions = page.getByRole("navigation", { name: "会话" }).locator(".session-entry");
+	const sessions = page.locator(".recent-conversations .session-entry");
 	const previousCount = await sessions.count();
 	await page.getByRole("button", { name: "新对话" }).click();
-	await expect(sessions).toHaveCount(previousCount + 1);
 	await expect(page.getByRole("textbox", { name: "消息" })).toBeEnabled();
 	await page.getByRole("textbox", { name: "消息" }).fill("Evaluate this completed run");
 	await expect(page.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
 	await page.getByRole("button", { name: "发送", exact: true }).click();
 	await expect(page.getByText(/Demo runtime received: Evaluate this completed run/)).toBeVisible();
+	await expect(sessions).toHaveCount(previousCount + 1);
+	if (!(await page.locator(".right-rail").isVisible()))
+		await page.getByRole("button", { name: "显示或隐藏运行面板", exact: true }).click();
 	await expect(page.locator(".right-rail .phase-idle")).toHaveText("空闲");
 }
 

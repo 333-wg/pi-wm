@@ -41,6 +41,7 @@ import { OrchestratorError } from "./errors.js";
 import { isUnfinishedItem, TranscriptCheckpoint } from "./transcript-checkpoint.js";
 import { createDurableMemory } from "./memory.js";
 import { verificationEvidence } from "./verification.js";
+import { verificationMetrics } from "./verification-metrics.js";
 import {
 	appendForkTitle,
 	isAutomaticSessionTitle,
@@ -5038,6 +5039,7 @@ export class SessionOrchestrator {
 						sessionId: operation.sessionId,
 						operationId: operation.id,
 						attempt: operation.attempt,
+						verification: verificationMetrics(result.items, result.tools),
 						...trace,
 					});
 				}

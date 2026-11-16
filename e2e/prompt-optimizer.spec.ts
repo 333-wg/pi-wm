@@ -119,3 +119,23 @@ test("keeps original on failure and ignores cancelled late results", async ({ pa
 	await expect(box).toHaveValue("使用新模型优化后的草稿");
 	expect(selected).toEqual({ provider: "demo", id: "second-model" });
 });
+
+test("explains optimization failures without displaying provider details or losing the draft", async ({ page }) => {
+	await openApp(page, webUrl);
+	const box = page.getByRole("textbox", { name: "消息", exact: true });
+	await box.fill("保留我的原文");
+	for (const [code, message] of [
+		["invalid_output", "改写格式不合格"],
+		["provider_auth", "认证失败"],
+		["timeout", "响应超时"],
+	]) {
+		await page.route("**/api/prompt/optimize", (route) =>
+			route.fulfill({ status: 502, json: { code, error: "secret upstream credential" } })
+		);
+		await page.getByRole("button", { name: "优化提示词", exact: true }).click();
+		await expect(page.getByRole("alert")).toContainText(message!);
+		await expect(page.getByRole("alert")).not.toContainText("secret");
+		await expect(box).toHaveValue("保留我的原文");
+		await page.unroute("**/api/prompt/optimize");
+	}
+});

@@ -122,7 +122,22 @@ const zh = {
 	testModel: "测试模型",
 	deleteModel: "删除模型",
 	cancelEdit: "取消编辑",
+	loadingPanel: "正在加载…",
+	loadingPanelFailed: "面板加载失败，请保留草稿后刷新页面重试。",
 	optimizePrompt: "优化提示词",
+	optimizeInvalidRequest: "草稿不符合要求，请输入 16000 字符以内的非命令文字；原文已保留。",
+	optimizeModelUnavailable: "当前模型不可用，请重新选择或检查模型配置；原文已保留。",
+	optimizeUnavailable: "当前运行模式不支持提示词优化，请连接可用的模型服务；原文已保留。",
+	optimizeBusy: "已有提示词正在优化，请等待完成后重试；原文已保留。",
+	optimizeTimeout: "模型响应超时，请稍后重试或更换模型；原文已保留。",
+	optimizeInvalidOutput: "模型返回的改写格式不合格，请重试或更换模型；原文已保留。",
+	optimizeIncompleteOutput: "模型未完整返回改写，请缩短草稿或更换模型；原文已保留。",
+	optimizeProviderAuth: "模型服务认证失败，请检查 API 密钥或账号授权；原文已保留。",
+	optimizeRateLimited: "模型服务请求受限，请稍后重试；原文已保留。",
+	optimizePermission: "登录已失效或无操作权限，请检查连接与权限；原文已保留。",
+	optimizeNetwork: "无法连接优化服务，请检查本地服务或网络；原文已保留。",
+	usageAuxiliary: "累计用量包含提示词优化：{requests} 次请求 · {tokens} Token · {cost}，不计入聊天轮次。",
+
 	optimizeHint: "使用当前模型优化提示词并回填，不自动发送；可能消耗模型额度",
 	optimizeEmpty: "先输入想表达的需求",
 	optimizeTooLong: "提示词最多支持 16000 字符",
@@ -323,7 +338,29 @@ const en: Record<keyof typeof zh, string> = {
 	testModel: "Test model",
 	deleteModel: "Delete model",
 	cancelEdit: "Cancel editing",
+	loadingPanel: "Loading…",
+	loadingPanelFailed: "This panel could not load. Save your draft, then refresh the page to retry.",
 	optimizePrompt: "Optimize prompt",
+	optimizeInvalidRequest: "Enter a non-command draft of at most 16000 characters. Your draft is unchanged.",
+	optimizeModelUnavailable:
+		"The selected model is unavailable. Select another model or check its configuration. Your draft is unchanged.",
+	optimizeUnavailable:
+		"Prompt optimization is unavailable in this runtime. Connect a supported model service. Your draft is unchanged.",
+	optimizeBusy: "Another optimization is running. Wait for it to finish and retry. Your draft is unchanged.",
+	optimizeTimeout: "The model timed out. Retry later or select another model. Your draft is unchanged.",
+	optimizeInvalidOutput:
+		"The model returned an invalid rewrite format. Retry or select another model. Your draft is unchanged.",
+	optimizeIncompleteOutput:
+		"The rewrite was incomplete. Shorten the draft or select another model. Your draft is unchanged.",
+	optimizeProviderAuth:
+		"Model authentication failed. Check the API key or account authorization. Your draft is unchanged.",
+	optimizeRateLimited: "The model service limited this request. Retry later. Your draft is unchanged.",
+	optimizePermission:
+		"Your login expired or permission is missing. Check the connection and permissions. Your draft is unchanged.",
+	optimizeNetwork: "Cannot connect to the optimizer. Check the local service or network. Your draft is unchanged.",
+	usageAuxiliary:
+		"Lifetime totals include prompt optimization: {requests} requests · {tokens} tokens · {cost}, excluded from chat turn counts.",
+
 	optimizeHint: "Rewrite with the current model without sending; may consume model credits",
 	optimizeEmpty: "Enter a draft first",
 	optimizeTooLong: "Prompts support up to 16000 characters",

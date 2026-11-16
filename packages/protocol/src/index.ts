@@ -109,6 +109,17 @@ export type PromptOptimizeRequest = Static<typeof PromptOptimizeRequestSchema>;
 export interface PromptOptimizeResult {
 	text: string;
 }
+export type PromptOptimizeErrorCode =
+	| "invalid_request"
+	| "model_unavailable"
+	| "unavailable"
+	| "busy"
+	| "timeout"
+	| "invalid_output"
+	| "incomplete_output"
+	| "provider_auth"
+	| "rate_limited"
+	| "provider_failed";
 
 export const ModelMetadataSchema = StrictObject({
 	model: ModelRefSchema,
@@ -408,6 +419,8 @@ export const UsageOverviewSchema = StrictObject({
 	total: UsageSchema,
 	totalTurnCount: Type.Integer({ minimum: 0 }),
 	totalRequestCount: Type.Integer({ minimum: 0 }),
+	/** Included in totals, but never counted as conversation turns. */
+	auxiliary: Type.Optional(StrictObject({ usage: UsageSchema, requestCount: Type.Integer({ minimum: 0 }) })),
 	today: UsageSchema,
 	month: UsageSchema,
 	daily: Type.Array(DailyUsageSchema, { minItems: 7, maxItems: 31 }),
@@ -2489,6 +2502,7 @@ export type DurableEvent = Static<typeof DurableEventSchema>;
 export type ProgressEvent = Static<typeof ProgressEventSchema>;
 
 export const ServerMessageSchema = Type.Union([
+	StrictObject({ type: Type.Literal("usage.invalidated"), workspaceId: Id }),
 	StrictObject({
 		type: Type.Literal("task.notification"),
 		id: Id,

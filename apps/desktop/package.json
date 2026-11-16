@@ -2,7 +2,7 @@
 	"name": "@wuming/desktop",
 	"productName": "Pi-Wm",
 	"desktopUpdateRepository": "333-wg/pi-wm",
-	"version": "0.1.25",
+	"version": "0.1.26",
 	"private": true,
 	"type": "module",
 	"main": "src/main.mjs",

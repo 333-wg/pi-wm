@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createPromptOptimizer } from "../src/prompt-optimizer.js";
 
 it.each([true, false])(
@@ -47,6 +47,7 @@ it.each([true, false])(
 						created: 1,
 						model: "chosen-model",
 						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+						usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
 					}) +
 					"\n\ndata: [DONE]\n\n"
 			);
@@ -79,6 +80,7 @@ it.each([true, false])(
 					},
 				],
 			});
+			const onUsage = vi.fn();
 			const result = optimize(
 				{
 					workspaceId: "workspace",
@@ -86,10 +88,15 @@ it.each([true, false])(
 					model: { provider: "chosen-service", id: "chosen-model" },
 					thinkingLevel: "off",
 				},
-				new AbortController().signal
+				new AbortController().signal,
+				onUsage
 			);
 			if (valid) await expect(result).resolves.toEqual({ text: "请查询义乌的天气情况。" });
 			else await expect(result).rejects.toThrow("原文已保留");
+			expect(onUsage).toHaveBeenCalledOnce();
+			expect(onUsage).toHaveBeenCalledWith(
+				expect.objectContaining({ inputTokens: 12, outputTokens: 5, totalTokens: 17 })
+			);
 			expect(body?.model).toBe("chosen-model");
 			expect(body?.tools).toBeUndefined();
 			expect(body?.messages).toHaveLength(2);
