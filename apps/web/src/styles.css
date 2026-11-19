@@ -7116,6 +7116,112 @@ button {
 	display: grid;
 	gap: 10px;
 }
+.custom-model-form label > .custom-model-field-hint {
+	display: block;
+	margin-top: 4px;
+	color: var(--muted);
+	font-size: 10px;
+	line-height: 1.4;
+}
+.model-service-delete-backdrop {
+	z-index: 120;
+}
+.model-service-delete-dialog {
+	width: min(460px, 100%);
+	overflow: hidden;
+	border: 1px solid var(--line-strong);
+	border-radius: 10px;
+	background: var(--panel);
+	box-shadow: var(--shadow-xl);
+}
+.model-service-delete-header {
+	display: grid;
+	grid-template-columns: 34px minmax(0, 1fr) auto;
+	gap: 12px;
+	align-items: start;
+	padding: 20px 20px 15px;
+}
+.model-service-delete-icon {
+	width: 34px;
+	height: 34px;
+	display: grid;
+	place-items: center;
+	border: 1px solid var(--red-border);
+	border-radius: 8px;
+	background: var(--red-soft);
+	color: var(--red-ink);
+}
+.model-service-delete-header h2 {
+	margin: 1px 0 6px;
+	font-size: 16px;
+	line-height: 1.25;
+}
+.model-service-delete-header p,
+.model-service-delete-note {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.5;
+}
+.model-service-delete-close {
+	margin: -5px -7px 0 0;
+}
+.model-service-delete-body {
+	padding: 0 20px 19px;
+}
+.model-service-delete-service {
+	display: grid;
+	gap: 3px;
+	padding: 11px 12px;
+	border: 1px solid var(--line);
+	border-radius: 7px;
+	background: var(--surface-muted);
+}
+.model-service-delete-service strong {
+	overflow-wrap: anywhere;
+	color: var(--text);
+	font-size: 12px;
+}
+.model-service-delete-service small {
+	overflow-wrap: anywhere;
+	color: var(--muted);
+	font-size: 11px;
+}
+.model-service-delete-note {
+	margin-top: 12px;
+}
+.model-service-delete-body .settings-error {
+	margin-top: 12px;
+}
+.model-service-delete-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 12px 20px;
+	border-top: 1px solid var(--line);
+	background: var(--surface-muted);
+}
+.model-service-delete-actions .secondary-button,
+.model-service-delete-actions .danger-button {
+	min-height: 32px;
+	padding: 0 13px;
+	border-radius: 6px;
+	font-size: 12px;
+}
+.danger-button {
+	border: 1px solid var(--red-border);
+	background: var(--red-soft);
+	color: var(--red-ink);
+	cursor: pointer;
+}
+.danger-button:hover:not(:disabled) {
+	background: var(--red);
+	color: #fff;
+}
+.danger-button:disabled {
+	cursor: wait;
+	opacity: 0.55;
+}
 .custom-model-form select,
 .custom-model-form input:not([type="checkbox"]) {
 	width: 100%;

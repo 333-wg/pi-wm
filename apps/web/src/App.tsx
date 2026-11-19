@@ -595,7 +595,9 @@ function CustomModelSettings({
 	const [loadingService, setLoadingService] = useState<string>();
 	const [testingModel, setTestingModel] = useState<string>();
 	const [editing, setEditing] = useState<CustomModelSettingsValue>();
+	const [serviceToDelete, setServiceToDelete] = useState<CustomModelService>();
 	const [editBusy, setEditBusy] = useState(false);
+	const [deleteError, setDeleteError] = useState<string>();
 	const [message, setMessage] = useState<string>();
 	const [error, setError] = useState<string>();
 	const savedModels = models.filter((model) => model.custom);
@@ -675,21 +677,28 @@ function CustomModelSettings({
 		}
 	};
 	const removeService = async (service: CustomModelService) => {
-		if (!window.confirm(t("deleteServiceConfirm", { service: service.baseUrl, count: service.modelCount }))) return;
 		setLoadingService(service.provider);
+		setDeleteError(undefined);
 		setError(undefined);
 		setMessage(undefined);
 		try {
 			await onRemoveService(service.provider);
 			if (discovery?.provider === service.provider) resetDiscovery();
 			if (editing?.model.provider === service.provider) setEditing(undefined);
+			setServiceToDelete(undefined);
 			await reloadServices();
 			setMessage(t("serviceDeleted"));
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
+			setDeleteError(cause instanceof Error ? cause.message : String(cause));
 		} finally {
 			setLoadingService(undefined);
 		}
+	};
+	const requestRemoveService = (service: CustomModelService) => {
+		setDeleteError(undefined);
+		setError(undefined);
+		setMessage(undefined);
+		setServiceToDelete(service);
 	};
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
@@ -841,7 +850,7 @@ function CustomModelSettings({
 							className="icon-button"
 							title={t("deleteService")}
 							disabled={loadingService === service.provider}
-							onClick={() => void removeService(service)}
+							onClick={() => requestRemoveService(service)}
 						>
 							<Trash2 size={14} />
 						</button>
@@ -1048,9 +1057,10 @@ function CustomModelSettings({
 								setBaseUrl(event.target.value);
 								resetDiscovery();
 							}}
-							placeholder="https://api.example.com/v1"
+							placeholder={t("baseUrlPlaceholder")}
 							required
 						/>
+						<small className="custom-model-field-hint">{t("baseUrlHint")}</small>
 					</label>
 					<label>
 						{t("apiKey")}
@@ -1222,6 +1232,70 @@ function CustomModelSettings({
 								: t("addModel")}
 					</button>
 				</form>
+			)}
+			{serviceToDelete && (
+				<div
+					className="modal-backdrop model-service-delete-backdrop"
+					role="presentation"
+					onMouseDown={() => !loadingService && setServiceToDelete(undefined)}
+				>
+					<div
+						className="model-service-delete-dialog"
+						role="alertdialog"
+						aria-modal="true"
+						aria-labelledby="delete-model-service-title"
+						onMouseDown={(event) => event.stopPropagation()}
+					>
+						<div className="model-service-delete-header">
+							<div className="model-service-delete-icon">
+								<Trash2 size={17} />
+							</div>
+							<div>
+								<h2 id="delete-model-service-title">{t("deleteServiceTitle")}</h2>
+								<p>{t("deleteServiceDescription", { count: serviceToDelete.modelCount })}</p>
+							</div>
+							<button
+								type="button"
+								className="icon-button model-service-delete-close"
+								title={t("cancelDeleteService")}
+								disabled={Boolean(loadingService)}
+								onClick={() => setServiceToDelete(undefined)}
+							>
+								<X size={16} />
+							</button>
+						</div>
+						<div className="model-service-delete-body">
+							<div className="model-service-delete-service">
+								<strong>{new URL(serviceToDelete.baseUrl).host}</strong>
+								<small>{serviceToDelete.baseUrl}</small>
+							</div>
+							<p className="model-service-delete-note">{t("deleteServiceImpact")}</p>
+							{deleteError && (
+								<div className="settings-error" role="alert">
+									{deleteError}
+								</div>
+							)}
+						</div>
+						<div className="model-service-delete-actions">
+							<button
+								type="button"
+								className="secondary-button"
+								disabled={Boolean(loadingService)}
+								onClick={() => setServiceToDelete(undefined)}
+							>
+								{t("cancelDeleteService")}
+							</button>
+							<button
+								type="button"
+								className="danger-button"
+								disabled={Boolean(loadingService)}
+								onClick={() => void removeService(serviceToDelete)}
+							>
+								{loadingService === serviceToDelete.provider ? t("deletingService") : t("deleteServiceAction")}
+							</button>
+						</div>
+					</div>
+				</div>
 			)}
 		</div>
 	);

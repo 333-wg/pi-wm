@@ -202,18 +202,15 @@ test("classifies relay models, reuses credentials, and preserves categories afte
 	await page.setViewportSize({ width: 1440, height: 900 });
 	await custom.scrollIntoViewIfNeeded();
 	const serviceRows = custom.locator(".custom-model-service-row");
-	page.once("dialog", async (dialog) => {
-		expect(dialog.message()).toContain(relayUrl);
-		expect(dialog.message()).toContain("6 个模型");
-		await dialog.dismiss();
-	});
 	await serviceRows.first().getByRole("button", { name: "删除模型服务" }).click();
+	await expect(custom.getByRole("alertdialog", { name: "删除这个模型服务？" })).toContainText("6 个模型");
+	await custom.getByRole("alertdialog").getByRole("button", { name: "先不删除" }).click();
 	await expect(serviceRows).toHaveCount(2);
 	await expect(chatRows).toHaveCount(3);
 	await serviceRows.first().getByRole("button", { name: "刷新并管理模型" }).click();
 	await chatRows.first().getByRole("button", { name: "编辑模型" }).click();
-	page.once("dialog", (dialog) => dialog.accept());
 	await serviceRows.first().getByRole("button", { name: "删除模型服务" }).click();
+	await custom.getByRole("alertdialog").getByRole("button", { name: "删除服务" }).click();
 	await expect(serviceRows).toHaveCount(1);
 	await expect(custom.locator(".custom-model-edit")).toHaveCount(0);
 	await expect(custom.getByRole("button", { name: "关闭模型列表" })).toHaveCount(0);
@@ -229,8 +226,8 @@ test("classifies relay models, reuses credentials, and preserves categories afte
 	await page.getByRole("navigation", { name: "设置分类" }).getByRole("button", { name: /^模型/ }).click();
 	await expect(serviceRows).toHaveCount(1);
 	await expect(chatRows).toHaveCount(1);
-	page.once("dialog", (dialog) => dialog.accept());
 	await serviceRows.getByRole("button", { name: "删除模型服务" }).click();
+	await custom.getByRole("alertdialog").getByRole("button", { name: "删除服务" }).click();
 	await expect(serviceRows).toHaveCount(0);
 	await expect(chatRows).toHaveCount(0);
 	await expect(media.locator(".media-imported-models .custom-model-row")).toHaveCount(0);
