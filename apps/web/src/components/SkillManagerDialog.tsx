@@ -1,4 +1,4 @@
-import { BookOpen, CircleAlert, Download, RefreshCw, Trash2, X } from "lucide-react";
+import { BookOpen, CircleAlert, Download, Globe, RefreshCw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Command, CommandResult, InstalledSkill, Skill, SkillScope } from "@wuming/protocol";
 import { useFocusTrap } from "../use-focus-trap.js";
@@ -21,6 +21,7 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 	const [preview, setPreview] = useState<Skill>();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string>();
+	const [notice, setNotice] = useState<string>();
 	const [sourcePath, setSourcePath] = useState("");
 	const [skillId, setSkillId] = useState("");
 	const [scope, setScope] = useState<SkillScope>("global");
@@ -64,6 +65,7 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 			);
 		setBusy(true);
 		setError(undefined);
+		setNotice(undefined);
 		try {
 			if (command) {
 				const result = await onCommand(command);
@@ -83,6 +85,11 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 				if (command.type === "skill.install") {
 					setSourcePath("");
 					setSkillId("");
+					setNotice(
+						command.scope === "workspace"
+							? "已安装到当前项目。"
+							: "已安装到用户全局，其他项目现在也可以调用；当前项目的同名版本仍优先生效。"
+					);
 				}
 			}
 			const items = await refresh();
@@ -180,8 +187,14 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 							? "安装到 ~/.wuming/skills，供本机当前用户的所有项目使用。"
 							: "安装到当前项目的 .wuming/skills，不影响其他项目。"}
 						同名技能按当前项目、用户全局、系统内置的顺序生效；全局启停和卸载影响所有项目。
+						完全访问允许操作技能文件，不会自动共享其他项目的技能。已安装的项目技能可点击地球按钮复制到全局。
 					</p>
 				</form>
+				{notice && (
+					<p className="skill-scope-hint" role="status">
+						{notice}
+					</p>
+				)}
 				{error && (
 					<div className="workbench-error" role="alert">
 						<CircleAlert size={16} />
@@ -218,6 +231,29 @@ export function SkillManagerDialog({ workspaceId, onCommand, onClose }: Props) {
 								</small>
 							</div>
 							<div className="skill-manager-actions">
+								{skill.source === "user" && skill.scope === "workspace" && (
+									<button
+										className="icon-button"
+										type="button"
+										title={
+											skill.enabled ? `复制 ${skill.id} 到用户全局，保留项目原件` : "请先启用技能，再复制到用户全局"
+										}
+										aria-label={`复制 ${skill.id} 到用户全局`}
+										disabled={busy || !skill.enabled}
+										onClick={() =>
+											void act({
+												type: "skill.install",
+												workspaceId,
+												skillId: skill.id,
+												sourcePath: `.wuming/skills/${skill.id}`,
+												scope: "global",
+												...(skill.version === "unversioned" ? {} : { version: skill.version }),
+											})
+										}
+									>
+										<Globe size={16} />
+									</button>
+								)}
 								<label>
 									<input
 										type="checkbox"

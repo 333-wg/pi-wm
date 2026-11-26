@@ -90,6 +90,11 @@ Global enable/disable and uninstall require explicit `scope: "global"`; omitted
 scope always targets the workspace, never silently mutates global storage.
 Global state is read live, so subsequent discovery/loads in other projects see changes;
 already loaded instructions in a running turn are not revoked.
+The management dialog can copy an enabled project skill into user-global storage
+using its globe button. The validated copy preserves its version and package files,
+leaves the project original in place, and refuses global collisions. The project
+copy continues to win in its project; removing it reveals the global fallback.
+Full access changes operation permissions, not the discovery scope.
 Manually placed workspace skills remain compatible with the existing catalog;
 when such a file already has a builtin ID, the workspace version wins and is
 identified as a user skill. Removing it reveals the unchanged builtin again.
@@ -168,17 +173,20 @@ results now retain their tool transcript items, including loaded-skill digests
 and recovery observations, instead of replacing them with only an error notice.
 An abort/timeout that yields no RuntimeTurnResult can still lack partial items.
 
-The gateway now enables protectSkillSources on its sandbox tools. Reading or
-editing SKILL.md requires explicit human approval, including under on_risk;
-never/on_failure sessions refuse these calls before filesystem IO. This covers
+The gateway enables protectSkillSources on its sandbox tools. Trusted read/edit
+tools honor unrestricted sessions unless the policy is always-ask. Other modes
+require explicit human approval for SKILL.md; never/on_failure sessions without
+full access refuse these calls before filesystem IO. This covers
 enabled, disabled, manual-only and uninstalled source packages alike, without
 trusting a model-supplied declaration of intent. Approved reads retain the
 source-data marker and never count as activation. Human management preview is
-unchanged. To inspect/edit source with the agent, use always/on_risk and approve
-the specific operation. Loading an enabled skill remains available normally.
+unchanged. To inspect/edit source with the agent, use full access or approve
+the specific operation in always/on_risk mode. Permissions are re-read from the
+stored session for every authorization, including after a mode change.
+Loading an enabled skill remains available normally.
 
-Search content and context lines from SKILL.md are withheld before inline,
-streamed or artifact output; path/count discovery stays available. These are
+Outside full access, search content and context lines from SKILL.md are withheld
+before inline, streamed or artifact output; path/count discovery stays available. These are
 dedicated read/search/edit tool boundaries, not general filesystem isolation:
 arbitrary exec, external MCP tools, renamed copies, supporting files and earlier
 conversation contents are not covered by this guard. Do not present it as a

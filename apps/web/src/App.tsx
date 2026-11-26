@@ -2661,11 +2661,14 @@ function Composer({
 								const attempt = ++stopAttempt.current;
 								setSendError(undefined);
 								setStopping(true);
-								void onAbort().catch((error: unknown) => {
-									if (attempt !== stopAttempt.current) return;
-									setStopping(false);
-									setSendError(error instanceof Error ? error.message : String(error));
-								});
+								void onAbort()
+									.catch((error: unknown) => {
+										if (attempt !== stopAttempt.current) return;
+										setSendError(error instanceof Error ? error.message : String(error));
+									})
+									.finally(() => {
+										if (attempt === stopAttempt.current) setStopping(false);
+									});
 							}}
 						>
 							<Square size={13} fill="currentColor" />
@@ -4644,6 +4647,7 @@ function RightRail({
 function SessionNavigation({
 	sessions,
 	archived = false,
+	previewLimit,
 	onNewSession,
 	newSessionDisabled = false,
 	selectedSessionId,
@@ -4658,6 +4662,7 @@ function SessionNavigation({
 }: {
 	sessions: SessionSummary[];
 	archived?: boolean;
+	previewLimit?: number;
 	onNewSession?: () => Promise<void>;
 	newSessionDisabled?: boolean;
 	selectedSessionId?: string;
@@ -4672,6 +4677,16 @@ function SessionNavigation({
 }) {
 	const t = useT();
 	const [toolsOpen, setToolsOpen] = useState(false);
+	const [showAll, setShowAll] = useState(false);
+	useEffect(() => {
+		setShowAll(false);
+	}, [workspaceId, archived]);
+	const limited = previewLimit !== undefined && sessions.length > previewLimit;
+	const previewSessions = sessions.slice(0, previewLimit);
+	const selectedSession = sessions.find((session) => session.id === selectedSessionId);
+	if (limited && selectedSession && !previewSessions.includes(selectedSession))
+		previewSessions[previewSessions.length - 1] = selectedSession;
+	const visibleSessions = !limited || showAll ? sessions : previewSessions;
 	const [renamingId, setRenamingId] = useState<string>();
 	const [nameDraft, setNameDraft] = useState("");
 	const [busyId, setBusyId] = useState<string>();
@@ -4736,7 +4751,7 @@ function SessionNavigation({
 					</div>
 				</div>
 			)}
-			{(!onNewSession || toolsOpen) && (
+			{((!onNewSession && previewLimit === undefined) || toolsOpen) && (
 				<SessionSearch
 					{...(workspaceId ? { workspaceId } : {})}
 					archived={archived}
@@ -4752,7 +4767,7 @@ function SessionNavigation({
 				</div>
 			)}
 			<nav className="session-nav" aria-label={t("sessions")}>
-				{sessions.map((session) => (
+				{visibleSessions.map((session) => (
 					<div
 						className={`session-entry ${selectedSessionId === session.id ? "selected" : ""}`}
 						data-phase={session.phase}
@@ -4852,7 +4867,29 @@ function SessionNavigation({
 					<div className="session-list-empty">{archived ? t("noArchivedChats") : t("noChats")}</div>
 				)}
 			</nav>
-			{(!onNewSession || toolsOpen || archived) && (
+			{limited && (
+				<button
+					type="button"
+					className="session-show-more"
+					aria-expanded={showAll}
+					onClick={() => setShowAll((value) => !value)}
+				>
+					{showAll ? t("collapseConversations") : t("expandConversations")}
+				</button>
+			)}
+			{previewLimit !== undefined && (
+				<button
+					type="button"
+					className="session-list-options"
+					aria-expanded={toolsOpen}
+					title={t("recentConversationOptions")}
+					aria-label={t("recentConversationOptions")}
+					onClick={() => setToolsOpen((value) => !value)}
+				>
+					<MoreHorizontal size={14} />
+				</button>
+			)}
+			{((!onNewSession && previewLimit === undefined) || toolsOpen || archived) && (
 				<button
 					className="session-archive-switch"
 					type="button"
@@ -6551,6 +6588,7 @@ export function App() {
 									{expanded && (
 										<div className="project-conversations">
 											<SessionNavigation
+												previewLimit={5}
 												sessions={client.sessionLists[workspace.id]?.sessions ?? []}
 												archived={client.sessionLists[workspace.id]?.archived ?? false}
 

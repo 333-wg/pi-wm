@@ -122,7 +122,22 @@ export class WorkspaceGit {
 				gitRepositoryFound(probe.code, probe.stderr);
 				throw fail("当前目录不需要添加信任配置。", 409);
 			}
-			await this.run(["config", "--global", "--add", "safe.directory", root.split(sep).join("/")]);
+			const trustPath = root.split(sep).join("/");
+			const existing = await this.run(["config", "--global", "--get-all", "safe.directory"], true);
+			const entries = existing.output.replace(/\r?\n$/, "").split(/\r?\n/);
+			// An empty entry resets previous trust entries; only deduplicate effective entries.
+			if (!entries.slice(entries.lastIndexOf("") + 1).includes(trustPath))
+				await this.run(["config", "--global", "--add", "safe.directory", trustPath]);
+			const verified = await this.run(["rev-parse", "--show-toplevel"], true);
+			if (verified.code !== 0) {
+				throw fail(
+					"已写入此目录的信任配置，但 Git 仍无法访问。请检查更高优先级的 Git 配置或目录权限后重试。\n" +
+						redact(verified.stderr).trim().slice(0, 6000),
+					409
+				);
+			}
+			if (!(await this.isRoot(verified.output.trim())))
+				throw fail("信任配置已写入，但仓库根目录已变化，请刷新后检查项目路径。", 409);
 			return { message: "已信任此仓库，未修改项目文件或远程配置。" };
 		}
 		const info = await this.details();

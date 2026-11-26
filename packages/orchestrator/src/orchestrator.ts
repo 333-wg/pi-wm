@@ -98,6 +98,7 @@ export interface AbortTurnInput {
 	principalId: string;
 	idempotencyKey: string;
 	sessionId: string;
+	operationId?: string;
 }
 
 export interface RenameSessionInput {
@@ -4404,7 +4405,11 @@ export class SessionOrchestrator {
 		const now = this.#clock();
 		const current = this.store.loadSnapshot(input.sessionId);
 		if (!current) throw new OrchestratorError("not_found", `Session ${input.sessionId} does not exist`);
-		const hash = commandHash({ type: "turn.abort", sessionId: input.sessionId });
+		const hash = commandHash({
+			type: "turn.abort",
+			sessionId: input.sessionId,
+			...(input.operationId ? { operationId: input.operationId } : {}),
+		});
 		const existing = this.store.getIdempotencyResult(input.principalId, input.idempotencyKey, hash, now);
 		if (existing) return existing as Extract<CommandResult, { type: "turn.abort_requested" }>;
 		const result = {
@@ -4412,6 +4417,7 @@ export class SessionOrchestrator {
 			sessionId: input.sessionId,
 			revision: current.revision,
 		} as const;
+		if (input.operationId && this.store.getRunningOperation(input.sessionId)?.id !== input.operationId) return result;
 		const committed = this.store.requestOperationAbort({
 			principalId: input.principalId,
 			idempotencyKey: input.idempotencyKey,

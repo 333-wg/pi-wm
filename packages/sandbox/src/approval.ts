@@ -16,6 +16,8 @@ export interface ApprovalBrokerOptions {
 export interface ApprovalAuthorization {
 	/** Sensitive inspection must never inherit automatic read authorization. */
 	requireExplicitApproval?: boolean;
+	/** Trusted source tools may honor full access without activating a skill. */
+	fullAccessSkillSource?: boolean;
 	/** Explicit desktop Settings grant; never applies to other capabilities. */
 	preauthorizedComputerUse?: boolean;
 	/** Local-owner desktop tools may honor the user's full-access session mode. */
@@ -138,6 +140,11 @@ export class ApprovalBroker {
 		return snapshot?.sandboxMode === "unrestricted" && snapshot.approvalPolicy !== "always";
 	}
 
+	hasFullAccessSkillSources(sessionId: string): boolean {
+		const snapshot = this.#store.loadSnapshot(sessionId);
+		return snapshot?.sandboxMode === "unrestricted" && snapshot.approvalPolicy !== "always";
+	}
+
 	async authorize(request: ApprovalAuthorization): Promise<ApprovalPermit | undefined> {
 		const snapshot = this.#store.loadSnapshot(request.sessionId);
 		if (!snapshot) throw new SandboxError("approval_denied", `Session ${request.sessionId} does not exist`);
@@ -149,6 +156,19 @@ export class ApprovalBroker {
 				(capability) => capability.type === "skill.manage" || capability.type === "mcp.manage"
 			);
 		if (managesLocalExtensions && snapshot.sandboxMode === "unrestricted" && snapshot.approvalPolicy !== "always")
+			request = { ...request, requireExplicitApproval: false };
+		if (
+			request.fullAccessSkillSource &&
+			snapshot.sandboxMode === "unrestricted" &&
+			snapshot.approvalPolicy !== "always" &&
+			request.capabilities.length > 0 &&
+			request.capabilities.every(
+				(capability) =>
+					(capability.type === "filesystem.read" || capability.type === "filesystem.write") &&
+					capability.paths.length > 0 &&
+					capability.paths.every((path) => /(^|[\\/])SKILL\.md(?:[. ]*$|:)/i.test(path))
+			)
+		)
 			request = { ...request, requireExplicitApproval: false };
 		if (
 			request.fullAccessComputerUse &&
@@ -168,7 +188,7 @@ export class ApprovalBroker {
 					? "Computer Use requires human approval. Select an approval-enabled permission mode before using desktop tools."
 					: managesLocalExtensions
 						? "Skill and MCP management requires full access or an approval-enabled session."
-						: "Skill source inspection requires human approval. Use an approval-enabled session to review or edit source; use skill_load for invocation. Do not read another copy to bypass this restriction."
+						: "Skill source inspection requires full access or human approval. Use full access or an approval-enabled session to review or edit source; use skill_load for invocation."
 			);
 		}
 		for (const capability of request.capabilities) {

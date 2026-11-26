@@ -31,6 +31,32 @@ test.afterAll(async () => {
 	await stopWebApp();
 });
 
+test("copies a project skill into global storage while preserving its project original", async ({ page }) => {
+	await openApp(page, webUrl);
+	await page.getByRole("tab", { name: "技能", exact: true }).click();
+	await page.getByRole("button", { name: "管理技能", exact: true }).click();
+	const dialog = page.getByRole("dialog", { name: "管理技能", exact: true });
+	await dialog.getByLabel("工作区内的技能目录", { exact: true }).fill("packages/demo");
+	await dialog.getByLabel("技能 ID（可选）", { exact: true }).fill("shared-from-project");
+	await dialog.getByLabel("安装范围", { exact: true }).selectOption("workspace");
+	await dialog.getByRole("button", { name: "安装", exact: true }).click();
+	const row = dialog.locator('[data-skill-id="shared-from-project"]');
+	await expect(row).toContainText("当前项目");
+	await row.getByRole("button", { name: "复制 shared-from-project 到用户全局", exact: true }).click();
+	await expect(dialog.getByRole("status")).toContainText("其他项目现在也可以调用");
+	await expect(row).toContainText("当前项目");
+	const projectFile = join(workspacePath, ".wuming/skills/shared-from-project/SKILL.md");
+	const globalFile = join(dirname(workspacePath), "skill-home/.wuming/skills/shared-from-project/SKILL.md");
+	expect(await readFile(globalFile, "utf8")).toBe(await readFile(projectFile, "utf8"));
+	// Removing the original reveals the copied global skill.
+	await row.getByRole("button", { name: "卸载 shared-from-project", exact: true }).click();
+	await row.getByRole("button", { name: "确认卸载", exact: true }).click();
+	await expect(row).toContainText("用户全局");
+	await row.getByRole("button", { name: "卸载 shared-from-project", exact: true }).click();
+	await row.getByRole("button", { name: "确认卸载", exact: true }).click();
+	await expect(row).toHaveCount(0);
+});
+
 for (const width of [1365, 390]) {
 	test(`install, disable, preview, enable and uninstall at ${width}px`, async ({ page }, testInfo) => {
 		const failures: string[] = [];

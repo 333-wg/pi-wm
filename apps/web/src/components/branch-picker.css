@@ -137,6 +137,33 @@
 	max-height: 140px;
 	overflow-y: auto;
 }
+.branch-picker-trust p {
+	color: var(--text-soft);
+	line-height: 1.6;
+	margin: 10px 0;
+}
+.branch-picker-trust > code {
+	display: block;
+	padding: 8px;
+	border-radius: 6px;
+	background: var(--surface-sunken);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.branch-picker-diagnostics {
+	margin-top: 12px;
+	color: var(--muted);
+	font-size: 12px;
+}
+.branch-picker-diagnostics summary {
+	cursor: pointer;
+}
+.branch-picker-diagnostics pre {
+	max-height: 140px;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
 .branch-picker-menu form label {
 	display: block;
 	margin-bottom: 8px;

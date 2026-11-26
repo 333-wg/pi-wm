@@ -812,15 +812,16 @@ button {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	overflow: hidden;
+	overflow-y: auto;
+	overflow-x: hidden;
+	overscroll-behavior: contain;
 }
 .project-node {
 	flex: 0 0 auto;
 	min-width: 0;
 }
 .project-node.expanded {
-	min-height: 0;
-	flex: 0 1 auto;
+	flex: 0 0 auto;
 	display: flex;
 	flex-direction: column;
 }
@@ -1030,8 +1031,8 @@ button {
 	margin-top: 1px;
 }
 .project-conversations {
-	min-height: 0;
-	flex: 1;
+	min-width: 0;
+	flex: 0 0 auto;
 	display: flex;
 	margin-left: 21px;
 	padding: 5px 0 0 8px;
@@ -1039,7 +1040,7 @@ button {
 }
 .recent-conversations {
 	min-height: 100px;
-	flex: 1 1 auto;
+	flex: 0 0 auto;
 	display: flex;
 	flex-direction: column;
 	margin-top: 10px;
@@ -1051,28 +1052,64 @@ button {
 	justify-content: space-between;
 	padding: 0 4px 4px 8px;
 }
-.recent-conversations .session-entry {
+.recent-conversations .session-entry,
+.project-conversations .session-entry {
 	position: relative;
 	grid-template-columns: minmax(0, 1fr);
 	min-height: 36px;
 }
-.recent-conversations .session-open {
+.recent-conversations .session-open,
+.project-conversations .session-open {
 	min-height: 36px;
 	font-size: 13px;
 }
-.recent-conversations .session-open span {
+.recent-conversations .session-open span,
+.project-conversations .session-open span {
 	text-overflow: clip;
 	mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
-.recent-conversations .session-actions {
+.recent-conversations .session-actions,
+.project-conversations .session-actions {
 	position: absolute;
 	right: 27px;
 	background: var(--sidebar);
 	border-radius: 4px;
 }
 .recent-conversations .session-entry:hover .session-open span,
-.recent-conversations .session-entry:focus-within .session-open span {
+.recent-conversations .session-entry:focus-within .session-open span,
+.project-conversations .session-entry:hover .session-open span,
+.project-conversations .session-entry:focus-within .session-open span {
 	margin-right: 50px;
+}
+.project-tree .session-nav {
+	overflow: visible;
+	flex: 0 0 auto;
+}
+.project-tree .session-browser {
+	min-width: 0;
+}
+.session-show-more,
+.session-list-options {
+	min-height: 32px;
+	padding: 6px 8px;
+	border: 0;
+	border-radius: 5px;
+	background: transparent;
+	color: var(--muted);
+	cursor: pointer;
+	text-align: left;
+	font: inherit;
+	font-size: 12px;
+}
+.session-show-more:hover,
+.session-list-options:hover {
+	background: var(--translucent);
+	color: var(--text);
+}
+.session-list-options {
+	align-self: flex-start;
+	display: grid;
+	place-items: center;
 }
 .projectless-conversations {
 	min-height: 0;

@@ -240,7 +240,7 @@ async function authorize(
 		risk,
 		summary,
 		capabilities,
-		...(requireExplicitApproval ? { requireExplicitApproval: true } : {}),
+		...(requireExplicitApproval ? { requireExplicitApproval: true, fullAccessSkillSource: true } : {}),
 		...(signal ? { signal } : {}),
 	});
 }
@@ -444,7 +444,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 		// Pi's inherited guideline names its own `read` tool. Restating it here keeps
 		// the guideline the model sees pointing at a tool that actually exists.
 		promptGuidelines: ["Use read_file to examine files rather than shell commands such as cat, head or sed."],
-		description: `${readDefinition.description} Paths must stay inside the isolated workspace.${options.protectSkillSources ? " SKILL.md source inspection requires human approval; use skill_load to invoke an applicable enabled skill instead." : ""}`,
+		description: `${readDefinition.description} Paths must stay inside the isolated workspace.${options.protectSkillSources ? " SKILL.md source inspection requires full access or human approval. Reading source is not activation; use skill_load to invoke an applicable enabled skill." : ""}`,
 		async execute(toolCallId, params, signal, onUpdate, context) {
 			const skillSource = options.protectSkillSources === true && isSkillSource(params.path);
 			const permit = await options.approvals.authorize({
@@ -455,7 +455,7 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 					? `Inspect skill source ${params.path} as data only (not activation)`
 					: `Read ${params.path}`,
 				capabilities: [{ type: "filesystem.read", paths: [params.path] }],
-				...(skillSource ? { requireExplicitApproval: true } : {}),
+				...(skillSource ? { requireExplicitApproval: true, fullAccessSkillSource: true } : {}),
 				...(signal ? { signal } : {}),
 			});
 			try {
@@ -571,9 +571,11 @@ export function createSandboxTools(options: SandboxToolOptions): ToolDefinition[
 							...(signal ? { signal } : {}),
 						});
 						const mode = params.output_mode ?? "content";
-						const matches = options.protectSkillSources
-							? result.matches.filter((match) => !isSkillSource(match.path))
-							: result.matches;
+						const matches =
+							options.protectSkillSources &&
+							!options.approvals.hasFullAccessSkillSources?.(options.snapshot.session.id)
+								? result.matches.filter((match) => !isSkillSource(match.path))
+								: result.matches;
 						const body =
 							mode === "files"
 								? result.counts.map((entry) => entry.path).join("\n")

@@ -2520,6 +2520,7 @@ export class GatewayServer implements AsyncDisposable {
           principalId: connection.principal.id,
           idempotencyKey,
           sessionId: command.sessionId,
+          ...(command.operationId ? { operationId: command.operationId } : {}),
         });
       case 'background.list':
       case 'background.cancel':

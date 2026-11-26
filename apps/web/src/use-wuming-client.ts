@@ -1,3 +1,4 @@
+import { waitForStopConnection } from "./lib/stop-request.js";
 import { RefreshRequests, startVisiblePolling } from "./lib/visible-polling.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mergeUsageRequests, sessionUsageRequests } from "@wuming/protocol";
@@ -222,6 +223,9 @@ export function useWumingClient() {
 	const [reconnectAttempt, setReconnectAttempt] = useState(0);
 	const legacyHello = useRef(false);
 	const [state, setState] = useState<ClientState>(initialState);
+	const stopConnectionReady = useRef(false);
+	const stopContext = useRef({ token, runs: state.runs });
+	stopContext.current = { token, runs: state.runs };
 	useEffect(() => {
 		const notice = state.liveCompaction;
 		if (!notice) return;
@@ -1006,10 +1010,12 @@ export function useWumingClient() {
 				const requestId = id();
 				// A stalled stop acknowledgement must not leave the composer locked forever.
 				const timer =
-					command.type === "turn.abort"
+					command.type === "turn.abort" || command.type === "session.snapshot.get"
 						? window.setTimeout(() => {
 								pending.current.delete(requestId);
-								reject(new Error("停止请求未收到回应，请重试"));
+								reject(
+									new Error(command.type === "turn.abort" ? "停止请求未收到回应，请重试" : "会话状态刷新超时，请重试")
+								);
 							}, 8_000)
 						: undefined;
 				pending.current.set(requestId, {
@@ -1066,6 +1072,7 @@ export function useWumingClient() {
 			if (message.type === "hello") {
 				const revision = ++navigationRevision.current;
 				helloReceived = true;
+				stopConnectionReady.current = true;
 				usageCache.clear();
 				restoringSession.current = true;
 				if (!desktopConnection()) localStorage.setItem("wuming.token", token);
@@ -1548,6 +1555,7 @@ export function useWumingClient() {
 		});
 		ws.addEventListener("message", (raw) => applyMessage(JSON.parse(String(raw.data)) as ServerMessage));
 		ws.addEventListener("close", (event) => {
+			stopConnectionReady.current = false;
 			if (!disposed) {
 				// Older gateways reject unknown optional capabilities before hello.
 				// Retry once with the original capabilities; authentication is unchanged.
@@ -1578,6 +1586,7 @@ export function useWumingClient() {
 
 		return () => {
 			disposed = true;
+			stopConnectionReady.current = false;
 			++navigationRevision.current;
 			usageCache.clear();
 			discardAssistantDeltas();
@@ -2712,9 +2721,36 @@ export function useWumingClient() {
 	const abortTurn = useCallback(async () => {
 		const snapshot = snapshotRef.current;
 		if (!snapshot) throw new Error("未选择会话");
-		if (!requestRef.current) throw new Error("网关尚未连接");
-		await requestRef.current({ type: "turn.abort", sessionId: snapshot.session.id });
-		void refreshRuns(snapshot.session.id).catch(() => undefined);
+		const sessionId = snapshot.session.id;
+		const originalToken = stopContext.current.token;
+		const operationId = stopContext.current.runs.find((run) => run.sessionId === sessionId && run.status === "running")?.id;
+		// A delayed stop is fenced to the observed run so reconnect cannot stop a
+		// newer task started by another client. Without a run ID, require online.
+		if (!operationId && !stopConnectionReady.current) throw new Error("网关尚未连接，停止请求尚未送达，请重试");
+		const request = await waitForStopConnection(
+			() => (stopConnectionReady.current ? requestRef.current : undefined),
+			() => stopContext.current.token === originalToken && snapshotRef.current?.session.id === sessionId
+		);
+		await request({ type: "turn.abort", sessionId, ...(operationId ? { operationId } : {}) });
+		// The acknowledgement is not the final phase event. Recover even if that
+		// event was lost; do not keep the stop button locked on a successful ACK.
+		void request({ type: "session.snapshot.get", sessionId })
+			.then((result) => {
+				if (result.type !== "session.snapshot" || snapshotRef.current?.session.id !== sessionId) return;
+				setState((current) =>
+					current.snapshot?.session.id === sessionId && current.snapshot.revision <= result.snapshot.revision
+						? {
+								...current,
+								snapshot: result.snapshot,
+								...(result.snapshot.session.phase === "idle"
+									? { liveAssistants: {}, liveTools: {}, liveRetry: undefined }
+									: {}),
+							}
+						: current
+				);
+			})
+			.catch(() => undefined);
+		void refreshRuns(sessionId).catch(() => undefined);
 	}, [refreshRuns]);
 
 	const cancelBackgroundTask = useCallback(async (taskId: string) => {

@@ -15,6 +15,66 @@ test.beforeAll(async () => {
 });
 test.afterAll(stopWebApp);
 
+test("recovers ownership errors directly from the composer branch menu", async ({ page }, testInfo) => {
+	const path = "D:\\逆向爆款视频";
+	let trusted = false;
+	let attempts = 0;
+	await page.route("**/git/status", (route) =>
+		route.fulfill(
+			trusted
+				? { json: { isRepository: true, branch: "main", entries: [], truncated: false } }
+				: { status: 409, json: { error: "fatal: detected dubious ownership in repository at 'D:/逆向爆款视频'" } }
+		)
+	);
+	await page.route("**/git/details", (route) =>
+		route.fulfill({
+			json: {
+				writable: trusted,
+				isRepository: true,
+				workspaceRoot: path,
+				hasCommits: trusted,
+				ahead: 0,
+				behind: 0,
+				conflicts: 0,
+				remotes: [],
+				...(trusted ? { branch: "main", branches: ["main", "dev"] } : { trustRequired: { path } }),
+			},
+		})
+	);
+	await page.route("**/git/action", async (route) => {
+		expect(route.request().postDataJSON()).toEqual({ type: "trust", path });
+		attempts++;
+		if (attempts === 1) {
+			await route.fulfill({ status: 409, json: { error: "无法写入 Git 用户配置，请检查配置文件权限。" } });
+			return;
+		}
+		trusted = true;
+		await route.fulfill({ json: { message: "已信任此仓库。" } });
+	});
+	await openApp(page, url);
+	await page.getByRole("button", { name: "切换分支：需信任仓库", exact: true }).click();
+	const menu = page.getByRole("dialog", { name: "分支", exact: true });
+	await expect(menu).toContainText("无需重新初始化");
+	await expect(menu.getByText(path, { exact: true })).toBeVisible();
+	await expect(menu.getByRole("alert")).toHaveCount(0);
+	await expect(menu.getByText("fatal:", { exact: false })).not.toBeVisible();
+	await menu.getByRole("button", { name: "信任此仓库", exact: true }).click();
+	expect(attempts).toBe(0);
+	await menu.getByRole("button", { name: "取消", exact: true }).click();
+	expect(attempts).toBe(0);
+	await menu.getByRole("button", { name: "信任此仓库", exact: true }).click();
+	await page.setViewportSize({ width: 390, height: 844 });
+	await expect(menu.getByRole("button", { name: "确认信任并重试", exact: true })).toBeInViewport();
+	await page.screenshot({ path: testInfo.outputPath("branch-trust-confirm.png") });
+	await menu.getByRole("button", { name: "确认信任并重试", exact: true }).click();
+	await expect(menu.getByRole("alert")).toContainText("无法写入 Git 用户配置");
+	await menu.getByRole("button", { name: "确认信任并重试", exact: true }).click();
+	await expect(menu.getByRole("button", { name: "切换到 dev", exact: true })).toBeEnabled();
+	await expect(menu.getByRole("alert")).toHaveCount(0);
+	expect(attempts).toBe(2);
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test("requires explicit confirmation before trusting the displayed repository", async ({ page }) => {
 	const path = "D:\\Projects\\existing-project";
 	let trusted = false;

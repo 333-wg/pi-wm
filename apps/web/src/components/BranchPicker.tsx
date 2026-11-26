@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, GitBranch, LoaderCircle, Plus, Search, X } from "lucide-react";
+import { Check, ChevronDown, GitBranch, LoaderCircle, Plus, Search, ShieldCheck, X } from "lucide-react";
+import type { GitAction } from "@wuming/protocol";
 import { useGitWorkspace } from "../use-git-workspace";
 import { workspaceApi } from "../workspace-api";
 import { useFocusTrap } from "../use-focus-trap";
@@ -34,8 +35,37 @@ export function BranchPicker({
 		};
 	}, [onBusyChange]);
 	const branch = git.details?.branch ?? git.status?.branch;
-	const label = branch ?? (git.details?.isRepository ? (en ? "Detached HEAD" : "分离 HEAD") : en ? "Branch" : "分支");
+	const label = git.details?.trustRequired
+		? en
+			? "Trust required"
+			: "需信任仓库"
+		: (branch ?? (git.details?.isRepository ? (en ? "Detached HEAD" : "分离 HEAD") : en ? "Branch" : "分支"));
 	const unavailable = !git.loading && !git.detailsError && !git.statusError && !git.details?.isRepository;
+	const executeAction = async (action: GitAction, closeAfter: boolean) => {
+		setBusy(true);
+		onBusyChange(true);
+		git.onBusyChange(true);
+		let succeeded = false;
+		try {
+			const result = await workspaceApi.gitAction(token, workspaceId, action);
+			succeeded = true;
+			if (mounted.current) {
+				setNotice(result.message);
+				if (closeAfter) setOpen(false);
+			}
+		} finally {
+			if (mounted.current) {
+				await git.refresh();
+				git.onBusyChange(false);
+				setBusy(false);
+				onBusyChange(false);
+				if (succeeded && closeAfter)
+					requestAnimationFrame(() => {
+						if (mounted.current) anchor.current?.focus();
+					});
+			}
+		}
+	};
 	if (unavailable) return null;
 	return (
 		<div className="branch-picker">
@@ -71,34 +101,16 @@ export function BranchPicker({
 					disabled={disabled}
 					busy={busy}
 					close={() => setOpen(false)}
-					execute={async (branch, create) => {
-						setBusy(true);
-						onBusyChange(true);
-						git.onBusyChange(true);
-						let succeeded = false;
-						try {
-							const result = await workspaceApi.gitAction(token, workspaceId, {
+					execute={(branch, create) =>
+						executeAction(
+							{
 								type: create ? "branch.create" : "branch.switch",
 								branch,
-							});
-							succeeded = true;
-							if (mounted.current) {
-								setNotice(result.message);
-								setOpen(false);
-							}
-						} finally {
-							if (mounted.current) {
-								await git.refresh();
-								git.onBusyChange(false);
-								setBusy(false);
-								onBusyChange(false);
-								if (succeeded)
-									requestAnimationFrame(() => {
-										if (mounted.current) anchor.current?.focus();
-									});
-							}
-						}
-					}}
+							},
+							true
+						)
+					}
+					trust={(path) => executeAction({ type: "trust", path }, false)}
 				/>
 			)}
 		</div>
@@ -113,6 +125,7 @@ function BranchMenu({
 	busy,
 	close,
 	execute,
+	trust,
 }: {
 	anchor: HTMLButtonElement | null;
 	en: boolean;
@@ -121,6 +134,7 @@ function BranchMenu({
 	busy: boolean;
 	close: () => void;
 	execute: (branch: string, create: boolean) => Promise<void>;
+	trust: (path: string) => Promise<void>;
 }) {
 	const ref = useFocusTrap<HTMLDivElement>();
 	const [position, setPosition] = useState({ left: 12, top: 12 });
@@ -128,6 +142,7 @@ function BranchMenu({
 	const [creating, setCreating] = useState(false);
 	const [name, setName] = useState("");
 	const [error, setError] = useState("");
+	const [trustPath, setTrustPath] = useState<string>();
 	const running = useRef(false);
 	const details = git.details;
 	const branch = details?.branch ?? git.status?.branch;
@@ -166,13 +181,16 @@ function BranchMenu({
 			});
 		};
 		position();
+		const observer = new ResizeObserver(position);
+		if (ref.current) observer.observe(ref.current);
 		window.addEventListener("resize", position);
 		window.addEventListener("scroll", position, true);
 		return () => {
+			observer.disconnect();
 			window.removeEventListener("resize", position);
 			window.removeEventListener("scroll", position, true);
 		};
-	}, [anchor, ref, creating, error, reason, git.detailsError, git.statusError, branches.length]);
+	}, [anchor, ref, creating, error, reason, git.detailsError, git.statusError, branches.length, trustPath]);
 	const run = async (target: string, create: boolean) => {
 		if (blocked || running.current) return;
 		running.current = true;
@@ -220,7 +238,66 @@ function BranchMenu({
 						<X size={16} />
 					</button>
 				</header>
-				{creating ? (
+				{details?.trustRequired ? (
+					<div className="branch-picker-trust">
+						<p>
+							{en
+								? "Git blocked this repository because it belongs to a different system account."
+								: "Git 因目录所有者与当前系统账号不同而暂停访问。信任此仓库后即可恢复，无需重新初始化。"}
+						</p>
+						<code>{details.trustRequired.path}</code>
+						{trustPath !== undefined ? (
+							<>
+								<p>
+									{en
+										? "Trust only this directory for the current system user. Git may then read its configuration and run Git hooks. Continue only if you trust its source."
+										: "仅将此目录加入当前系统用户的 Git 信任列表。Git 将可读取仓库配置并在相关操作中运行 Git hooks，请确认仓库来源可信。"}
+								</p>
+								<div className="branch-picker-form-actions">
+									<button type="button" disabled={busy} onClick={() => setTrustPath(undefined)}>
+										{en ? "Cancel" : "取消"}
+									</button>
+									<button
+										type="button"
+										disabled={disabled || busy || git.refreshing || trustPath !== details.trustRequired.path}
+										onClick={() => {
+											if (running.current || trustPath !== details.trustRequired?.path) return;
+											running.current = true;
+											setError("");
+											void trust(trustPath)
+												.then(() => setTrustPath(undefined))
+												.catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+												.finally(() => {
+													running.current = false;
+												});
+										}}
+									>
+										{busy ? (en ? "Trusting…" : "正在信任…") : en ? "Confirm trust and retry" : "确认信任并重试"}
+									</button>
+								</div>
+							</>
+						) : (
+							<button
+								type="button"
+								className="branch-picker-create"
+								disabled={disabled || busy || git.refreshing}
+								onClick={() => {
+									setError("");
+									setTrustPath(details.trustRequired!.path);
+								}}
+							>
+								<ShieldCheck size={16} />
+								{en ? "Trust this repository" : "信任此仓库"}
+							</button>
+						)}
+						{(git.statusError || git.detailsError) && (
+							<details className="branch-picker-diagnostics">
+								<summary>{en ? "Technical details" : "技术详情"}</summary>
+								<pre>{git.detailsError || git.statusError}</pre>
+							</details>
+						)}
+					</div>
+				) : creating ? (
 					<form
 						onSubmit={(event) => {
 							event.preventDefault();
@@ -310,13 +387,13 @@ function BranchMenu({
 						</p>
 					</>
 				)}
-				{reason && <p className="branch-picker-hint">{reason}</p>}
-				{(error || git.detailsError || git.statusError) && (
+				{reason && !details?.trustRequired && <p className="branch-picker-hint">{reason}</p>}
+				{(error || (!details?.trustRequired && (git.detailsError || git.statusError))) && (
 					<div className="branch-picker-error" role="alert">
 						{error || git.detailsError || git.statusError}
 					</div>
 				)}
-				{(git.detailsError || git.statusError) && (
+				{!details?.trustRequired && (git.detailsError || git.statusError) && (
 					<button type="button" disabled={busy || git.refreshing} onClick={() => void git.refresh()}>
 						{en ? "Retry" : "重试"}
 					</button>

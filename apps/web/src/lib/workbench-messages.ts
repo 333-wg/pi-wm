@@ -2,6 +2,8 @@
 export const workbenchMessages = {
 	archivedChats: ["归档聊天", "Archived chats"],
 	recentConversationOptions: ["最近对话选项", "Recent conversation options"],
+	expandConversations: ["展开显示", "Show more"],
+	collapseConversations: ["收起显示", "Show less"],
 	newProjectlessChat: ["新建项目外对话", "New chat without a project"],
 	newProjectChat: ["在此项目中新建对话", "New chat in this project"],
 	moreCommands: ["更多命令", "More commands"],

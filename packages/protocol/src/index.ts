@@ -2025,7 +2025,7 @@ export const CommandSchema = Type.Union([
 		operationId: Id,
 		expectedUpdatedAt: Timestamp,
 	}),
-	StrictObject({ type: Type.Literal("turn.abort"), sessionId: Id }),
+	StrictObject({ type: Type.Literal("turn.abort"), sessionId: Id, operationId: Type.Optional(Id) }),
 	StrictObject({ type: Type.Literal("background.list"), sessionId: Id }),
 	StrictObject({ type: Type.Literal("background.cancel"), sessionId: Id, taskId: Id }),
 	StrictObject({

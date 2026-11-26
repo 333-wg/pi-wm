@@ -81,12 +81,47 @@ describe("Git repository diagnostics", () => {
 		expect(await readFile(globalConfig, "utf8")).toContain("name = Preserved");
 	});
 
+	it("restores trust when a later empty global entry reset an earlier entry", async () => {
+		const { root, service } = await workspace();
+		await exec("git", ["init", "--initial-branch=main"], { cwd: root });
+		const canonical = await realpath(root);
+		const globalConfig = join(root, "isolated-global");
+		await writeFile(globalConfig, "");
+		vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
+		vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+		vi.stubEnv("GIT_CONFIG_COUNT", "0");
+		vi.stubEnv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
+		await exec("git", ["config", "--global", "--add", "safe.directory", canonical.split(sep).join("/")], { cwd: root });
+		await exec("git", ["config", "--global", "--add", "safe.directory", ""], { cwd: root });
+		expect(await service.details()).toMatchObject({ trustRequired: { path: canonical } });
+		await service.action({ type: "trust", path: canonical });
+		expect((await service.details()).trustRequired).toBeUndefined();
+	});
+
 	it("does not disguise broken Git configuration as a missing repository", async () => {
 		const { root, service, inspector } = await workspace();
 		await exec("git", ["init"], { cwd: root, windowsHide: true });
 		await writeFile(join(root, ".git", "config"), "[invalid config\n");
 		await expect(service.details()).rejects.toThrow("Git 配置");
 		await expect(inspector.gitStatus()).rejects.toThrow("Git 配置");
+	});
+
+	it("reports when higher-priority configuration still blocks a trusted directory without adding duplicates", async () => {
+		const { root, service } = await workspace();
+		await exec("git", ["init", "--initial-branch=main"], { cwd: root });
+		const canonical = await realpath(root);
+		const globalConfig = join(root, "isolated-global");
+		await writeFile(globalConfig, "[user]\n\tname = Preserved\n");
+		vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
+		vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+		vi.stubEnv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
+		vi.stubEnv("GIT_CONFIG_COUNT", "1");
+		vi.stubEnv("GIT_CONFIG_KEY_0", "safe.directory");
+		vi.stubEnv("GIT_CONFIG_VALUE_0", "");
+		for (let attempt = 0; attempt < 2; attempt++)
+			await expect(service.action({ type: "trust", path: canonical })).rejects.toThrow("Git 仍无法访问");
+		const config = await exec("git", ["config", "--global", "--get-all", "safe.directory"], { cwd: root });
+		expect(config.stdout.trim().split(/\r?\n/)).toEqual([canonical.split(sep).join("/")]);
 	});
 
 	it("reports interrupted probes and redacts secrets in diagnostic output", () => {

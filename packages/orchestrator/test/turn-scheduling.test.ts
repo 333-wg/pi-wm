@@ -283,6 +283,29 @@ it("does not let a replayed stop request cancel the next turn", async () => {
 	await second;
 });
 
+it("ignores a stop delivered after reconnect when its observed run already ended", async () => {
+	const { runtime, worker, sessionId, send, waitCalls } = await setup();
+	await send("prompt", "first");
+	const first = worker.drainSession(sessionId);
+	await waitCalls(1);
+	const operationId = runtime.calls[0]!.operation.id;
+	runtime.finish[0]!();
+	await first;
+	await send("prompt", "second");
+	const second = worker.drainSession(sessionId);
+	await waitCalls(2);
+	await worker.abortTurn({ principalId: "user", idempotencyKey: "delayed-stop", sessionId, operationId });
+	expect(runtime.calls[1]!.signal.aborted).toBe(false);
+	await worker.abortTurn({
+		principalId: "user",
+		idempotencyKey: "current-stop",
+		sessionId,
+		operationId: runtime.calls[1]!.operation.id,
+	});
+	expect(runtime.calls[1]!.signal.aborted).toBe(true);
+	await second;
+});
+
 it("interrupts without waiting for a stalled session command", async () => {
 	const { runtime, worker, controller, sessionId, send, waitCalls } = await setup();
 	let started!: () => void;

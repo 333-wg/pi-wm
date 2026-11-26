@@ -16,7 +16,7 @@ export function gitRepositoryFound(exitCode: number | null, stderr: string): boo
 	if (exitCode === 0) return true;
 	if (/^fatal: not a git repository(?:\s|\()/im.test(stderr)) return false;
 	const hint = isGitOwnershipError(stderr)
-		? "Git 拒绝访问此仓库：目录所有者与当前系统账号不同。确认信任该目录后，请在本机终端执行下方 safe.directory 命令，再刷新。无需重新初始化仓库。"
+		? "Git 拒绝访问此仓库：目录所有者与当前系统账号不同。可在分支菜单或更改面板选择“信任此仓库”，确认后自动重试。无此入口时，请由本机用户确认后配置 safe.directory，再刷新。无需重新初始化仓库。"
 		: "无法读取 Git 仓库，请检查目录权限和 Git 配置后重试。";
 	throw Object.assign(new SandboxError("process_failed", hint + "\n" + redactGitOutput(stderr).trim().slice(0, 6000)), {
 		httpStatus: 409,

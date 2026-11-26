@@ -42,6 +42,69 @@ async function pendingApproval(store: SqliteOrchestratorStore, sessionId: string
 }
 
 describe("ApprovalBroker", () => {
+	it.each(["never", "on_risk", "on_failure"] as const)(
+		"allows trusted skill source tools in full access under %s, using live permissions",
+		async (approvalPolicy) => {
+			using store = new SqliteOrchestratorStore(":memory:");
+			const { snapshot } = await session(store, { sandboxMode: "unrestricted", approvalPolicy });
+			const broker = new ApprovalBroker({ store });
+			for (const type of ["filesystem.read", "filesystem.write"] as const) {
+				await expect(
+					broker.authorize({
+						sessionId: snapshot.session.id,
+						toolCallId: type,
+						risk: "medium",
+						summary: "Inspect or edit skill source",
+						requireExplicitApproval: true,
+						fullAccessSkillSource: true,
+						capabilities: [{ type, paths: [".wuming/skills/local/SKILL.md"] }],
+					})
+				).resolves.toBeUndefined();
+			}
+			expect(broker.hasFullAccessSkillSources(snapshot.session.id)).toBe(true);
+			const orchestrator = new SessionOrchestrator(store, runtime);
+			await orchestrator.setSessionPolicy({
+				principalId: "user-1",
+				idempotencyKey: "restrict-source",
+				sessionId: snapshot.session.id,
+				sandboxMode: "workspace_write",
+				approvalPolicy: "never",
+			});
+			expect(broker.hasFullAccessSkillSources(snapshot.session.id)).toBe(false);
+			await expect(
+				broker.authorize({
+					sessionId: snapshot.session.id,
+					toolCallId: "after-downgrade",
+					risk: "low",
+					summary: "Inspect source",
+					requireExplicitApproval: true,
+					fullAccessSkillSource: true,
+					capabilities: [{ type: "filesystem.read", paths: ["SKILL.md"] }],
+				})
+			).rejects.toMatchObject({ code: "approval_denied" });
+		}
+	);
+	it("keeps always-ask source requests subject to approval", async () => {
+		using store = new SqliteOrchestratorStore(":memory:");
+		const { snapshot } = await session(store, { sandboxMode: "unrestricted", approvalPolicy: "always" });
+		const broker = new ApprovalBroker({ store });
+		expect(broker.hasFullAccessSkillSources(snapshot.session.id)).toBe(false);
+		const controller = new AbortController();
+		const pending = broker.authorize({
+			sessionId: snapshot.session.id,
+			toolCallId: "source",
+			risk: "low",
+			summary: "Inspect source",
+			requireExplicitApproval: true,
+			fullAccessSkillSource: true,
+			capabilities: [{ type: "filesystem.read", paths: ["SKILL.md"] }],
+			signal: controller.signal,
+		});
+		const rejected = expect(pending).rejects.toMatchObject({ code: "approval_denied" });
+		await pendingApproval(store, snapshot.session.id);
+		controller.abort();
+		await rejected;
+	});
 	const managementCapabilities: ToolCapability[] = [
 		{ type: "skill.manage", skillId: "local", action: "install" },
 		{ type: "skill.manage", skillId: "local", action: "enable" },
